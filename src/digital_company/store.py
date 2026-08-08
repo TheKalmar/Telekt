@@ -162,10 +162,18 @@ class CompanyStore:
         return task_id
 
     def complete_task(self, task_id: str, result: SpecialistResult, cost: float) -> None:
-        """Atomically complete a task and append any authorized ledger cost."""
+        """Atomically complete a task, its approval, and authorized ledger cost."""
+        current = self.db.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not current or current["status"] not in {"proposed", "executing"}:
+            raise RuntimeError("Task is not executable or has already been finalized.")
         self.db.execute(
-            "UPDATE tasks SET status='completed', result_json=?, completed_at=? WHERE id=?",
+            "UPDATE tasks SET status='completed', result_json=?, completed_at=? "
+            "WHERE id=? AND status IN ('proposed','executing')",
             (result.model_dump_json(), utc_now(), task_id),
+        )
+        self.db.execute(
+            "UPDATE approvals SET status='executed' WHERE task_id=? AND status='executing'",
+            (task_id,),
         )
         if cost:
             self.db.execute(
@@ -175,6 +183,31 @@ class CompanyStore:
         self.db.commit()
         self.audit("task.completed", {"task_id": task_id, "result": result.model_dump(mode="json")})
 
+    def fail_task(self, task_id: str, reason: str) -> None:
+        """Finalize a claimed task as failed so it cannot execute twice."""
+        now = utc_now()
+        result = SpecialistResult(
+            status="failed", summary=reason, evidence=[], recommendation="Human review required",
+        )
+        self.db.execute(
+            "UPDATE tasks SET status='failed',result_json=?,completed_at=? "
+            "WHERE id=? AND status='executing'",
+            (result.model_dump_json(), now, task_id),
+        )
+        self.db.execute(
+            "UPDATE approvals SET status='execution_failed' WHERE task_id=? AND status='executing'",
+            (task_id,),
+        )
+        self.db.commit()
+        self.audit("task.failed", {"task_id": task_id, "reason": reason})
+
+    def set_task_status(self, task_id: str, status: str) -> None:
+        """Set a deterministic terminal/intermediate status for orchestration."""
+        if status not in {"denied", "stopped", "superseded"}:
+            raise ValueError("Invalid direct task status")
+        self.db.execute("UPDATE tasks SET status=?,completed_at=? WHERE id=?", (status, utc_now(), task_id))
+        self.db.commit()
+
     def request_approval(self, task_id: str, proposal: TaskProposal, reason: str) -> str:
         """Freeze the exact proposed payload as a pending human approval."""
         approval_id = str(uuid4())
@@ -182,6 +215,7 @@ class CompanyStore:
             "INSERT INTO approvals VALUES(?,?,?,?,?,?,?)",
             (approval_id, task_id, proposal.model_dump_json(), "pending", reason, utc_now(), None),
         )
+        self.db.execute("UPDATE tasks SET status='waiting_approval' WHERE id=?", (task_id,))
         self.db.commit()
         self.audit("approval.requested", {"approval_id": approval_id, "task_id": task_id})
         return approval_id
@@ -200,8 +234,41 @@ class CompanyStore:
         now = utc_now()
         self.db.execute("UPDATE approvals SET status='approved', resolved_at=? WHERE id=?", (now, approval_id))
         self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
+        self.db.execute(
+            "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
+            ("Approved task queued for execution", now),
+        )
         self.db.commit()
         self.audit("approval.approved", {"approval_id": approval_id, "task_id": row["task_id"]})
+
+    def claim_approved_task(self) -> tuple[str, TaskProposal] | None:
+        """Atomically claim the oldest frozen approved payload exactly once."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute(
+                "SELECT a.task_id,a.payload_json FROM approvals a JOIN tasks t ON t.id=a.task_id "
+                "WHERE a.status='approved' AND t.status='approved' ORDER BY a.created_at LIMIT 1"
+            ).fetchone()
+            if not row:
+                self.db.commit()
+                return None
+            changed = self.db.execute(
+                "UPDATE tasks SET status='executing' WHERE id=? AND status='approved'", (row["task_id"],)
+            ).rowcount
+            if changed != 1:
+                self.db.rollback()
+                return None
+            self.db.execute(
+                "UPDATE approvals SET status='executing' WHERE task_id=? AND status='approved'",
+                (row["task_id"],),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        proposal = TaskProposal.model_validate_json(row["payload_json"])
+        self.audit("approval.execution_claimed", {"task_id": row["task_id"]})
+        return row["task_id"], proposal
 
     def reject(self, approval_id: str) -> None:
         """Reject one still-pending payload and its associated task."""
@@ -211,6 +278,10 @@ class CompanyStore:
         now = utc_now()
         self.db.execute("UPDATE approvals SET status='rejected', resolved_at=? WHERE id=?", (now, approval_id))
         self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
+        self.db.execute(
+            "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
+            ("Rejected task; queued for CEO reconsideration", now),
+        )
         self.db.commit()
         self.audit("approval.rejected", {"approval_id": approval_id, "task_id": row["task_id"]})
 
@@ -239,7 +310,9 @@ class CompanyStore:
         self.db.execute("INSERT INTO stakeholder_messages VALUES(?,?,?,?,?,?,?)",
                         (message_id, kind, content, "pending", None, utc_now(), None))
         if kind == "directive":
-            pending = list(self.db.execute("SELECT id,task_id FROM approvals WHERE status='pending'"))
+            pending = list(self.db.execute(
+                "SELECT id,task_id FROM approvals WHERE status IN ('pending','approved')"
+            ))
             for row in pending:
                 self.db.execute("UPDATE approvals SET status='superseded',resolved_at=? WHERE id=?", (utc_now(), row["id"]))
                 self.db.execute("UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],))
@@ -264,6 +337,10 @@ class CompanyStore:
         snapshot["settings"] = self.get_settings()
         snapshot["profile"] = self.get_profile()
         snapshot["approvals"] = self.list_approvals()[:20]
+        snapshot["recent_tasks"] = [dict(row) for row in self.db.execute(
+            "SELECT id,action,title,specialist,status,created_at,completed_at FROM tasks "
+            "ORDER BY created_at DESC LIMIT 20"
+        )]
         snapshot["audit"] = [dict(row) for row in self.db.execute(
             "SELECT event_type,payload_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 30"
         )]

@@ -80,6 +80,10 @@ Requests a cooperative stop after the current atomic operation.
 
 ## Approvals
 
+Approving a pending item queues its exact frozen proposal for worker execution.
+Rejecting it permanently closes that task and lets the CEO reconsider. Repeating
+either decision on a resolved approval returns an error; an approval is single-use.
+
 ### `POST /api/approvals/{approval_id}/approve`
 
 Approves one exact pending payload.

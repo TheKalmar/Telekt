@@ -112,6 +112,15 @@ Stakeholder messages have two modes:
 
 The CEO must include considered message IDs and a direct response in its typed proposal. The Governor still overrides stakeholder requests that exceed authority.
 
+## Approval execution
+
+Approval freezes the complete validated `TaskProposal`. Approve changes the task
+to `approved` and durably wakes the worker. The worker atomically claims it as
+`executing`, runs the frozen specialist assignment without another CEO decision,
+then records `completed`/`executed` or `failed`/`execution_failed`. Reject marks
+the task terminal and wakes the CEO to choose another path. A new stakeholder
+directive supersedes approvals that are pending or approved but not yet claimed.
+
 ## State transitions
 
 Runtime states are:

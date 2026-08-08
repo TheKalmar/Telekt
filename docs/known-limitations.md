@@ -31,7 +31,11 @@ SQLite is used per company. There is no migration versioning, connection pool, W
 
 ## Approvals
 
-Approvals freeze the proposal payload, but approved tasks are not yet resumed through a dedicated execution path. The CEO may generate a new proposal after approval. This must be corrected before real external actions are enabled.
+Approvals freeze the proposal payload and the worker executes that exact payload
+without asking the CEO for a replacement. Database claiming prevents the same
+approval from being started twice. Real external connectors must still supply
+provider-level idempotency keys: no local transaction can guarantee exactly-once
+delivery across an email, payment, or deployment provider failure.
 
 ## Budget
 

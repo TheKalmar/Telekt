@@ -99,6 +99,7 @@ def dashboard():
             "spent_eur": 0,
             "remaining_budget_eur": 0,
             "completed_tasks": [],
+            "recent_tasks": [],
             "approvals": [],
             "stakeholder_messages": [],
             "portfolio": {"active_company_id": None, "companies": []},

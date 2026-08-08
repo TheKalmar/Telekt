@@ -34,6 +34,12 @@ class CompanyOrchestrator:
             control = self.store.get_control()
             if control["state"] in {"paused", "stopped"}:
                 return {"status": control["state"], "cycles": cycle - 1}
+
+            approved = self.store.claim_approved_task()
+            if approved:
+                task_id, proposal = approved
+                return self._execute_claimed(task_id, proposal, cycle)
+
             snapshot = self.store.snapshot()
             if snapshot.pending_approvals:
                 return {"status": "waiting_for_approval", "cycles": cycle - 1,
@@ -50,6 +56,7 @@ class CompanyOrchestrator:
             task_id = self.store.create_task(proposal, "proposed")
 
             if policy.outcome == "deny":
+                self.store.set_task_status(task_id, "denied")
                 self.store.audit("task.denied", {"task_id": task_id, "reason": policy.reason})
                 continue
             if policy.outcome == "require_approval":
@@ -57,21 +64,41 @@ class CompanyOrchestrator:
                 return {"status": "waiting_for_approval", "cycles": cycle,
                         "approval_id": approval_id, "task": proposal.model_dump(mode="json")}
             if proposal.action == ActionType.STOP:
+                self.store.set_task_status(task_id, "stopped")
                 return {"status": "stopped", "cycles": cycle, "reason": proposal.rationale}
 
             result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist))
-            if result.artifact_path and result.artifact_content:
-                target = (self.artifacts_dir / result.artifact_path).resolve()
-                root = self.artifacts_dir.resolve()
-                # Never trust an LLM-supplied path. Resolve it and prove that the
-                # final destination remains inside this company's artifact root.
-                if root not in target.parents and target != root:
-                    raise RuntimeError("Specialist returned an unsafe artifact path.")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(result.artifact_content, encoding="utf-8")
-            self.store.complete_task(task_id, result, proposal.estimated_cost_eur)
+            self._persist_result(task_id, proposal, result)
 
         return {"status": "cycle_limit_reached", "cycles": max_cycles}
+
+    def _execute_claimed(self, task_id: str, proposal, cycle: int) -> dict:
+        """Execute one human-approved frozen proposal without asking the CEO again."""
+        snapshot = self.store.snapshot()
+        policy = self.governor.evaluate(proposal, snapshot.remaining_budget_eur)
+        if policy.outcome == "deny":
+            self.store.fail_task(task_id, "Approved task no longer passes policy: " + policy.reason)
+            return {"status": "failed", "cycles": cycle, "task_id": task_id}
+        try:
+            result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist))
+            self._persist_result(task_id, proposal, result)
+        except Exception as exc:
+            self.store.fail_task(task_id, f"{type(exc).__name__}: {exc}")
+            raise
+        return {"status": "approved_task_completed", "cycles": cycle, "task_id": task_id}
+
+    def _persist_result(self, task_id: str, proposal, result) -> None:
+        """Persist a specialist result and confine any model-provided artifact path."""
+        if result.artifact_path and result.artifact_content:
+            target = (self.artifacts_dir / result.artifact_path).resolve()
+            root = self.artifacts_dir.resolve()
+            # Never trust an LLM-supplied path. Resolve it and prove that the
+            # final destination remains inside this company's artifact root.
+            if root not in target.parents and target != root:
+                raise RuntimeError("Specialist returned an unsafe artifact path.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(result.artifact_content, encoding="utf-8")
+        self.store.complete_task(task_id, result, proposal.estimated_cost_eur)
 
     def _artifact_context(self, specialist: str) -> dict | None:
         """Provide QA with the current MVP and cheap deterministic preflight data."""

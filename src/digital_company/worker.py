@@ -34,6 +34,8 @@ def run_once(registry: CompanyRegistry, owner: str) -> int:
                 store.set_control("waiting_approval", "Human decision required")
             elif status in {"stopped", "paused"}:
                 store.set_control(status, result.get("reason"))
+            elif status == "failed":
+                store.set_control("error", "Approved task failed policy revalidation")
             advanced += 1
         except Exception as exc:
             store.set_control("error", f"{type(exc).__name__}: {exc}")
