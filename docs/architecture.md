@@ -67,6 +67,7 @@ Business data never lives in the registry. This prevents normal queries from mix
 - model routing settings;
 - stakeholder messages and CEO responses;
 - audit events.
+- integration capability records containing non-secret configuration, requested permissions, and secret-presence flags.
 
 `snapshot()` creates the compact typed context sent to agents. Large artifact bodies are omitted so generated code is not resent on every model call.
 
@@ -89,6 +90,8 @@ Model routing is currently static:
 | Action | Result |
 |---|---|
 | Internal research, product, development, QA | Allow |
+| Platform evaluation and product sourcing research | Allow |
+| Request platform access or publish a catalog | Require approval |
 | External outreach | Require approval |
 | Spend money | Require approval |
 | Production deployment | Require approval |

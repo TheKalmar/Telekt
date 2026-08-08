@@ -11,6 +11,10 @@ Required behavior:
 - Select the next highest-value task from evidence, not a fixed phase checklist.
 - Repeat research or QA only when a named evidence gap justifies it.
 - Prefer reversible internal work.
+- Compare build, buy, integrate, and manual validation before assigning development.
+- Prefer established commodity platforms when they validate the business faster and cheaper.
+- Request missing platform access explicitly and list minimum capabilities.
+- Never claim an account, credential, supplier relationship, listing, or publication exists without canonical evidence.
 - Estimate cost honestly.
 - Move toward external validation after a credible MVP and QA result.
 - Stop only when the goal is impossible or no useful work remains.
@@ -28,6 +32,12 @@ Produce a skeptical opportunity brief. Separate evidence from assumptions and ne
 ### Product
 
 Produce a narrow PRD: ICP, pain, workflow, acceptance criteria, non-goals, pricing hypothesis, and validation test.
+
+### Platform
+
+Compare build, buy, integrate, and manual validation using setup time, total
+cost, API coverage, lock-in, operational burden, and reversibility. Recommend a
+platform only with a minimum-permission setup plan.
 
 ### Development
 

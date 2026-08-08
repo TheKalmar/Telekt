@@ -115,6 +115,20 @@ Approves one exact pending payload.
 
 Rejects one exact pending payload.
 
+## Platform capabilities
+
+### `GET /api/settings/integrations`
+
+Returns configured and requested integrations, capabilities, non-secret config,
+and a boolean presence flag for each required environment secret. Secret values
+are never returned.
+
+### `POST /api/settings/integrations`
+
+Configures non-secret platform metadata. Shopify accepts a permanent
+`*.myshopify.com` store domain and capability list; it always references
+`SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` from the process environment.
+
 ## Model routing
 
 ### `POST /api/settings/model-mode`

@@ -9,6 +9,7 @@ can preserve these interfaces while replacing SQLite with PostgreSQL.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,6 +75,11 @@ class CompanyStore:
         );
         CREATE TABLE IF NOT EXISTS company_profile (
           id INTEGER PRIMARY KEY CHECK (id = 1), profile_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS integrations (
+          provider TEXT PRIMARY KEY, status TEXT NOT NULL,
+          config_json TEXT NOT NULL, required_secrets_json TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
         """)
@@ -151,12 +157,56 @@ class CompanyStore:
             completed_tasks=tasks, pending_approvals=approvals, recent_evidence=evidence[-12:],
             stakeholder_messages=messages,
             profile=self.get_profile(),
+            capabilities=self.list_integrations(),
         )
 
     def get_profile(self) -> dict:
         """Return user-configurable company creation parameters."""
         row = self.db.execute("SELECT profile_json FROM company_profile WHERE id=1").fetchone()
         return json.loads(row["profile_json"]) if row else {}
+
+    def upsert_integration(self, provider: str, status: str, config: dict,
+                           required_secrets: list[str]) -> dict:
+        """Persist non-secret capability metadata and references to environment secrets."""
+        now = utc_now()
+        self.db.execute(
+            "INSERT INTO integrations(provider,status,config_json,required_secrets_json,updated_at) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET status=excluded.status, "
+            "config_json=excluded.config_json, required_secrets_json=excluded.required_secrets_json, "
+            "updated_at=excluded.updated_at",
+            (provider, status, json.dumps(config), json.dumps(required_secrets), now),
+        )
+        self.db.commit()
+        self.audit("integration.configured", {
+            "provider": provider, "status": status, "config": config,
+            "required_secrets": required_secrets,
+        })
+        return next(item for item in self.list_integrations() if item["provider"] == provider)
+
+    def request_integration(self, provider: str, capabilities: list[str]) -> dict:
+        """Record a CEO-requested platform without treating access as granted."""
+        existing = next((item for item in self.list_integrations() if item["provider"] == provider), None)
+        if existing:
+            return existing
+        return self.upsert_integration(provider, "requested", {"capabilities": capabilities}, [])
+
+    def list_integrations(self) -> list[dict]:
+        """Return capability status while revealing only secret presence, never values."""
+        result = []
+        for row in self.db.execute("SELECT * FROM integrations ORDER BY provider"):
+            required = json.loads(row["required_secrets_json"])
+            secret_status = {name: bool(os.getenv(name)) for name in required}
+            configured = row["status"] == "configured"
+            effective = "ready" if configured and all(secret_status.values()) else row["status"]
+            if configured and required and not all(secret_status.values()):
+                effective = "missing_secrets"
+            result.append({
+                "provider": row["provider"], "status": effective,
+                "config": json.loads(row["config_json"]),
+                "required_secrets": required, "secret_status": secret_status,
+                "updated_at": row["updated_at"],
+            })
+        return result
 
     def create_task(self, proposal: TaskProposal, status: str) -> str:
         """Persist a CEO proposal before authorization or execution."""

@@ -70,6 +70,11 @@ class CompanyOrchestrator:
                 self.store.audit("task.denied", {"task_id": task_id, "reason": policy.reason})
                 continue
             if policy.outcome == "require_approval":
+                if proposal.action == ActionType.REQUEST_PLATFORM_ACCESS:
+                    self.store.request_integration(
+                        proposal.platform_candidate or "unknown",
+                        proposal.required_capabilities,
+                    )
                 approval_id = self.store.request_approval(task_id, proposal, policy.reason)
                 if self.company_id:
                     try:

@@ -20,6 +20,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       APPROVAL_SIGNING_SECRET: ${APPROVAL_SIGNING_SECRET:-}
       APPROVAL_LINK_TTL_HOURS: ${APPROVAL_LINK_TTL_HOURS:-72}
+      SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
+      SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
     volumes:
       - company_data:/data
     extra_hosts:
@@ -50,6 +52,8 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_TLS: ${SMTP_TLS:-true}
+      SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
+      SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
     volumes:
       - company_data:/data
     extra_hosts:

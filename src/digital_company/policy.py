@@ -16,6 +16,8 @@ class Governor:
             ActionType.EXTERNAL_OUTREACH,
             ActionType.SPEND_MONEY,
             ActionType.DEPLOY_PRODUCTION,
+            ActionType.REQUEST_PLATFORM_ACCESS,
+            ActionType.PUBLISH_CATALOG,
         }:
             return PolicyDecision(
                 outcome="require_approval",

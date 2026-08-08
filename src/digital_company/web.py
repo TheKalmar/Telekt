@@ -63,6 +63,14 @@ class EmailSettingsIn(BaseModel):
     sender_name: str = Field(default="Digital Company", min_length=1, max_length=100)
 
 
+class IntegrationSettingsIn(BaseModel):
+    """Non-secret platform configuration; credentials stay in environment variables."""
+    provider: str = Field(pattern=r"^[a-z0-9_-]{2,40}$")
+    store_domain: str = Field(default="", max_length=255)
+    capabilities: list[str] = Field(default_factory=list, max_length=30)
+    required_secrets: list[str] = Field(default_factory=list, max_length=20)
+
+
 class CompanyCreateIn(BaseModel):
     """Validated company creation form with safe, editable defaults."""
     name: str = Field(min_length=2, max_length=100)
@@ -118,6 +126,7 @@ def dashboard():
             "completed_tasks": [],
             "recent_tasks": [],
             "artifacts": [],
+            "capabilities": [],
             "operations": {"active_model_run": None, "model": {}, "tasks_by_status": {}, "estimated_spend_eur": 0, "recent_events": []},
             "approvals": [],
             "stakeholder_messages": [],
@@ -287,6 +296,33 @@ def save_email_settings(payload: EmailSettingsIn):
     if payload.enabled and not emails:
         raise HTTPException(400, "At least one approver email is required")
     return store.set_email_settings(payload.enabled, emails, payload.sender_name)
+
+
+@app.get("/api/settings/integrations")
+def integration_settings():
+    return {"integrations": get_store().list_integrations()}
+
+
+@app.post("/api/settings/integrations")
+def save_integration_settings(payload: IntegrationSettingsIn):
+    """Configure capability metadata without accepting or returning secret values."""
+    provider = payload.provider.lower()
+    domain = payload.store_domain.strip().lower().removeprefix("https://").rstrip("/")
+    if provider == "shopify":
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*\.myshopify\.com", domain):
+            raise HTTPException(400, "Shopify store domain must look like store-name.myshopify.com")
+        required = ["SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET"]
+        capabilities = payload.capabilities or ["read_products", "write_products"]
+    else:
+        required = payload.required_secrets
+        if any(not re.fullmatch(r"[A-Z][A-Z0-9_]{2,80}", name) for name in required):
+            raise HTTPException(400, "Secret references must be uppercase environment variable names")
+        capabilities = payload.capabilities
+    return get_store().upsert_integration(
+        provider, "configured",
+        {"store_domain": domain, "capabilities": capabilities},
+        required,
+    )
 
 
 @app.get("/api/local-model/health")

@@ -49,6 +49,14 @@ HTML checks. This is not yet a process/container sandbox: specialists still lack
 a general shell, browser, GitHub, deployment, or payment tool runtime. Generated
 HTML is downloadable rather than executed in the trusted control-plane origin.
 
+## Platform integrations
+
+The CEO can evaluate build/buy/integrate/manual paths, request a platform, and
+reason over durable capability readiness. Shopify configuration currently stores
+only metadata and secret references. OAuth/client-credentials exchange, API
+health verification, catalog reads, draft creation, publication, webhooks, and
+supplier marketplace connectors are not implemented yet.
+
 ## Concurrency
 
 Durable per-company leases suppress duplicate cycles across worker processes. The current fixed one-hour lease has no heartbeat extension; a worker that hangs longer than the lease could overlap with a replacement. Temporal should replace this mechanism before horizontal scaling.

@@ -10,12 +10,16 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ActionType(StrEnum):
     """Closed set of actions the CEO may propose in the current POC."""
     RESEARCH_MARKET = "research_market"
+    EVALUATE_PLATFORM = "evaluate_platform"
+    REQUEST_PLATFORM_ACCESS = "request_platform_access"
+    SOURCE_PRODUCTS = "source_products"
+    PUBLISH_CATALOG = "publish_catalog"
     DEFINE_PRODUCT = "define_product"
     BUILD_MVP = "build_mvp"
     QA_MVP = "qa_mvp"
@@ -34,9 +38,20 @@ class TaskProposal(BaseModel):
     rationale: str
     expected_evidence: list[str] = Field(min_length=1)
     estimated_cost_eur: float = Field(default=0, ge=0)
-    specialist: Literal["research", "product", "development", "qa", "growth", "ceo"]
+    specialist: Literal["research", "platform", "product", "development", "qa", "growth", "ceo"]
     stakeholder_response: str | None = None
     stakeholder_message_ids_considered: list[str] = Field(default_factory=list)
+    platform_candidate: str | None = Field(default=None, max_length=80)
+    required_capabilities: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def platform_access_is_explicit(self):
+        if self.action == ActionType.REQUEST_PLATFORM_ACCESS:
+            if not self.platform_candidate or not self.required_capabilities:
+                raise ValueError(
+                    "Platform access requests require platform_candidate and required_capabilities"
+                )
+        return self
 
 
 class SpecialistResult(BaseModel):
@@ -66,3 +81,4 @@ class CompanySnapshot(BaseModel):
     recent_evidence: list[dict]
     stakeholder_messages: list[dict] = Field(default_factory=list)
     profile: dict = Field(default_factory=dict)
+    capabilities: list[dict] = Field(default_factory=list)
