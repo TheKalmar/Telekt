@@ -121,6 +121,11 @@ then records `completed`/`executed` or `failed`/`execution_failed`. Reject marks
 the task terminal and wakes the CEO to choose another path. A new stakeholder
 directive supersedes approvals that are pending or approved but not yet claimed.
 
+Approval requests can also be delivered through SMTP. Recipient-specific,
+expiring HMAC links open a read-only review form; only an explicit POST records a
+decision. Human comments are persisted as approval metadata and stakeholder
+context. The dashboard remains available when email delivery fails.
+
 ## State transitions
 
 Runtime states are:

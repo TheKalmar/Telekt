@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from digital_company.agents import AgentEngine
+from digital_company.email_service import ApprovalMailer
 from digital_company.models import ActionType
 from digital_company.policy import Governor
 from digital_company.store import CompanyStore
@@ -17,12 +18,15 @@ class CompanyOrchestrator:
     work. This distinction prevents model output from bypassing policy, budget,
     approval, persistence, or artifact path checks.
     """
-    def __init__(self, store: CompanyStore, artifacts_dir: Path, engine: AgentEngine | None = None):
+    def __init__(self, store: CompanyStore, artifacts_dir: Path, engine: AgentEngine | None = None,
+                 company_id: str | None = None, mailer: ApprovalMailer | None = None):
         self.store = store
         self.artifacts_dir = artifacts_dir
         settings = store.get_settings()
         self.engine = engine or AgentEngine(settings["model_mode"], settings["local_model"])
         self.governor = Governor()
+        self.company_id = company_id
+        self.mailer = mailer or ApprovalMailer()
 
     def run(self, max_cycles: int = 8) -> dict:
         """Run bounded cycles and return on pause, stop, approval, or cycle limit.
@@ -61,6 +65,18 @@ class CompanyOrchestrator:
                 continue
             if policy.outcome == "require_approval":
                 approval_id = self.store.request_approval(task_id, proposal, policy.reason)
+                if self.company_id:
+                    try:
+                        sent = self.mailer.send(
+                            self.company_id, approval_id, proposal, policy.reason,
+                            self.store.get_email_settings(),
+                        )
+                        self.store.audit("approval.email_sent", {"approval_id": approval_id, "recipients": sent})
+                    except Exception as exc:
+                        self.store.audit(
+                            "approval.email_failed",
+                            {"approval_id": approval_id, "error": f"{type(exc).__name__}: {exc}"},
+                        )
                 return {"status": "waiting_for_approval", "cycles": cycle,
                         "approval_id": approval_id, "task": proposal.model_dump(mode="json")}
             if proposal.action == ActionType.STOP:

@@ -28,7 +28,9 @@ def run_once(registry: CompanyRegistry, owner: str) -> int:
         if not registry.claim_work(company_id, owner):
             continue
         try:
-            result = CompanyOrchestrator(store, registry.artifacts_for(company_id)).run(max_cycles=1)
+            result = CompanyOrchestrator(
+                store, registry.artifacts_for(company_id), company_id=company_id
+            ).run(max_cycles=1)
             status = result["status"]
             if status == "waiting_for_approval":
                 store.set_control("waiting_approval", "Human decision required")

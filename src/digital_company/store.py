@@ -77,6 +77,11 @@ class CompanyStore:
           updated_at TEXT NOT NULL
         );
         """)
+        approval_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(approvals)")}
+        if "decision_comment" not in approval_columns:
+            self.db.execute("ALTER TABLE approvals ADD COLUMN decision_comment TEXT")
+        if "decided_by" not in approval_columns:
+            self.db.execute("ALTER TABLE approvals ADD COLUMN decided_by TEXT")
         self.db.execute(
             "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) VALUES(1,'stopped','Ready',?)",
             (utc_now(),),
@@ -212,7 +217,8 @@ class CompanyStore:
         """Freeze the exact proposed payload as a pending human approval."""
         approval_id = str(uuid4())
         self.db.execute(
-            "INSERT INTO approvals VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO approvals(id,task_id,payload_json,status,reason,created_at,resolved_at) "
+            "VALUES(?,?,?,?,?,?,?)",
             (approval_id, task_id, proposal.model_dump_json(), "pending", reason, utc_now(), None),
         )
         self.db.execute("UPDATE tasks SET status='waiting_approval' WHERE id=?", (task_id,))
@@ -224,7 +230,7 @@ class CompanyStore:
         """Return approval history, newest first."""
         return [dict(row) for row in self.db.execute("SELECT * FROM approvals ORDER BY created_at DESC")]
 
-    def approve(self, approval_id: str) -> None:
+    def approve(self, approval_id: str, comment: str = "", decided_by: str = "dashboard") -> None:
         """Approve one still-pending payload; approvals are single-use."""
         row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()
         if not row:
@@ -232,7 +238,10 @@ class CompanyStore:
         if row["status"] != "pending":
             raise RuntimeError("Approval has already been resolved.")
         now = utc_now()
-        self.db.execute("UPDATE approvals SET status='approved', resolved_at=? WHERE id=?", (now, approval_id))
+        self.db.execute(
+            "UPDATE approvals SET status='approved',resolved_at=?,decision_comment=?,decided_by=? WHERE id=?",
+            (now, comment.strip() or None, decided_by, approval_id),
+        )
         self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
         self.db.execute(
             "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
@@ -240,6 +249,8 @@ class CompanyStore:
         )
         self.db.commit()
         self.audit("approval.approved", {"approval_id": approval_id, "task_id": row["task_id"]})
+        if comment.strip():
+            self.add_approval_feedback(comment, approval_id, decided_by, "approved")
 
     def claim_approved_task(self) -> tuple[str, TaskProposal] | None:
         """Atomically claim the oldest frozen approved payload exactly once."""
@@ -270,13 +281,18 @@ class CompanyStore:
         self.audit("approval.execution_claimed", {"task_id": row["task_id"]})
         return row["task_id"], proposal
 
-    def reject(self, approval_id: str) -> None:
+    def reject(self, approval_id: str, comment: str, decided_by: str = "dashboard") -> None:
         """Reject one still-pending payload and its associated task."""
+        if not comment.strip():
+            raise ValueError("A decline reason is required.")
         row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()
         if not row or row["status"] != "pending":
             raise RuntimeError("Pending approval not found.")
         now = utc_now()
-        self.db.execute("UPDATE approvals SET status='rejected', resolved_at=? WHERE id=?", (now, approval_id))
+        self.db.execute(
+            "UPDATE approvals SET status='rejected',resolved_at=?,decision_comment=?,decided_by=? WHERE id=?",
+            (now, comment.strip(), decided_by, approval_id),
+        )
         self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
         self.db.execute(
             "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
@@ -284,6 +300,41 @@ class CompanyStore:
         )
         self.db.commit()
         self.audit("approval.rejected", {"approval_id": approval_id, "task_id": row["task_id"]})
+        self.add_approval_feedback(comment, approval_id, decided_by, "rejected")
+
+    def add_approval_feedback(self, comment: str, approval_id: str, author: str, decision: str) -> None:
+        """Put human decision context into the CEO/specialist canonical snapshot."""
+        message_id = str(uuid4())
+        content = f"Approval {decision} by {author}: {comment.strip()}"
+        self.db.execute(
+            "INSERT INTO stakeholder_messages VALUES(?,?,?,?,?,?,?)",
+            (message_id, "approval_feedback", content, "pending", None, utc_now(), None),
+        )
+        self.db.commit()
+        self.audit("approval.feedback", {"approval_id": approval_id, "message_id": message_id})
+
+    def get_email_settings(self) -> dict:
+        """Return non-secret, per-company email notification preferences."""
+        profile = self.get_profile()
+        return {
+            "enabled": bool(profile.get("approval_email_enabled", False)),
+            "approvers": profile.get("approval_emails", []),
+            "sender_name": profile.get("approval_sender_name", profile.get("name", "Digital Company")),
+        }
+
+    def set_email_settings(self, enabled: bool, approvers: list[str], sender_name: str) -> dict:
+        """Persist recipient preferences; SMTP credentials remain environment secrets."""
+        profile = self.get_profile()
+        profile["approval_email_enabled"] = enabled
+        profile["approval_emails"] = approvers
+        profile["approval_sender_name"] = sender_name.strip() or profile.get("name", "Digital Company")
+        self.db.execute(
+            "INSERT OR REPLACE INTO company_profile(id,profile_json,updated_at) VALUES(1,?,?)",
+            (json.dumps(profile), utc_now()),
+        )
+        self.db.commit()
+        self.audit("email.settings", {"enabled": enabled, "approver_count": len(approvers)})
+        return self.get_email_settings()
 
     def get_control(self) -> dict:
         """Read cooperative runtime state for this company."""

@@ -14,6 +14,8 @@ services:
       LOCAL_MODEL: ${LOCAL_MODEL:-deepseek-company:8b}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      APPROVAL_SIGNING_SECRET: ${APPROVAL_SIGNING_SECRET:-}
+      APPROVAL_LINK_TTL_HOURS: ${APPROVAL_LINK_TTL_HOURS:-72}
     volumes:
       - company_data:/data
     extra_hosts:
@@ -31,6 +33,15 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       WORKER_ID: worker-1
       WORKER_POLL_SECONDS: 2
+      APPROVAL_SIGNING_SECRET: ${APPROVAL_SIGNING_SECRET:-}
+      APPROVAL_LINK_TTL_HOURS: ${APPROVAL_LINK_TTL_HOURS:-72}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-true}
     volumes:
       - company_data:/data
     extra_hosts:

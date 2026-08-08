@@ -202,6 +202,7 @@ Read these in order:
 4. [API reference](docs/api.md)
 5. [Operations](docs/operations.md)
 6. [Known limitations](docs/known-limitations.md)
+7. [Email approvals](docs/email-approvals.md)
 
 ## Security warning
 

@@ -65,7 +65,7 @@ def test_rejected_task_is_never_claimable_and_ceo_can_reconsider(tmp_path: Path)
     approval_id = store.request_approval(task_id, proposal, "Human approval required")
     store.set_control("waiting_approval", "Human decision required")
 
-    store.reject(approval_id)
+    store.reject(approval_id, "The target segment is too broad")
     assert store.claim_approved_task() is None
     assert store.get_control()["state"] == "running"
     task = store.db.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()

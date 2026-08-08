@@ -2,6 +2,7 @@ param(
     [ValidateSet("Bundled", "Existing", "Cloud")]
     [string]$Mode = "Bundled",
     [switch]$Gpu,
+    [switch]$Mail,
     [switch]$Build
 )
 
@@ -17,6 +18,9 @@ if ($Mode -eq "Bundled") {
 }
 if ($Gpu -and $Mode -eq "Bundled") {
     $composeArgs += @("-f", "compose.gpu.yaml")
+}
+if ($Mail) {
+    $composeArgs += @("-f", "compose.email.yaml")
 }
 $composeArgs += @("up", "-d")
 if ($Build) {
@@ -37,4 +41,8 @@ if ($Mode -eq "Bundled") {
     Write-Host "Using an existing Ollama server at $ollamaUrl. Set OLLAMA_BASE_URL in .env if this is not correct."
 } else {
     Write-Host "Cloud-only stack started; no local model was downloaded or started."
+}
+if ($Mail) {
+    $mailpitPort = if ($env:MAILPIT_PORT) { $env:MAILPIT_PORT } else { "8025" }
+    Write-Host "Local approval inbox: http://127.0.0.1:$mailpitPort"
 }

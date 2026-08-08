@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import os
+import html
+import re
 from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from digital_company.registry import CompanyRegistry
 from digital_company.store import CompanyStore
+from digital_company.email_service import verify_approval_token
 
 
 ROOT = Path.cwd()
@@ -44,6 +47,18 @@ class ModelSettingsIn(BaseModel):
     """Per-company routing mode and local Ollama model selection."""
     mode: str
     local_model: str = Field(min_length=1, max_length=200)
+
+
+class ApprovalDecisionIn(BaseModel):
+    """Dashboard approval decision with human context."""
+    comment: str = Field(default="", max_length=4000)
+
+
+class EmailSettingsIn(BaseModel):
+    """Non-secret per-company approval notification settings."""
+    enabled: bool = False
+    approvers: list[str] = Field(default_factory=list, max_length=50)
+    sender_name: str = Field(default="Digital Company", min_length=1, max_length=100)
 
 
 class CompanyCreateIn(BaseModel):
@@ -206,6 +221,26 @@ def local_models():
         return {"status": "offline", "models": []}
 
 
+@app.get("/api/settings/email")
+def email_settings():
+    return get_store().get_email_settings()
+
+
+@app.post("/api/settings/email")
+def save_email_settings(payload: EmailSettingsIn):
+    store = get_store()
+    emails = []
+    for value in payload.approvers:
+        email = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            raise HTTPException(400, f"Invalid approver email: {value}")
+        if email not in emails:
+            emails.append(email)
+    if payload.enabled and not emails:
+        raise HTTPException(400, "At least one approver email is required")
+    return store.set_email_settings(payload.enabled, emails, payload.sender_name)
+
+
 @app.get("/api/local-model/health")
 def local_model_health():
     """Check Ollama API reachability; this does not run an inference."""
@@ -218,19 +253,68 @@ def local_model_health():
 
 
 @app.post("/api/approvals/{approval_id}/{decision}")
-def approval(approval_id: str, decision: str):
+def approval(approval_id: str, decision: str, payload: ApprovalDecisionIn):
     """Resolve an exact frozen approval payload for the selected company."""
     store = get_store()
     try:
         if decision == "approve":
-            store.approve(approval_id)
+            store.approve(approval_id, payload.comment)
         elif decision == "reject":
-            store.reject(approval_id)
+            store.reject(approval_id, payload.comment)
         else:
             raise HTTPException(400, "Unknown decision")
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"status": decision}
+
+
+def approval_page(company_id: str, approval_id: str, email: str, expires: int, token: str, message: str = "") -> str:
+    """Render a safe confirmation form; GET requests never change approval state."""
+    if not verify_approval_token(company_id, approval_id, email, expires, token):
+        raise HTTPException(403, "Invalid approval link")
+    try:
+        approval = next(a for a in registry.store_for(company_id).list_approvals() if a["id"] == approval_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(404, "Approval not found") from exc
+    proposal = __import__("json").loads(approval["payload_json"])
+    disabled = approval["status"] != "pending"
+    esc = html.escape
+    buttons = "<p>This approval has already been resolved.</p>" if disabled else """
+      <textarea name="comment" maxlength="4000" placeholder="Comment or decline reason"></textarea>
+      <div class="buttons"><button name="decision" value="approve" class="approve">Approve</button>
+      <button name="decision" value="reject" class="reject">Decline</button></div>"""
+    return f"""<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Approval review</title>
+<style>body{{margin:0;background:#090d13;color:#eaf1f8;font:15px Arial,sans-serif}}main{{max-width:680px;margin:40px auto;padding:26px;background:#151c26;border:1px solid #2a384b;border-radius:16px}}h1{{font-size:26px}}.meta{{padding:16px;background:#0d1219;border-radius:10px;line-height:1.7;color:#cbd5e1}}textarea{{box-sizing:border-box;width:100%;min-height:120px;margin:20px 0;padding:12px;background:#0b1017;color:white;border:1px solid #34445a;border-radius:9px}}button{{padding:13px 22px;border:0;border-radius:9px;font-weight:bold;cursor:pointer}}.approve{{background:#4ee3a1}}.reject{{background:#ff6b7a;margin-left:8px}}.note{{color:#91a0b4}}.message{{color:#4ee3a1}}</style></head><body><main><div class="note">DIGITAL COMPANY · SECURE HUMAN DECISION</div><h1>{esc(proposal['title'])}</h1><p>{esc(proposal['objective'])}</p><div class="meta"><b>Action:</b> {esc(proposal['action'])}<br><b>Estimated cost:</b> €{proposal['estimated_cost_eur']:.2f}<br><b>Status:</b> {esc(approval['status'])}</div><p class="message">{esc(message)}</p><form method="post"><input type="hidden" name="email" value="{esc(email)}"><input type="hidden" name="expires" value="{expires}"><input type="hidden" name="token" value="{esc(token)}">{buttons}</form><p class="note">Decline requires a reason. Comments become canonical context for the AI company.</p></main></body></html>"""
+
+
+@app.get("/approval/{company_id}/{approval_id}", response_class=HTMLResponse)
+def email_approval_form(company_id: str, approval_id: str, email: str, expires: int, token: str):
+    return approval_page(company_id, approval_id, email, expires, token)
+
+
+@app.post("/approval/{company_id}/{approval_id}", response_class=HTMLResponse)
+async def email_approval_decision(company_id: str, approval_id: str, request: Request):
+    form = await request.form()
+    email = str(form.get("email", ""))
+    token = str(form.get("token", ""))
+    expires = int(str(form.get("expires", "0")))
+    decision = str(form.get("decision", ""))
+    comment = str(form.get("comment", "")).strip()
+    if not verify_approval_token(company_id, approval_id, email, expires, token):
+        raise HTTPException(403, "Invalid approval link")
+    store = registry.store_for(company_id)
+    try:
+        if decision == "approve":
+            store.approve(approval_id, comment, email)
+            message = "Approved. The exact frozen task has been queued for execution."
+        elif decision == "reject":
+            store.reject(approval_id, comment, email)
+            message = "Declined. The CEO will reconsider using your reason."
+        else:
+            raise ValueError("Choose Approve or Decline")
+    except (RuntimeError, ValueError) as exc:
+        return HTMLResponse(approval_page(company_id, approval_id, email, expires, token, str(exc)), status_code=400)
+    return approval_page(company_id, approval_id, email, expires, token, message)
 
 
 def main() -> None:
