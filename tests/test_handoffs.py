@@ -24,7 +24,7 @@ class HandoffEngine:
     def decide(self, snapshot):
         return handoff_proposal()
 
-    def execute(self, proposal, snapshot, artifact_context=None):
+    def execute(self, proposal, snapshot, artifact_context=None, skill_context=None):
         raise AssertionError("A human handoff must not execute a specialist")
 
 

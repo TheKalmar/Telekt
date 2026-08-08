@@ -26,7 +26,7 @@ class FrozenTaskEngine:
     def decide(self, snapshot):
         raise AssertionError("CEO must not make a new decision after human approval")
 
-    def execute(self, proposal, snapshot, artifact_context=None):
+    def execute(self, proposal, snapshot, artifact_context=None, skill_context=None):
         self.executed.append(proposal)
         return SpecialistResult(
             status="completed",

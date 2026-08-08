@@ -246,6 +246,22 @@ def companies():
     return {"active_company_id": registry.active_id(), "companies": registry.list()}
 
 
+@app.get("/api/skills")
+def skills():
+    return {"skills": get_store().list_skills()}
+
+
+@app.put("/api/skills/{skill_id}/{status}")
+def set_skill_status(skill_id: str, status: str):
+    try:
+        get_store().set_skill_status(skill_id, status)
+    except KeyError as exc:
+        raise HTTPException(404, "Skill not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"skill_id": skill_id, "status": status}
+
+
 @app.get("/api/artifacts")
 def artifacts():
     """List immutable metadata for files in the active company's workspace."""

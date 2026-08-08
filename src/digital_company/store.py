@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from digital_company.models import CompanySnapshot, SpecialistResult, TaskProposal
 from digital_company.postgres_compat import PostgresCompat, company_schema
+from digital_company.skill_catalog import BUILTIN_SKILLS
 
 
 def utc_now() -> str:
@@ -99,6 +100,10 @@ class CompanyStore:
           status TEXT NOT NULL, outcome TEXT, created_at TEXT NOT NULL,
           resolved_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS agent_skills (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL,
+          definition_json TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         """)
         approval_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(approvals)")}
         if "decision_comment" not in approval_columns:
@@ -119,6 +124,7 @@ class CompanyStore:
             "VALUES(1,'local','deepseek-company:8b',?)", (utc_now(),)
         )
         self.db.commit()
+        self._sync_builtin_skills()
 
     def initialize(self, goal: str, budget: float, profile: dict | None = None) -> None:
         """Create or replace the singleton company header and optional profile."""
@@ -179,7 +185,52 @@ class CompanyStore:
             profile=self.get_profile(),
             capabilities=self.list_integrations(),
             human_handoffs=self.list_handoffs(status="pending"),
+            skills=self.list_skills(),
         )
+
+    def _sync_builtin_skills(self) -> None:
+        for skill in BUILTIN_SKILLS:
+            self.db.execute(
+                "INSERT INTO agent_skills(id,name,version,definition_json,status,updated_at) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,"
+                "definition_json=excluded.definition_json,updated_at=excluded.updated_at",
+                (skill["id"], skill["name"], skill["version"], json.dumps(skill), "available", utc_now()),
+            )
+        self.db.commit()
+
+    def list_skills(self) -> list[dict]:
+        result = []
+        for row in self.db.execute("SELECT definition_json,status FROM agent_skills ORDER BY id"):
+            item = json.loads(row["definition_json"])
+            item["status"] = row["status"]
+            result.append(item)
+        return result
+
+    def resolve_skills(self, skill_ids: list[str], specialist: str, action: str) -> list[dict]:
+        catalog = {item["id"]: item for item in self.list_skills()}
+        if not skill_ids:
+            skill_ids = [item["id"] for item in catalog.values()
+                         if item["status"] == "available" and specialist in item["roles"]
+                         and action in item["actions"]][:3]
+        resolved = []
+        for skill_id in skill_ids:
+            skill = catalog.get(skill_id)
+            if not skill or skill["status"] != "available":
+                raise ValueError(f"Skill is unavailable: {skill_id}")
+            if specialist not in skill["roles"] or action not in skill["actions"]:
+                raise ValueError(f"Skill {skill_id} is not valid for {specialist}/{action}")
+            resolved.append(skill)
+        return resolved
+
+    def set_skill_status(self, skill_id: str, status: str) -> None:
+        if status not in {"available", "disabled", "missing_access"}:
+            raise ValueError("Invalid skill status")
+        changed = self.db.execute("UPDATE agent_skills SET status=?,updated_at=? WHERE id=?",
+                                  (status, utc_now(), skill_id)).rowcount
+        self.db.commit()
+        if changed != 1:
+            raise KeyError(skill_id)
+        self.audit("skill.status_changed", {"skill_id": skill_id, "status": status})
 
     def get_profile(self) -> dict:
         """Return user-configurable company creation parameters."""

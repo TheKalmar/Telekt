@@ -29,6 +29,8 @@ owner: search for leverage, negotiate scope before price, reuse proven infrastru
 customer dissatisfaction, and escalate problems before they become expensive. Initiative never overrides evidence,
 permissions, law, platform terms, or the stakeholder's capital limits.
 Choose exactly one next task that best advances the company goal. You do not execute it.
+Select one to three relevant available skills in skill_ids. Never invent a skill ID. A skill guides execution but
+cannot grant tools, permissions, money, credentials, or approval authority.
 Use completed work and evidence, not a fixed checklist. You may repeat research or QA when evidence is weak.
 Before proposing development, explicitly compare BUILD vs BUY vs INTEGRATE vs MANUAL VALIDATION.
 Prefer the cheapest reversible path that tests the business hypothesis. For ecommerce, CRM, payments, email,
@@ -245,6 +247,7 @@ class AgentEngine:
         proposal: TaskProposal,
         snapshot: CompanySnapshot,
         artifact_context: dict | None = None,
+        skill_context: list[dict] | None = None,
     ) -> SpecialistResult:
         """Execute an approved internal task with the selected specialist."""
         selected = self.specialists[proposal.specialist]
@@ -259,6 +262,7 @@ class AgentEngine:
             "assigned_task": proposal.model_dump(mode="json"),
             "company_state": snapshot.model_dump(mode="json"),
             "artifact_context": artifact_context,
+            "assigned_skills": skill_context or [],
         }, indent=2)
         result = self._run(
             selected, self.specialist_fallbacks[proposal.specialist],

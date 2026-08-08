@@ -97,7 +97,9 @@ class CompanyOrchestrator:
                 self.store.set_task_status(task_id, "stopped")
                 return {"status": "stopped", "cycles": cycle, "reason": proposal.rationale}
 
-            result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist))
+            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value)
+            self.store.audit("skills.assigned", {"task_id": task_id, "skill_ids": [s["id"] for s in skills]})
+            result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist), skills)
             self._persist_result(task_id, proposal, result)
 
         return {"status": "cycle_limit_reached", "cycles": max_cycles}
@@ -112,7 +114,9 @@ class CompanyOrchestrator:
         try:
             if proposal.action == ActionType.BROWSER_OPERATE:
                 return self._execute_browser_mission(task_id, proposal, cycle)
-            result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist))
+            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value)
+            self.store.audit("skills.assigned", {"task_id": task_id, "skill_ids": [s["id"] for s in skills]})
+            result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist), skills)
             self._persist_result(task_id, proposal, result)
         except Exception as exc:
             self.store.fail_task(task_id, f"{type(exc).__name__}: {exc}")

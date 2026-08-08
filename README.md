@@ -7,6 +7,9 @@ Temporal UI, and the durable Temporal company worker. See
 [`docs/postgres-temporal.md`](docs/postgres-temporal.md). SQLite remains the
 canonical business store during the staged migration.
 
+Agents use a versioned, role- and action-scoped Skill Registry. See
+[`docs/agent-skills.md`](docs/agent-skills.md).
+
 This repository proves the control loop and governance model. It is not yet a production-ready autonomous business platform.
 
 ## What is implemented

@@ -49,6 +49,7 @@ class TaskProposal(BaseModel):
     specialist: Literal["research", "platform", "operations", "product", "development", "qa", "growth", "ceo"]
     stakeholder_response: str | None = None
     stakeholder_message_ids_considered: list[str] = Field(default_factory=list)
+    skill_ids: list[str] = Field(default_factory=list, max_length=5)
     platform_candidate: str | None = Field(default=None, max_length=80)
     required_capabilities: list[str] = Field(default_factory=list)
     execution_mode: Literal["reasoning", "api", "browser", "manual", "outsourced", "build"] = "reasoning"
@@ -108,3 +109,4 @@ class CompanySnapshot(BaseModel):
     profile: dict = Field(default_factory=dict)
     capabilities: list[dict] = Field(default_factory=list)
     human_handoffs: list[dict] = Field(default_factory=list)
+    skills: list[dict] = Field(default_factory=list)
