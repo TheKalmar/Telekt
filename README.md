@@ -102,9 +102,9 @@ profiles and cookies live in `digital-company_browser_data`. Running
 `docker compose down --volumes` permanently deletes all three and should only be used
 for a full reset.
 
-For cloud or hybrid mode, copy `.env.example` to `.env` and set
-`OPENAI_API_KEY`. Docker Compose reads `.env`; the secret is neither copied into
-the image nor committed to Git.
+For cloud or hybrid mode, copy `.env.example` to `.env.local` and set
+`OPENAI_API_KEY`. `scripts/up.ps1` loads `.env.local` when present; the secret is
+neither copied into the image nor committed to Git.
 
 Use **Model settings** in Mission control to select Local, Hybrid, or Cloud and
 choose any model reported by the configured Ollama server. Settings are stored
@@ -182,6 +182,7 @@ src/digital_company/
   workspace.py       Confined artifact writes and deterministic validation
   browser_runtime.py Isolated Playwright/Chromium session service
   browser_policy.py  URL allowlist and human-checkpoint rules
+  computer_use.py    Bounded OpenAI Computer Use mission controller
   policy.py          Deterministic Governor
   store.py           Per-company SQLite repository
   registry.py        Multi-company portfolio registry

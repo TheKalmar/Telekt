@@ -34,6 +34,8 @@ def run_once(registry: CompanyRegistry, owner: str) -> int:
             status = result["status"]
             if status == "waiting_for_approval":
                 store.set_control("waiting_approval", "Human decision required")
+            elif status == "waiting_for_human":
+                store.set_control("waiting_human", result.get("reason", "Human browser action required"))
             elif status in {"stopped", "paused"}:
                 store.set_control(status, result.get("reason"))
             elif status == "failed":

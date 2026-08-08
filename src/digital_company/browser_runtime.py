@@ -33,6 +33,10 @@ class BrowserActionIn(BaseModel):
     text: str | None = Field(default=None, max_length=4000)
     key: str | None = Field(default=None, max_length=40)
     url: str | None = Field(default=None, max_length=2000)
+    scroll_x: float | None = Field(default=None, ge=-2000, le=2000)
+    scroll_y: float | None = Field(default=None, ge=-2000, le=2000)
+    path: list[dict[str, float]] | None = Field(default=None, max_length=100)
+    keys: list[str] = Field(default_factory=list, max_length=8)
 
 
 def safe_company_id(company_id: str) -> str:
@@ -90,7 +94,8 @@ async def open_session(company_id: str, payload: OpenSessionIn):
     profile = DATA_DIR / company_id
     context = await playwright.chromium.launch_persistent_context(
         str(profile), headless=True, viewport={"width": 1440, "height": 1000},
-        args=["--disable-dev-shm-usage"],
+        env={},
+        args=["--disable-dev-shm-usage", "--disable-extensions", "--disable-file-system"],
     )
     page = context.pages[0] if context.pages else await context.new_page()
 
@@ -124,12 +129,28 @@ async def action(company_id: str, payload: BrowserActionIn):
     if not session:
         raise HTTPException(404, "Browser session is closed")
     page = session["page"]
-    if payload.kind == "click" and payload.x is not None and payload.y is not None:
-        await page.mouse.click(payload.x, payload.y)
+    if payload.kind in {"click", "double_click"} and payload.x is not None and payload.y is not None:
+        await page.mouse.click(payload.x, payload.y, click_count=2 if payload.kind == "double_click" else 1)
     elif payload.kind == "type" and payload.text is not None:
         await page.keyboard.type(payload.text)
     elif payload.kind == "key" and payload.key:
         await page.keyboard.press(payload.key)
+    elif payload.kind == "keypress" and payload.keys:
+        await page.keyboard.press("+".join(payload.keys))
+    elif payload.kind == "scroll":
+        await page.mouse.wheel(payload.scroll_x or 0, payload.scroll_y or 0)
+    elif payload.kind == "move" and payload.x is not None and payload.y is not None:
+        await page.mouse.move(payload.x, payload.y)
+    elif payload.kind == "drag" and payload.path and len(payload.path) >= 2:
+        await page.mouse.move(payload.path[0]["x"], payload.path[0]["y"])
+        await page.mouse.down()
+        for point in payload.path[1:]:
+            await page.mouse.move(point["x"], point["y"])
+        await page.mouse.up()
+    elif payload.kind == "wait":
+        await page.wait_for_timeout(1000)
+    elif payload.kind == "screenshot":
+        pass
     elif payload.kind == "navigate" and payload.url:
         try:
             url = validate_browser_url(payload.url, session["allowed_domains"])

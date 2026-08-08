@@ -69,6 +69,11 @@ class TaskProposal(BaseModel):
                 )
             if self.handoff_url and urlparse(self.handoff_url).scheme not in {"http", "https"}:
                 raise ValueError("Handoff URL must use http or https")
+        if self.action == ActionType.BROWSER_OPERATE:
+            if self.execution_mode != "browser" or not self.handoff_url:
+                raise ValueError("Browser operations require browser execution_mode and a starting URL")
+            if urlparse(self.handoff_url).scheme != "https":
+                raise ValueError("Browser operation URL must use https")
         return self
 
 

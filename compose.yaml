@@ -17,6 +17,7 @@ services:
       STRUCTURED_OUTPUT_RETRIES: ${STRUCTURED_OUTPUT_RETRIES:-1}
       AGENT_MAX_TURNS: ${AGENT_MAX_TURNS:-8}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      COMPUTER_USE_MODEL: ${COMPUTER_USE_MODEL:-gpt-5.6}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       APPROVAL_SIGNING_SECRET: ${APPROVAL_SIGNING_SECRET:-}
       APPROVAL_LINK_TTL_HOURS: ${APPROVAL_LINK_TTL_HOURS:-72}
@@ -27,6 +28,8 @@ services:
       - company_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - browser-runtime
     restart: unless-stopped
 
   browser-runtime:
@@ -68,10 +71,15 @@ services:
       SMTP_TLS: ${SMTP_TLS:-true}
       SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
       SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
+      BROWSER_RUNTIME_URL: http://browser-runtime:8430
+      COMPUTER_USE_MODEL: ${COMPUTER_USE_MODEL:-gpt-5.6}
+      COMPUTER_USE_MAX_STEPS: ${COMPUTER_USE_MAX_STEPS:-12}
     volumes:
       - company_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - browser-runtime
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
       interval: 10s

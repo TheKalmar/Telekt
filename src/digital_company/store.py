@@ -237,6 +237,10 @@ class CompanyStore:
         )
         self.db.execute("UPDATE tasks SET status='waiting_human' WHERE id=?", (task_id,))
         self.db.execute(
+            "UPDATE approvals SET status='waiting_human' WHERE task_id=? AND status='executing'",
+            (task_id,),
+        )
+        self.db.execute(
             "UPDATE runtime_control SET state='waiting_human',detail=?,updated_at=? WHERE id=1",
             (proposal.title, now),
         )
@@ -282,6 +286,10 @@ class CompanyStore:
         self.db.execute(
             "UPDATE tasks SET status=?,result_json=?,completed_at=? WHERE id=?",
             ("completed" if completed else "rejected", result.model_dump_json(), now, row["task_id"]),
+        )
+        self.db.execute(
+            "UPDATE approvals SET status=? WHERE task_id=? AND status='waiting_human'",
+            ("executed" if completed else "execution_cancelled", row["task_id"]),
         )
         message_id = str(uuid4())
         self.db.execute(

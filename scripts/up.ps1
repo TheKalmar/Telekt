@@ -13,6 +13,9 @@ Set-Location $repoRoot
 docker info *> $null
 
 $composeArgs = @("compose", "-f", "compose.yaml")
+if (Test-Path ".env.local") {
+    $composeArgs = @("compose", "--env-file", ".env.local", "-f", "compose.yaml")
+}
 if ($Mode -eq "Bundled") {
     $composeArgs += @("-f", "compose.local.yaml")
 }

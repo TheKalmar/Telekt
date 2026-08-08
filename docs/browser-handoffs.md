@@ -13,8 +13,8 @@ per company, an HTTPS/domain boundary, screenshots, manual coordinate clicks,
 keyboard input, navigation, and checkpoint detection. Browser profiles persist
 in a Docker volume so cookies can survive container replacement.
 
-The cockpit is currently human-operated. A later Computer Use worker will receive
-a mission, not unrestricted internet access:
+The cockpit supports human operation and the worker can run an approved Computer
+Use mission. It receives a mission, not unrestricted internet access:
 
 - objective and allowed domains;
 - allowed read/write actions;
@@ -27,6 +27,13 @@ a mission, not unrestricted internet access:
 AI-controlled authenticated browser operation currently requires approval. Sending a message,
 submitting a proposal, negotiating, hiring, spending, publishing, accepting terms,
 and production changes remain separate governed actions.
+
+After approval, the worker opens an isolated single-domain session, executes each
+returned action, captures a fresh screenshot, and returns it as
+`computer_call_output`. Every action is audited. The mission stops at
+`COMPUTER_USE_MAX_STEPS` (12 by default), before Enter/Return form submission, at
+any model safety check, or whenever login, CAPTCHA, or verification is detected.
+The page is always treated as untrusted input.
 
 ## Human takeover
 

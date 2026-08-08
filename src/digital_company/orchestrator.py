@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 from digital_company.agents import AgentEngine
+from digital_company.computer_use import BrowserMissionRunner, browser_runtime_request
 from digital_company.email_service import ApprovalMailer
-from digital_company.models import ActionType
+from digital_company.models import ActionType, SpecialistResult
 from digital_company.policy import Governor
 from digital_company.store import CompanyStore
 from digital_company.workspace import WorkspaceRuntime
@@ -113,12 +115,58 @@ class CompanyOrchestrator:
             self.store.fail_task(task_id, "Approved task no longer passes policy: " + policy.reason)
             return {"status": "failed", "cycles": cycle, "task_id": task_id}
         try:
+            if proposal.action == ActionType.BROWSER_OPERATE:
+                return self._execute_browser_mission(task_id, proposal, cycle)
             result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist))
             self._persist_result(task_id, proposal, result)
         except Exception as exc:
             self.store.fail_task(task_id, f"{type(exc).__name__}: {exc}")
             raise
         return {"status": "approved_task_completed", "cycles": cycle, "task_id": task_id}
+
+    def _execute_browser_mission(self, task_id: str, proposal, cycle: int) -> dict:
+        """Run an approved mission, but create a fresh handoff for any human checkpoint."""
+        hostname = urlparse(proposal.handoff_url).hostname
+        if not hostname:
+            raise RuntimeError("Browser mission has no valid starting hostname")
+        browser_runtime_request("PUT", f"/sessions/{self.company_id}", {
+            "url": proposal.handoff_url, "allowed_domains": [hostname],
+        })
+        self.store.audit("browser.mission_started", {
+            "task_id": task_id, "objective": proposal.objective,
+            "allowed_domains": [hostname],
+        })
+        outcome = BrowserMissionRunner(
+            reporter=lambda event, payload: self.store.audit(event, {"task_id": task_id, **payload})
+        ).run(
+            self.company_id,
+            proposal.objective,
+            max_steps=max(1, min(30, int(__import__("os").getenv("COMPUTER_USE_MAX_STEPS", "12")))),
+        )
+        if outcome.status in {"waiting_human", "blocked"}:
+            handoff = proposal.model_copy(update={
+                "handoff_instructions": [outcome.summary, "Use the browser cockpit or normal browser to resolve it"],
+                "resume_evidence": ["Describe exactly what was completed and what access is now available"],
+            })
+            handoff_id = self.store.create_handoff(task_id, handoff)
+            self.store.audit("browser.mission_handoff", {
+                "task_id": task_id, "handoff_id": handoff_id, "reason": outcome.summary,
+            })
+            return {"status": "waiting_for_human", "cycles": cycle, "task_id": task_id,
+                    "handoff_id": handoff_id, "reason": outcome.summary}
+        if outcome.status != "completed":
+            self.store.fail_task(task_id, outcome.summary)
+            return {"status": "failed", "cycles": cycle, "task_id": task_id,
+                    "mission_status": outcome.status}
+        result = SpecialistResult(
+            status="completed",
+            summary=outcome.summary,
+            evidence=[f"Computer Use mission executed {outcome.steps} audited step(s) on {hostname}"],
+            recommendation="CEO should inspect the mission evidence and choose the next reversible action",
+        )
+        self._persist_result(task_id, proposal, result)
+        return {"status": "approved_task_completed", "cycles": cycle, "task_id": task_id,
+                "mission_status": outcome.status}
 
     def _persist_result(self, task_id: str, proposal, result) -> None:
         """Persist a specialist result and confine any model-provided artifact path."""

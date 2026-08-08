@@ -22,6 +22,8 @@ The server binds to `127.0.0.1` and uses port `8421` unless `PORT` is set.
 |---|---|---|
 | `OPENAI_API_KEY` | Cloud/hybrid only | OpenAI API authentication |
 | `OPENAI_MODEL` | No | Cloud model, default `gpt-5.4-mini` |
+| `COMPUTER_USE_MODEL` | No | Visual browser model, default `gpt-5.6` |
+| `COMPUTER_USE_MAX_STEPS` | No | Per-mission action-batch ceiling, default `12` |
 | `PORT` | No | Control-plane port, default `8421` |
 
 Ollama is expected at `http://127.0.0.1:11434` and the default local model is `deepseek-company:8b`.
