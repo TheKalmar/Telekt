@@ -219,7 +219,7 @@ Highest-value next engineering steps:
 3. Add authentication and tenant authorization before any remote deployment.
 4. Replace SQLite/leases with PostgreSQL and Temporal.
 5. Add real provider connectors with idempotency: Shopify OAuth/catalog drafts first.
-6. Record real token usage and provider cost against a reserved budget.
+6. Reconcile recorded token estimates with provider invoices and add tool-call pricing.
 
 Do not build autonomous CAPTCHA solving, silent account creation, contract signing,
 payment submission, or unrestricted browser/shell access.

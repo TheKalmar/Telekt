@@ -20,6 +20,7 @@ from agents import (
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from digital_company.models import ActionType, CompanySnapshot, SpecialistResult, TaskProposal
+from digital_company.pricing import usage_payload
 
 
 CEO_INSTRUCTIONS = """You are the CEO of a constrained autonomous digital company.
@@ -81,10 +82,12 @@ class AgentEngine:
     """
     def __init__(self, mode: str = "cloud", local_model_name: str = "deepseek-company:8b",
                  allow_cloud_fallback: bool = False,
-                 reporter: Callable[[str, dict], None] | None = None) -> None:
+                 reporter: Callable[[str, dict], None] | None = None,
+                 remaining_budget: Callable[[], float] | None = None) -> None:
         self.cloud_model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
         self.allow_cloud_fallback = allow_cloud_fallback
         self.reporter = reporter or (lambda _event, _payload: None)
+        self.remaining_budget = remaining_budget
         self.max_turns = int(os.getenv("AGENT_MAX_TURNS", "8"))
         self.structured_retries = int(os.getenv("STRUCTURED_OUTPUT_RETRIES", "1"))
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1").rstrip("/")
@@ -143,11 +146,21 @@ class AgentEngine:
         started = time.monotonic()
         run_id = str(uuid4())
         provider = "local" if agent.model is self.local_model else "cloud"
+        reserve = float(os.getenv("CLOUD_CALL_RESERVE_EUR", "0.05"))
+        budget_reader = getattr(self, "remaining_budget", None)
+        if provider == "cloud" and budget_reader and budget_reader() < reserve:
+            self.reporter("budget.cloud_call_blocked", {"role": role, "required_reserve": reserve})
+            raise RuntimeError(f"Cloud call blocked: less than {reserve:.2f} budget remains")
         self.reporter("model.started", {"run_id": run_id, "role": role, "provider": provider})
         last_error = None
         for repair_attempt in range(self.structured_retries + 1):
             try:
-                result = Runner.run_sync(agent, prompt, max_turns=self.max_turns).final_output
+                run_result = Runner.run_sync(agent, prompt, max_turns=self.max_turns)
+                usage = usage_payload(run_result, run_id=run_id, provider=provider,
+                                      model=str(getattr(agent, "model", "unknown")))
+                if usage:
+                    self.reporter("model.usage", usage)
+                result = run_result.final_output
                 self.reporter("model.succeeded", {
                     "role": role, "provider": provider, "repair_attempt": repair_attempt,
                     "run_id": run_id,
@@ -177,12 +190,20 @@ class AgentEngine:
         if fallback_allowed and isinstance(last_error, (
             ModelBehaviorError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError,
         )):
+            if budget_reader and budget_reader() < reserve:
+                self.reporter("budget.cloud_call_blocked", {"role": role, "required_reserve": reserve})
+                raise RuntimeError(f"Cloud fallback blocked: less than {reserve:.2f} budget remains")
             self.reporter("model.cloud_fallback", {
                 "run_id": run_id, "role": role, "reason": type(last_error).__name__,
             })
             fallback_started = time.monotonic()
             try:
-                output = Runner.run_sync(fallback, prompt, max_turns=self.max_turns).final_output
+                run_result = Runner.run_sync(fallback, prompt, max_turns=self.max_turns)
+                usage = usage_payload(run_result, run_id=run_id + ":fallback", provider="cloud_fallback",
+                                      model=str(getattr(fallback, "model", "unknown")))
+                if usage:
+                    self.reporter("model.usage", usage)
+                output = run_result.final_output
                 self.reporter("model.succeeded", {
                     "run_id": run_id, "role": role, "provider": "cloud_fallback",
                     "repair_attempt": 0,

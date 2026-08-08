@@ -21,8 +21,10 @@ latency, provider usage, fallback count, ledger-estimated spend, and the latest
 status, step limit, last action, allowed domains, and stop detail for the live
 dashboard. Metrics are projected from the latest 250 audit events.
 
-`token_usage` is currently `null`. The application does not estimate or invent
-token counts when the provider has not supplied them.
+`token_usage` aggregates provider-reported input, cached, output, reasoning, and
+total tokens. Known model prices produce an explicitly labelled estimate;
+unknown models remain visible as unpriced calls rather than receiving an
+invented price.
 
 ### `GET /api/runtime/preflight`
 

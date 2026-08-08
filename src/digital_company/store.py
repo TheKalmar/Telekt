@@ -56,6 +56,12 @@ class CompanyStore:
           id TEXT PRIMARY KEY, task_id TEXT, amount_eur REAL NOT NULL,
           description TEXT NOT NULL, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS model_usage (
+          run_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
+          requests INTEGER NOT NULL, input_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL,
+          output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+          estimated_usd REAL, estimated_budget_cost REAL, pricing_status TEXT NOT NULL, created_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS audit_events (
           id TEXT PRIMARY KEY, event_type TEXT NOT NULL, payload_json TEXT NOT NULL,
           created_at TEXT NOT NULL
@@ -136,6 +142,7 @@ class CompanyStore:
         if not company:
             raise RuntimeError("Company is not initialized. Run `digital-company init` first.")
         spent = float(self.db.execute("SELECT COALESCE(SUM(amount_eur),0) FROM ledger").fetchone()[0])
+        spent += float(self.db.execute("SELECT COALESCE(SUM(estimated_budget_cost),0) FROM model_usage").fetchone()[0])
         tasks = [dict(row) for row in self.db.execute(
             "SELECT action,title,specialist,status,result_json FROM tasks WHERE status='completed' ORDER BY created_at"
         )]
@@ -585,9 +592,16 @@ class CompanyStore:
                 "SELECT status,COUNT(*) AS count FROM tasks GROUP BY status"
             )
         }
-        estimated_spend = float(self.db.execute(
+        authorized_spend = float(self.db.execute(
             "SELECT COALESCE(SUM(amount_eur),0) FROM ledger"
         ).fetchone()[0])
+        usage = dict(self.db.execute(
+            "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(input_tokens),0) input_tokens,"
+            "COALESCE(SUM(cached_tokens),0) cached_tokens,COALESCE(SUM(output_tokens),0) output_tokens,"
+            "COALESCE(SUM(reasoning_tokens),0) reasoning_tokens,COALESCE(SUM(total_tokens),0) total_tokens,"
+            "COALESCE(SUM(estimated_usd),0) estimated_usd,COALESCE(SUM(estimated_budget_cost),0) estimated_budget_cost,"
+            "SUM(CASE WHEN pricing_status='unknown_model' THEN 1 ELSE 0 END) unpriced_calls FROM model_usage"
+        ).fetchone())
         # Browser mission state is a read model rebuilt from append-only audit
         # events. The runner therefore needs no second mutable status record that
         # could drift from the task/approval lifecycle after a crash.
@@ -632,13 +646,26 @@ class CompanyStore:
                 "average_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
                 "p95_latency_ms": latencies[max(0, int(len(latencies) * .95) - 1)] if latencies else None,
                 "provider_counts": provider_counts,
-                "token_usage": None,
+                "token_usage": usage,
             },
             "tasks_by_status": task_counts,
-            "estimated_spend_eur": estimated_spend,
+            "authorized_spend_eur": authorized_spend,
+            "api_spend_eur": usage["estimated_budget_cost"],
+            "estimated_spend_eur": authorized_spend + usage["estimated_budget_cost"],
             "recent_events": events[:40],
             "browser_mission": mission,
         }
+
+    def record_model_usage(self, payload: dict) -> None:
+        """Persist one idempotent usage record without prompts or secrets."""
+        self.db.execute(
+            "INSERT OR IGNORE INTO model_usage VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (payload["run_id"], payload["provider"], payload["model"], payload["requests"],
+             payload["input_tokens"], payload["cached_tokens"], payload["output_tokens"],
+             payload["reasoning_tokens"], payload["total_tokens"], payload.get("estimated_usd"),
+             payload.get("estimated_budget_cost"), payload["pricing_status"], utc_now()),
+        )
+        self.db.commit()
 
     def get_settings(self) -> dict:
         """Return per-company model routing settings."""

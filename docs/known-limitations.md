@@ -22,12 +22,15 @@ SQLite is used per company. There is no migration versioning, connection pool, W
 ## Model routing
 
 - Hybrid routing is static, not complexity-aware.
-- Local-to-cloud fallback is explicit and disabled by default; it does not yet reserve a monetary budget before use.
+- Local-to-cloud fallback is explicit and disabled by default. A configurable
+  minimum budget reserve blocks new cloud calls, but this is not a prepaid or
+  transactional reservation at the provider.
 - Local health checks API reachability, not model inference quality.
 - Local DeepSeek may repeat work or make weaker strategic decisions.
 - Structured-output repair retries the complete model run and must be revisited before side-effecting tools are placed inside agent runs.
 - Agents SDK tracing disablement is process-global and currently sticky.
-- Latency and failure events are audited, but token usage and monetary cost are not yet recorded per task.
+- Provider-reported usage is recorded per model run. Prices are estimates for
+  known models, exclude unpriced tools, and are not a replacement for invoices.
 
 ## Approvals
 

@@ -51,8 +51,8 @@ window rather than lifetime accounting. An active run is inferred from a
 `model.failed`, or `model.fallback_failed` event. After a hard process crash, the
 last run may appear active until later recovery tooling marks it abandoned.
 
-Token usage is deliberately shown as unavailable. Exact token and provider-cost
-telemetry requires capturing provider response usage; the ledger amount is the
+Token usage is captured from provider responses and shown with an estimated
+budget-currency cost for known models; the ledger amount remains the
 company's authorized estimated task spend, not an API invoice.
 
 The **Runtime readiness** panel checks that the worker is online, the exact
@@ -102,7 +102,7 @@ Large prompts can still exceed context. Keep snapshots compact and load artifact
 - Add sandboxed execution and network egress policy.
 - Add idempotency keys for every external action.
 - Add provider timeouts, retries, circuit breakers, and fallback policy.
-- Add usage/cost telemetry per company and task.
+- Reconcile estimated usage costs with provider billing exports.
 - Add schema migrations and database backups.
 - Add end-to-end tests and agent evals.
 # Container operations

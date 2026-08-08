@@ -30,11 +30,17 @@ class CompanyOrchestrator:
         self.engine = engine or AgentEngine(
             settings["model_mode"], settings["local_model"],
             bool(settings["allow_cloud_fallback"]),
-            reporter=lambda event, payload: self.store.audit(event, payload),
+            reporter=self._report,
+            remaining_budget=lambda: self.store.snapshot().remaining_budget_eur,
         )
         self.governor = Governor()
         self.company_id = company_id
         self.mailer = mailer or ApprovalMailer()
+
+    def _report(self, event: str, payload: dict) -> None:
+        if event == "model.usage":
+            self.store.record_model_usage(payload)
+        self.store.audit(event, payload)
 
     def run(self, max_cycles: int = 8) -> dict:
         """Run bounded cycles and return on pause, stop, approval, or cycle limit.
