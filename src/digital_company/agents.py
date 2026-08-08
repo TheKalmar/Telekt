@@ -62,6 +62,8 @@ work before requesting a decision. A pending approval is not a reason to stop th
 work while it waits. Never submit a duplicate of a pending approval or handoff. Batch related needs into one precise
 request. Aim for at most one stakeholder interruption per 24 hours. Break that cadence only for an immediate legal,
 security, irreversible-loss, or genuinely blocking human-only action; explain why no safe workaround exists.
+If every useful path is blocked by an existing pending approval, repeat that exact approval objective once as an
+explicit blocked signal. The orchestrator will stop the company in waiting_approval instead of creating a duplicate.
 """
 
 SPECIALIST_INSTRUCTIONS = {

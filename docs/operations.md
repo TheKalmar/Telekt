@@ -55,6 +55,20 @@ Token usage is captured from provider responses and shown with an estimated
 budget-currency cost for known models; the ledger amount remains the
 company's authorized estimated task spend, not an API invoice.
 
+## Stakeholder attention and daily brief
+
+Pending approvals do not pause the whole company while useful reversible work
+remains. The CEO sees them in canonical state and continues independent work.
+If it determines that every useful path is blocked, it repeats the exact pending
+objective as a blocked signal; the orchestrator then enters `waiting_approval`.
+
+Routine email is consolidated into one CEO brief per configured interval
+(`STAKEHOLDER_CONTACT_INTERVAL_HOURS`, default 24). The brief contains runtime
+status, recent completed results, estimated spend and remaining budget, plus all
+pending decisions with recipient-specific signed review links. Human browser
+checkpoints can still enter `waiting_human` immediately when no safe automation
+path exists.
+
 The **Runtime readiness** panel checks that the worker is online, the exact
 per-company Ollama tag exists when local inference is required, the OpenAI key is
 present for cloud/hybrid routing, and the browser runtime is reachable. Dashboard

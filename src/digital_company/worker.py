@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from digital_company.orchestrator import CompanyOrchestrator
+from digital_company.email_service import ApprovalMailer
 from digital_company.registry import CompanyRegistry
 
 
@@ -23,6 +24,22 @@ def run_once(registry: CompanyRegistry, owner: str) -> int:
     for company in registry.list():
         company_id = company["id"]
         store = registry.store_for(company_id)
+        contact_hours = max(1, int(os.getenv("STAKEHOLDER_CONTACT_INTERVAL_HOURS", "24")))
+        settings = store.get_email_settings()
+        approvals = store.pending_approval_details()
+        if (settings["enabled"] and (approvals or store.snapshot().completed_tasks)
+                and store.stakeholder_notification_allowed(contact_hours)):
+            try:
+                snapshot = store.snapshot()
+                sent = ApprovalMailer().send_daily_brief(company_id, {
+                    "control": store.get_control()["state"], "spent": snapshot.spent_eur,
+                    "remaining": snapshot.remaining_budget_eur,
+                    "results": [task["title"] for task in snapshot.completed_tasks[-8:]],
+                }, approvals, settings)
+                if sent:
+                    store.audit("stakeholder.notification_sent", {"channel": "daily_ceo_brief", "recipients": sent})
+            except Exception as exc:
+                store.audit("stakeholder.notification_failed", {"channel": "daily_ceo_brief", "error": f"{type(exc).__name__}: {exc}"})
         if store.get_control()["state"] != "running":
             continue
         if not registry.claim_work(company_id, owner):

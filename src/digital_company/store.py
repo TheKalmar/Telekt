@@ -397,6 +397,15 @@ class CompanyStore:
         """Return approval history, newest first."""
         return [dict(row) for row in self.db.execute("SELECT * FROM approvals ORDER BY created_at DESC")]
 
+    def pending_approval_details(self) -> list[dict]:
+        """Return frozen pending proposals ready for a consolidated brief."""
+        result = []
+        for row in self.db.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY created_at"):
+            item = dict(row)
+            item["proposal"] = TaskProposal.model_validate_json(item.pop("payload_json"))
+            result.append(item)
+        return result
+
     def approve(self, approval_id: str, comment: str = "", decided_by: str = "dashboard") -> None:
         """Approve one still-pending payload; approvals are single-use."""
         row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()

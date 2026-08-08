@@ -67,6 +67,39 @@ class ApprovalMailer:
             sent += 1
         return sent
 
+    def send_daily_brief(self, company_id: str, summary: dict, approvals: list[dict], settings: dict) -> int:
+        """Send one executive digest with recipient-specific links for every decision."""
+        if not settings["enabled"] or not settings["approvers"]:
+            return 0
+        host, public_url, sender = os.getenv("SMTP_HOST", ""), os.getenv("PUBLIC_BASE_URL", "").rstrip("/"), os.getenv("SMTP_FROM", "")
+        if not host or not public_url or not sender:
+            raise RuntimeError("SMTP_HOST, SMTP_FROM, and PUBLIC_BASE_URL are required")
+        sent = 0
+        expires = int(time.time()) + int(os.getenv("APPROVAL_LINK_TTL_HOURS", "72")) * 3600
+        for recipient in settings["approvers"]:
+            cards = []
+            plain = []
+            for item in approvals:
+                proposal = item["proposal"]
+                token = approval_token(company_id, item["id"], recipient, expires)
+                url = f"{public_url}/approval/{quote(company_id)}/{quote(item['id'])}?email={quote(recipient)}&expires={expires}&token={token}"
+                plain.append(f"- {proposal.title}: {url}")
+                cards.append(f'<div style="background:#0d1219;padding:16px;border-radius:10px;margin:12px 0"><b>{html.escape(proposal.title)}</b><p>{html.escape(proposal.objective)}</p><a style="color:#4ee3a1" href="{html.escape(url)}">Review decision</a></div>')
+            msg = EmailMessage()
+            msg["Subject"] = f"Daily CEO brief: {settings['sender_name']}"
+            msg["From"] = f'{settings["sender_name"]} <{sender}>'
+            msg["To"] = recipient
+            result_text = "\n".join(f"- {title}" for title in summary["results"]) or "- No new completed work"
+            result_html = "".join(f"<li>{html.escape(title)}</li>" for title in summary["results"]) or "<li>No new completed work</li>"
+            msg.set_content(f"Status: {summary['control']}\nSpent: EUR {summary['spent']:.2f}\nRemaining: EUR {summary['remaining']:.2f}\nResults:\n{result_text}\nPending approvals: {len(approvals)}\n" + "\n".join(plain))
+            msg.add_alternative(f'''<!doctype html><html><body style="background:#0b0f15;color:#eaf1f8;font-family:Arial;padding:28px"><div style="max-width:650px;margin:auto"><div style="color:#4ee3a1">DAILY CEO BRIEF</div><h1>{html.escape(settings["sender_name"])}</h1><p>Status: <b>{html.escape(summary["control"])}</b> · Spent: <b>€{summary["spent"]:.2f}</b> · Remaining: <b>€{summary["remaining"]:.2f}</b></p><h2>Results</h2><ul>{result_html}</ul><h2>Decisions ({len(approvals)})</h2>{''.join(cards) or '<p>No decisions required today.</p>'}<p style="color:#667386;font-size:12px">This is the single routine stakeholder digest for the current 24-hour window.</p></div></body></html>''', subtype="html")
+            with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=15) as smtp:
+                if os.getenv("SMTP_TLS", "true").lower() == "true": smtp.starttls()
+                if os.getenv("SMTP_USERNAME", ""): smtp.login(os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD", ""))
+                smtp.send_message(msg)
+            sent += 1
+        return sent
+
     @staticmethod
     def _html(proposal: TaskProposal, reason: str, url: str, company: str) -> str:
         esc = html.escape

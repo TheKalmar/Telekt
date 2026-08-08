@@ -78,6 +78,30 @@ def test_mailer_sends_individual_html_messages(monkeypatch):
     assert all("Review decision" in str(message) for message in sent)
 
 
+def test_daily_brief_batches_all_pending_decisions(monkeypatch):
+    sent = []
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def send_message(self, message): sent.append(message)
+    monkeypatch.setenv("APPROVAL_SIGNING_SECRET", "test-secret")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://localhost:8421")
+    monkeypatch.setenv("SMTP_HOST", "mailpit")
+    monkeypatch.setenv("SMTP_FROM", "brief@example.com")
+    monkeypatch.setenv("SMTP_TLS", "false")
+    monkeypatch.setattr("digital_company.email_service.smtplib.SMTP", FakeSMTP)
+    approvals = [{"id": "a1", "proposal": proposal()}, {"id": "a2", "proposal": proposal()}]
+    count = ApprovalMailer().send_daily_brief("company-1", {
+        "control": "running", "spent": 2.5, "remaining": 997.5, "results": ["Market research completed"],
+    }, approvals, {"enabled": True, "approvers": ["owner@example.com"], "sender_name": "Acme AI"})
+    assert count == 1
+    body = str(sent[0])
+    assert "Daily CEO brief" in body
+    assert "Market research completed" in body
+    assert body.count("Review decision") == 2
+
+
 def test_email_review_get_is_safe_and_decline_comment_is_required(tmp_path: Path, monkeypatch):
     registry = CompanyRegistry(tmp_path / ".company")
     company = registry.create({
