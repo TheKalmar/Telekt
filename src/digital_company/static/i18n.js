@@ -22,6 +22,7 @@
       "panel.readiness":"Runtime readiness","panel.browserMission":"Live browser mission","panel.missionControl":"Mission control","panel.companyState":"Company state","panel.telemetry":"Operations & model telemetry","panel.companyWorkspace":"Company workspace","panel.capabilities":"Platform capabilities","panel.skills":"Agent Skill Registry","panel.goal":"Company goal","panel.timeline":"Decision & execution timeline","panel.takeover":"Human takeover","panel.approvals":"Human approvals","panel.chat":"Stakeholder chat",
       "action.start":"▶ Start / Resume","action.pause":"Ⅱ Pause","action.stop":"■ Stop","action.modelSettings":"Model settings","action.enable":"Enable","action.missingAccess":"Missing access","action.disable":"Disable","action.send":"Send","action.close":"Close","action.cancel":"Cancel","action.save":"Save settings",
       "chat.placeholder":"Change a priority, ask a question or challenge the CEO's decision...","chat.directive":"Directive — interrupts the current plan","chat.question":"Question — does not interrupt the plan",
+      "runtime.available":"Ollama status: available","runtime.unavailable":"Ollama status: unavailable",
       "footer":"Local control plane · durable PostgreSQL state · deterministic permission governor"
     },
     sr: {
@@ -44,6 +45,7 @@
       "panel.readiness":"Spremnost sistema","panel.browserMission":"Aktivna browser misija","panel.missionControl":"Kontrola misije","panel.companyState":"Stanje kompanije","panel.telemetry":"Operacije i telemetrija modela","panel.companyWorkspace":"Radni prostor kompanije","panel.capabilities":"Mogućnosti platformi","panel.skills":"Registar skillova agenata","panel.goal":"Cilj kompanije","panel.timeline":"Tok odluka i izvršenja","panel.takeover":"Ljudsko preuzimanje","panel.approvals":"Odluke za odobrenje","panel.chat":"Razgovor sa stakeholderom",
       "action.start":"▶ Pokreni / Nastavi","action.pause":"Ⅱ Pauziraj","action.stop":"■ Zaustavi","action.modelSettings":"Postavke modela","action.enable":"Omogući","action.missingAccess":"Nedostaje pristup","action.disable":"Onemogući","action.send":"Pošalji","action.close":"Zatvori","action.cancel":"Otkaži","action.save":"Sačuvaj postavke",
       "chat.placeholder":"Promijeni prioritet, postavi pitanje ili ospori odluku CEO-a...","chat.directive":"Direktiva — prekida trenutni plan","chat.question":"Pitanje — ne prekida plan",
+      "runtime.available":"Ollama status: dostupna","runtime.unavailable":"Ollama status: nedostupna",
       "footer":"Lokalni kontrolni centar · trajno PostgreSQL stanje · deterministička kontrola dozvola"
     }
   };
