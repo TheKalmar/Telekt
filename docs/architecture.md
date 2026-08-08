@@ -151,7 +151,9 @@ stopped -> running -> waiting_approval
    +--------------- stopped
 ```
 
-Pause and stop are cooperative. They are evaluated between complete model calls and database operations.
+Pause and stop are cooperative. They are evaluated between complete model calls
+and database operations, and between individual actions inside a Computer Use
+browser mission. An in-flight provider request is allowed to finish safely.
 
 `waiting_human` is a resumable checkpoint rather than a generic approval. The
 CEO supplies the target URL, numbered human steps, and required return evidence.

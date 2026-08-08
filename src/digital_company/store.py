@@ -588,6 +588,9 @@ class CompanyStore:
         estimated_spend = float(self.db.execute(
             "SELECT COALESCE(SUM(amount_eur),0) FROM ledger"
         ).fetchone()[0])
+        # Browser mission state is a read model rebuilt from append-only audit
+        # events. The runner therefore needs no second mutable status record that
+        # could drift from the task/approval lifecycle after a crash.
         browser_events = [event for event in events if event["event_type"].startswith("browser.mission_")]
         latest_start = next((event for event in browser_events
                              if event["event_type"] == "browser.mission_started"), None)

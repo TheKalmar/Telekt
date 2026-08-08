@@ -29,7 +29,7 @@ docker compose -f compose.yaml -f compose.local.yaml logs -f ollama-init
 
 ## Option 2: bundled Ollama without downloading our model
 
-Create `.env` from `.env.example` and set:
+Create `.env.local` from `.env.example` and set:
 
 ```env
 INSTALL_DEFAULT_MODEL=false
@@ -57,7 +57,7 @@ ollama list
 
 Ollama must accept connections from Docker. Start it with
 `OLLAMA_HOST=0.0.0.0:11434` according to the host operating system, then set
-this in `.env`:
+this in `.env.local`:
 
 ```env
 OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
@@ -80,11 +80,13 @@ internet.
 
 ## Option 4: OpenAI cloud only
 
-Create `.env` and supply the key locally:
+Create `.env.local` and supply the key locally:
 
 ```env
 OPENAI_API_KEY=your-key
 OPENAI_MODEL=gpt-5.4-mini
+COMPUTER_USE_MODEL=gpt-5.6
+COMPUTER_USE_MAX_STEPS=12
 ```
 
 Start without Ollama:
@@ -113,7 +115,7 @@ company setting in their own data volume remains local to that installation.
 Recommended first commands after cloning:
 
 ```powershell
-Copy-Item .env.example .env
+Copy-Item .env.example .env.local
 .\scripts\up.ps1 -Mode Existing -Build
 ```
 

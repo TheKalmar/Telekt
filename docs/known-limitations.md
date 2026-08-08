@@ -62,8 +62,11 @@ supplier marketplace connectors are not implemented yet.
 The system now has an isolated persistent Playwright/Chromium cockpit with
 screenshots and manual input, and models browser missions, human takeover, tool
 discovery, talent sourcing, negotiation, and hiring as distinct governed actions.
-It does not yet run the AI Computer Use screenshot/action loop, stream live video,
-search Upwork/Fiverr automatically, send proposals, or hire contractors. CAPTCHA, login,
+Approved browser tasks now run a bounded OpenAI Computer Use screenshot/action
+loop and expose mission status plus refreshed screenshots in the dashboard. A
+paused mission is stopped safely but its model conversation is not yet resumable;
+the CEO must propose a new mission after review. The system does not stream live
+video, search Upwork/Fiverr automatically, send proposals, or hire contractors. CAPTCHA, login,
 2FA, identity checks, terms acceptance, and payment entry are intentionally
 human-only; bypass behavior is out of scope.
 

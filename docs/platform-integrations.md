@@ -29,7 +29,7 @@ SHOPIFY_CLIENT_SECRET=...
 
 In the dashboard, open **Platforms**, enter only the permanent
 `store-name.myshopify.com` domain and requested capabilities, then restart app
-and worker after changing `.env`. Secret values are never accepted by the web
+and worker after changing `.env.local`. Secret values are never accepted by the web
 form, stored in SQLite, returned by the API, or written to audit events.
 
 For new development use Shopify's GraphQL Admin API. The REST Admin API is

@@ -85,7 +85,7 @@ Run only the application for cloud mode, without starting or downloading Ollama:
 ```
 
 The bundled mode's first startup downloads DeepSeek-R1 8B Q4_K_M (about 5.2
-GB). Set `INSTALL_DEFAULT_MODEL=false` in `.env` to start an empty bundled
+GB). Set `INSTALL_DEFAULT_MODEL=false` in `.env.local` to start an empty bundled
 Ollama instead. See [Model and Docker setup](docs/model-setup.md) for all modes,
 custom models, Linux host networking, and troubleshooting.
 
@@ -206,16 +206,17 @@ tests/
 
 Read these in order:
 
-1. [Architecture](docs/architecture.md)
-2. [Developer guide](docs/developer-guide.md)
-3. [Agent prompt contracts](docs/prompt.md)
-4. [API reference](docs/api.md)
-5. [Operations](docs/operations.md)
-6. [Known limitations](docs/known-limitations.md)
-7. [Email approvals](docs/email-approvals.md)
-8. [Model reliability](docs/model-reliability.md)
-9. [Platform strategy and Shopify](docs/platform-integrations.md)
-10. [Browser missions and human takeover](docs/browser-handoffs.md)
+1. [Luka / new developer quick handoff](docs/LUKA_HANDOFF.md)
+2. [Architecture](docs/architecture.md)
+3. [Developer guide](docs/developer-guide.md)
+4. [Agent prompt contracts](docs/prompt.md)
+5. [API reference](docs/api.md)
+6. [Operations](docs/operations.md)
+7. [Known limitations](docs/known-limitations.md)
+8. [Email approvals](docs/email-approvals.md)
+9. [Model reliability](docs/model-reliability.md)
+10. [Platform strategy and Shopify](docs/platform-integrations.md)
+11. [Browser missions and human takeover](docs/browser-handoffs.md)
 
 ## Security warning
 

@@ -105,6 +105,7 @@ class BrowserMissionRunner:
         return self._stop("step_limit", f"Mission stopped at the {max_steps}-step limit", max_steps)
 
     def _interrupted(self, steps: int) -> MissionOutcome | None:
+        """Honor stakeholder control between atomic actions, never mid-request."""
         state = self.control_state()
         if state in {"paused", "stopped"}:
             return self._stop(state, f"Stakeholder {state} the browser mission", steps)

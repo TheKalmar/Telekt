@@ -17,7 +17,9 @@ Returns the active company snapshot, runtime control, settings, approvals, recen
 Returns operational telemetry for the active company: the currently inferred
 model run, worker heartbeat, task counts by status, model successes and errors,
 latency, provider usage, fallback count, ledger-estimated spend, and the latest
-40 decoded audit events. Metrics are projected from the latest 250 audit events.
+40 decoded audit events. It also projects the latest Browser Mission objective,
+status, step limit, last action, allowed domains, and stop detail for the live
+dashboard. Metrics are projected from the latest 250 audit events.
 
 `token_usage` is currently `null`. The application does not estimate or invent
 token counts when the provider has not supplied them.
