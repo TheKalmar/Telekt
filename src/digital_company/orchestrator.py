@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -59,10 +60,6 @@ class CompanyOrchestrator:
                 return self._execute_claimed(task_id, proposal, cycle)
 
             snapshot = self.store.snapshot()
-            if snapshot.pending_approvals:
-                return {"status": "waiting_for_approval", "cycles": cycle - 1,
-                        "approval": snapshot.pending_approvals[0]}
-
             proposal = self.engine.decide(snapshot)
             # A stakeholder response becomes durable before the proposed task is
             # evaluated, so the UI can show how the CEO handled the intervention.
@@ -84,26 +81,35 @@ class CompanyOrchestrator:
                     "handoff_id": handoff_id, "task": proposal.model_dump(mode="json"),
                 }
             if policy.outcome == "require_approval":
+                if self.store.has_pending_equivalent_approval(proposal):
+                    self.store.set_task_status(task_id, "superseded")
+                    self.store.audit("approval.duplicate_suppressed", {"task_id": task_id})
+                    continue
                 if proposal.action == ActionType.REQUEST_PLATFORM_ACCESS:
                     self.store.request_integration(
                         proposal.platform_candidate or "unknown",
                         proposal.required_capabilities,
                     )
                 approval_id = self.store.request_approval(task_id, proposal, policy.reason)
-                if self.company_id:
+                contact_hours = max(1, int(os.getenv("STAKEHOLDER_CONTACT_INTERVAL_HOURS", "24")))
+                if self.company_id and self.store.stakeholder_notification_allowed(contact_hours):
                     try:
                         sent = self.mailer.send(
                             self.company_id, approval_id, proposal, policy.reason,
                             self.store.get_email_settings(),
                         )
                         self.store.audit("approval.email_sent", {"approval_id": approval_id, "recipients": sent})
+                        if sent:
+                            self.store.audit("stakeholder.notification_sent", {
+                                "approval_id": approval_id, "channel": "email", "recipients": sent,
+                            })
                     except Exception as exc:
                         self.store.audit(
                             "approval.email_failed",
                             {"approval_id": approval_id, "error": f"{type(exc).__name__}: {exc}"},
                         )
-                return {"status": "waiting_for_approval", "cycles": cycle,
-                        "approval_id": approval_id, "task": proposal.model_dump(mode="json")}
+                self.store.audit("approval.queued_without_pause", {"approval_id": approval_id})
+                continue
             if proposal.action == ActionType.STOP:
                 self.store.set_task_status(task_id, "stopped")
                 return {"status": "stopped", "cycles": cycle, "reason": proposal.rationale}

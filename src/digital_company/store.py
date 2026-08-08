@@ -372,6 +372,27 @@ class CompanyStore:
         self.audit("approval.requested", {"approval_id": approval_id, "task_id": task_id})
         return approval_id
 
+    def has_pending_equivalent_approval(self, proposal: TaskProposal) -> bool:
+        """Prevent repeated stakeholder requests for the same external action."""
+        for row in self.db.execute("SELECT payload_json FROM approvals WHERE status='pending'"):
+            existing = TaskProposal.model_validate_json(row["payload_json"])
+            if (existing.action == proposal.action
+                    and existing.platform_candidate == proposal.platform_candidate
+                    and existing.objective.strip().lower() == proposal.objective.strip().lower()):
+                return True
+        return False
+
+    def stakeholder_notification_allowed(self, hours: int = 24) -> bool:
+        """Rate-limit outbound attention requests while keeping dashboard state current."""
+        row = self.db.execute(
+            "SELECT created_at FROM audit_events WHERE event_type='stakeholder.notification_sent' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return True
+        sent = datetime.fromisoformat(row["created_at"])
+        return (datetime.now(timezone.utc) - sent).total_seconds() >= hours * 3600
+
     def list_approvals(self) -> list[dict]:
         """Return approval history, newest first."""
         return [dict(row) for row in self.db.execute("SELECT * FROM approvals ORDER BY created_at DESC")]
