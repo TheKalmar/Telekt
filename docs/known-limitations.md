@@ -22,12 +22,12 @@ SQLite is used per company. There is no migration versioning, connection pool, W
 ## Model routing
 
 - Hybrid routing is static, not complexity-aware.
-- There is no automatic fallback when Ollama or OpenAI fails.
+- Local-to-cloud fallback is explicit and disabled by default; it does not yet reserve a monetary budget before use.
 - Local health checks API reachability, not model inference quality.
 - Local DeepSeek may repeat work or make weaker strategic decisions.
-- Structured-output failures have no repair/retry layer.
+- Structured-output repair retries the complete model run and must be revisited before side-effecting tools are placed inside agent runs.
 - Agents SDK tracing disablement is process-global and currently sticky.
-- Token usage, latency, and monetary cost are not recorded per task.
+- Latency and failure events are audited, but token usage and monetary cost are not yet recorded per task.
 
 ## Approvals
 

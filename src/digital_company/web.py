@@ -47,6 +47,7 @@ class ModelSettingsIn(BaseModel):
     """Per-company routing mode and local Ollama model selection."""
     mode: str
     local_model: str = Field(min_length=1, max_length=200)
+    allow_cloud_fallback: bool = False
 
 
 class ApprovalDecisionIn(BaseModel):
@@ -107,7 +108,7 @@ def dashboard():
     except RuntimeError:
         return {
             "control": {"state": "idle", "detail": "Create a company to begin"},
-            "settings": {"model_mode": "local"},
+            "settings": {"model_mode": "local", "local_model": "deepseek-company:8b", "allow_cloud_fallback": 0},
             "profile": None,
             "goal": "No company created yet",
             "initial_budget_eur": 0,
@@ -193,7 +194,7 @@ def model_settings(payload: ModelSettingsIn):
     if store.get_control()["state"] == "running":
         raise HTTPException(409, "Pause or stop the company before changing model settings")
     try:
-        store.set_model_settings(payload.mode, payload.local_model)
+        store.set_model_settings(payload.mode, payload.local_model, payload.allow_cloud_fallback)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return store.get_settings()

@@ -23,7 +23,11 @@ class CompanyOrchestrator:
         self.store = store
         self.artifacts_dir = artifacts_dir
         settings = store.get_settings()
-        self.engine = engine or AgentEngine(settings["model_mode"], settings["local_model"])
+        self.engine = engine or AgentEngine(
+            settings["model_mode"], settings["local_model"],
+            bool(settings["allow_cloud_fallback"]),
+            reporter=lambda event, payload: self.store.audit(event, payload),
+        )
         self.governor = Governor()
         self.company_id = company_id
         self.mailer = mailer or ApprovalMailer()

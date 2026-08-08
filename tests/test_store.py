@@ -43,3 +43,11 @@ def test_local_model_can_be_changed_per_company(tmp_path: Path):
     store.initialize("Build a product", 1000)
     store.set_model_settings("local", "llama3.1:8b")
     assert store.get_settings()["local_model"] == "llama3.1:8b"
+
+
+def test_cloud_fallback_is_explicit_and_disabled_by_default(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Build a product", 1000)
+    assert store.get_settings()["allow_cloud_fallback"] == 0
+    store.set_model_settings("local", "llama3.1:8b", allow_cloud_fallback=True)
+    assert store.get_settings()["allow_cloud_fallback"] == 1

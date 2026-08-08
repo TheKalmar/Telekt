@@ -9,8 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from collections.abc import Callable
 
-from agents import Agent, AsyncOpenAI, OpenAIChatCompletionsModel, Runner, set_tracing_disabled
+from agents import (
+    Agent, AsyncOpenAI, ModelBehaviorError, ModelRetrySettings, ModelSettings,
+    OpenAIChatCompletionsModel, Runner, retry_policies, set_tracing_disabled,
+)
+from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from digital_company.models import CompanySnapshot, SpecialistResult, TaskProposal
 
@@ -50,33 +56,96 @@ class AgentEngine:
     is ignored by Ollama. Local mode disables OpenAI trace export so a local-only
     test does not make a hidden external tracing request.
     """
-    def __init__(self, mode: str = "cloud", local_model_name: str = "deepseek-company:8b") -> None:
-        cloud_model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+    def __init__(self, mode: str = "cloud", local_model_name: str = "deepseek-company:8b",
+                 allow_cloud_fallback: bool = False,
+                 reporter: Callable[[str, dict], None] | None = None) -> None:
+        self.cloud_model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+        self.allow_cloud_fallback = allow_cloud_fallback
+        self.reporter = reporter or (lambda _event, _payload: None)
+        self.max_turns = int(os.getenv("AGENT_MAX_TURNS", "8"))
+        self.structured_retries = int(os.getenv("STRUCTURED_OUTPUT_RETRIES", "1"))
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1").rstrip("/")
-        local_model = OpenAIChatCompletionsModel(
+        timeout = float(os.getenv("MODEL_TIMEOUT_SECONDS", "120"))
+        self.local_model = OpenAIChatCompletionsModel(
             model=local_model_name,
-            openai_client=AsyncOpenAI(base_url=ollama_base_url, api_key="ollama"),
+            openai_client=AsyncOpenAI(
+                base_url=ollama_base_url, api_key="ollama", timeout=timeout, max_retries=0,
+            ),
             strict_feature_validation=False,
             buffer_streamed_tool_calls=True,
         )
+        retry_settings = ModelSettings(retry=ModelRetrySettings(
+            max_retries=int(os.getenv("MODEL_TRANSIENT_RETRIES", "2")),
+            backoff={"initial_delay": 0.5, "max_delay": 5.0, "multiplier": 2.0, "jitter": True},
+            policy=retry_policies.any(
+                retry_policies.provider_suggested(), retry_policies.retry_after(),
+                retry_policies.network_error(),
+                retry_policies.http_status([408, 409, 429, 500, 502, 503, 504]),
+            ),
+        ))
         if mode == "local":
             set_tracing_disabled(True)
-        ceo_model = local_model if mode == "local" else cloud_model
-        self.ceo = Agent(name="CEO", model=ceo_model, instructions=CEO_INSTRUCTIONS, output_type=TaskProposal)
-        self.specialists = {
-            name: Agent(
-                name=name.title(),
-                model=(cloud_model if mode == "cloud" or (mode == "hybrid" and name == "development") else local_model),
-                instructions=instructions,
-                output_type=SpecialistResult,
+        ceo_local = mode == "local"
+        self.ceo = self._agent("CEO", CEO_INSTRUCTIONS, TaskProposal, ceo_local, retry_settings)
+        self.ceo_fallback = self._agent("CEO fallback", CEO_INSTRUCTIONS, TaskProposal, False, retry_settings) if ceo_local else None
+        self.specialists = {}
+        self.specialist_fallbacks = {}
+        for name, instructions in SPECIALIST_INSTRUCTIONS.items():
+            use_local = mode == "local" or (mode == "hybrid" and name != "development")
+            self.specialists[name] = self._agent(name.title(), instructions, SpecialistResult, use_local, retry_settings)
+            self.specialist_fallbacks[name] = (
+                self._agent(name.title() + " fallback", instructions, SpecialistResult, False, retry_settings)
+                if use_local else None
             )
-            for name, instructions in SPECIALIST_INSTRUCTIONS.items()
-        }
+
+    def _agent(self, name, instructions, output_type, local: bool, settings: ModelSettings):
+        return Agent(
+            name=name, model=self.local_model if local else self.cloud_model,
+            instructions=instructions, output_type=output_type, model_settings=settings,
+        )
+
+    def _run(self, agent, fallback, prompt: str, role: str):
+        """Run with SDK transient retries, structured repair, audit, and opt-in fallback."""
+        started = time.monotonic()
+        provider = "local" if agent.model is self.local_model else "cloud"
+        last_error = None
+        for repair_attempt in range(self.structured_retries + 1):
+            try:
+                result = Runner.run_sync(agent, prompt, max_turns=self.max_turns).final_output
+                self.reporter("model.succeeded", {
+                    "role": role, "provider": provider, "repair_attempt": repair_attempt,
+                    "latency_ms": round((time.monotonic() - started) * 1000),
+                })
+                return result
+            except ModelBehaviorError as exc:
+                last_error = exc
+                self.reporter("model.structured_output_error", {
+                    "role": role, "provider": provider, "attempt": repair_attempt + 1,
+                    "error": str(exc)[:500],
+                })
+                prompt += "\n\nYour previous response failed schema validation. Return only a complete response matching the required structured output."
+            except (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError) as exc:
+                last_error = exc
+                self.reporter("model.provider_error", {
+                    "role": role, "provider": provider, "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                    "latency_ms": round((time.monotonic() - started) * 1000),
+                })
+                break
+        fallback_allowed = (
+            self.allow_cloud_fallback and fallback is not None and bool(os.getenv("OPENAI_API_KEY"))
+        )
+        if fallback_allowed and isinstance(last_error, (
+            ModelBehaviorError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError,
+        )):
+            self.reporter("model.cloud_fallback", {"role": role, "reason": type(last_error).__name__})
+            return Runner.run_sync(fallback, prompt, max_turns=self.max_turns).final_output
+        raise last_error
 
     def decide(self, snapshot: CompanySnapshot) -> TaskProposal:
         """Ask the CEO to select exactly one next task from canonical state."""
         prompt = "Current canonical company state:\n" + snapshot.model_dump_json(indent=2)
-        return Runner.run_sync(self.ceo, prompt).final_output
+        return self._run(self.ceo, self.ceo_fallback, prompt, "ceo")
 
     def execute(
         self,
@@ -90,4 +159,7 @@ class AgentEngine:
             "company_state": snapshot.model_dump(mode="json"),
             "artifact_context": artifact_context,
         }, indent=2)
-        return Runner.run_sync(self.specialists[proposal.specialist], prompt).final_output
+        return self._run(
+            self.specialists[proposal.specialist], self.specialist_fallbacks[proposal.specialist],
+            prompt, proposal.specialist,
+        )

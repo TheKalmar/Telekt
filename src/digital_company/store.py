@@ -82,6 +82,11 @@ class CompanyStore:
             self.db.execute("ALTER TABLE approvals ADD COLUMN decision_comment TEXT")
         if "decided_by" not in approval_columns:
             self.db.execute("ALTER TABLE approvals ADD COLUMN decided_by TEXT")
+        settings_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(runtime_settings)")}
+        if "allow_cloud_fallback" not in settings_columns:
+            self.db.execute(
+                "ALTER TABLE runtime_settings ADD COLUMN allow_cloud_fallback INTEGER NOT NULL DEFAULT 0"
+            )
         self.db.execute(
             "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) VALUES(1,'stopped','Ready',?)",
             (utc_now(),),
@@ -400,14 +405,15 @@ class CompanyStore:
     def get_settings(self) -> dict:
         """Return per-company model routing settings."""
         return dict(self.db.execute(
-            "SELECT model_mode,local_model,updated_at FROM runtime_settings WHERE id=1"
+            "SELECT model_mode,local_model,allow_cloud_fallback,updated_at FROM runtime_settings WHERE id=1"
         ).fetchone())
 
     def set_model_mode(self, mode: str) -> None:
         """Select local, hybrid, or cloud routing for future cycles."""
-        self.set_model_settings(mode, self.get_settings()["local_model"])
+        current = self.get_settings()
+        self.set_model_settings(mode, current["local_model"], bool(current["allow_cloud_fallback"]))
 
-    def set_model_settings(self, mode: str, local_model: str) -> None:
+    def set_model_settings(self, mode: str, local_model: str, allow_cloud_fallback: bool = False) -> None:
         """Atomically select routing mode and the local model used by this company."""
         if mode not in {"local", "hybrid", "cloud"}:
             raise ValueError("Invalid model mode")
@@ -415,11 +421,14 @@ class CompanyStore:
         if not local_model or len(local_model) > 200:
             raise ValueError("Local model name must contain 1 to 200 characters")
         self.db.execute(
-            "UPDATE runtime_settings SET model_mode=?,local_model=?,updated_at=? WHERE id=1",
-            (mode, local_model, utc_now()),
+            "UPDATE runtime_settings SET model_mode=?,local_model=?,allow_cloud_fallback=?,updated_at=? WHERE id=1",
+            (mode, local_model, int(allow_cloud_fallback), utc_now()),
         )
         self.db.commit()
-        self.audit("runtime.model_settings", {"mode": mode, "local_model": local_model})
+        self.audit("runtime.model_settings", {
+            "mode": mode, "local_model": local_model,
+            "allow_cloud_fallback": allow_cloud_fallback,
+        })
 
     def audit(self, event_type: str, payload: dict) -> None:
         """Append an immutable event describing a meaningful state transition."""

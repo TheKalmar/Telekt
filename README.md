@@ -203,6 +203,7 @@ Read these in order:
 5. [Operations](docs/operations.md)
 6. [Known limitations](docs/known-limitations.md)
 7. [Email approvals](docs/email-approvals.md)
+8. [Model reliability](docs/model-reliability.md)
 
 ## Security warning
 
