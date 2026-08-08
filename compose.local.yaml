@@ -1,0 +1,54 @@
+services:
+  app:
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+
+  worker:
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  ollama-init:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ollama_models:/root/.ollama
+      - ./config:/config:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        until ollama list >/dev/null 2>&1; do sleep 2; done
+        if [ "${INSTALL_DEFAULT_MODEL:-true}" = "true" ]; then
+          ollama pull deepseek-r1:8b-0528-qwen3-q4_K_M
+          ollama create deepseek-company:8b -f /config/Modelfile.deepseek-company
+        fi
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  ollama_models:

@@ -1,0 +1,106 @@
+# Operations
+
+## Starting services
+
+Start Ollama using the platform installation, then verify it:
+
+```powershell
+ollama list
+ollama ps
+```
+
+Start the control plane:
+
+```powershell
+.\.venv\Scripts\digital-company-web.exe
+```
+
+Check readiness:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8421/health
+Invoke-RestMethod http://127.0.0.1:8421/api/local-model/health
+```
+
+## Backups
+
+Stop all company loops before taking a consistent filesystem backup. Back up the complete `.company` directory, including `registry.db`, every company database, and artifact directories.
+
+SQLite WAL mode is not explicitly configured. Do not copy a database while writes are active and assume the result is transactionally consistent.
+
+## Logs and audit
+
+Uvicorn writes process logs to stdout/stderr. Domain-level transitions are stored in each company's `audit_events` table and returned in the dashboard projection.
+
+The audit log is application-level and not tamper-proof. Production requires immutable external audit storage.
+
+## Failure recovery
+
+### Ollama offline
+
+Pause the company, start Ollama, verify the configured model exists, then resume. There is currently no automatic local-to-cloud fallback.
+
+### OpenAI unavailable
+
+The legacy CLI converts common authentication/quota errors into JSON. The web background runner records other provider exceptions by setting company state to `error`. Inspect `runtime_control.detail`, correct the provider problem, and resume.
+
+### Server restart
+
+The separate worker automatically resumes companies whose durable state remains
+`running`. Check `docker compose ps` and worker logs if a company does not
+advance. Temporal is still required for production-grade histories, activity
+retries, timers, and distributed worker scheduling.
+
+### Stuck approval
+
+Approve or reject the exact pending payload. A new stakeholder directive marks pending approvals as superseded so the CEO can reconsider under the new direction.
+
+## Local model resource profile
+
+The current model is tuned for an 8 GB laptop GPU:
+
+- model: `deepseek-company:8b`;
+- quantization source: Q4_K_M;
+- context: 8,192 tokens;
+- temperature: 0.1.
+
+Large prompts can still exceed context. Keep snapshots compact and load artifacts only for the specialist that requires them.
+
+## Production checklist
+
+- Replace daemon threads with Temporal.
+- Replace SQLite with PostgreSQL and explicit tenant isolation.
+- Add identity, authentication, authorization, and CSRF protection.
+- Encrypt secrets and remove environment-file dependency.
+- Add sandboxed execution and network egress policy.
+- Add idempotency keys for every external action.
+- Add provider timeouts, retries, circuit breakers, and fallback policy.
+- Add usage/cost telemetry per company and task.
+- Add schema migrations and database backups.
+- Add end-to-end tests and agent evals.
+# Container operations
+
+The bundled-local Compose stack contains four services:
+
+- `app`: FastAPI control plane and autonomous loop.
+- `worker`: autonomous loop execution and restart recovery.
+- `ollama`: persistent local inference server.
+- `ollama-init`: idempotent one-shot model bootstrapper.
+
+Company databases and artifacts live in the `company_data` named volume. Ollama
+models live in `ollama_models`. Rebuilding or replacing containers therefore
+does not erase operating state.
+
+Use `compose.gpu.yaml` only on a host with a working NVIDIA Container Toolkit.
+The base `compose.yaml` remains CPU-compatible. Useful diagnostics are:
+
+```powershell
+docker compose ps -a
+docker compose logs --tail 100 app
+docker compose logs --tail 100 ollama
+docker compose exec ollama ollama list
+```
+
+The application health endpoint is `GET /health`; Ollama connectivity is exposed
+at `GET /api/local-model/health`. The Ollama port is intentionally not published
+to the host because only the application needs to reach it.

@@ -1,0 +1,41 @@
+name: digital-company
+
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "${PORT:-8421}:8421"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8421
+      COMPANY_DATA_DIR: /data
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      LOCAL_MODEL: ${LOCAL_MODEL:-deepseek-company:8b}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - company_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    command: ["digital-company-worker"]
+    environment:
+      COMPANY_DATA_DIR: /data
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      WORKER_ID: worker-1
+      WORKER_POLL_SECONDS: 2
+    volumes:
+      - company_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  company_data:

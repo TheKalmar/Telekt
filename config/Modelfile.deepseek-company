@@ -1,0 +1,6 @@
+FROM deepseek-r1:8b-0528-qwen3-q4_K_M
+# Fits the current 8 GB laptop GPU while leaving room for an 8K KV cache.
+PARAMETER num_ctx 8192
+# Low temperature improves repeatability of structured Pydantic output.
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9

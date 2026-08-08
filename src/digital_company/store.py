@@ -1,0 +1,302 @@
+"""SQLite persistence for one isolated digital company.
+
+SQLite is the POC durability layer. The schema deliberately separates company
+facts, tasks, approvals, budget ledger entries, stakeholder messages, runtime
+control, model settings, and append-only audit events. A production deployment
+can preserve these interfaces while replacing SQLite with PostgreSQL.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+from digital_company.models import CompanySnapshot, SpecialistResult, TaskProposal
+
+
+def utc_now() -> str:
+    """Return an ISO-8601 UTC timestamp suitable for durable records."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+class CompanyStore:
+    """Repository for all canonical state belonging to exactly one company."""
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self.db = sqlite3.connect(path, timeout=30)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA busy_timeout=30000")
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Create additive POC tables and idempotent singleton defaults."""
+        self.db.executescript("""
+        CREATE TABLE IF NOT EXISTS company (
+          id INTEGER PRIMARY KEY CHECK (id = 1), goal TEXT NOT NULL,
+          initial_budget_eur REAL NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS tasks (
+          id TEXT PRIMARY KEY, action TEXT NOT NULL, title TEXT NOT NULL,
+          specialist TEXT NOT NULL, objective TEXT NOT NULL, rationale TEXT NOT NULL,
+          estimated_cost_eur REAL NOT NULL, status TEXT NOT NULL,
+          result_json TEXT, created_at TEXT NOT NULL, completed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS approvals (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, payload_json TEXT NOT NULL,
+          status TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+          resolved_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ledger (
+          id TEXT PRIMARY KEY, task_id TEXT, amount_eur REAL NOT NULL,
+          description TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS audit_events (
+          id TEXT PRIMARY KEY, event_type TEXT NOT NULL, payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS runtime_control (
+          id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL,
+          detail TEXT, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS stakeholder_messages (
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
+          status TEXT NOT NULL, response TEXT, created_at TEXT NOT NULL,
+          addressed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS runtime_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1), model_mode TEXT NOT NULL,
+          local_model TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS company_profile (
+          id INTEGER PRIMARY KEY CHECK (id = 1), profile_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """)
+        self.db.execute(
+            "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) VALUES(1,'stopped','Ready',?)",
+            (utc_now(),),
+        )
+        self.db.execute(
+            "INSERT OR IGNORE INTO runtime_settings(id,model_mode,local_model,updated_at) "
+            "VALUES(1,'local','deepseek-company:8b',?)", (utc_now(),)
+        )
+        self.db.commit()
+
+    def initialize(self, goal: str, budget: float, profile: dict | None = None) -> None:
+        """Create or replace the singleton company header and optional profile."""
+        self.db.execute(
+            "INSERT OR REPLACE INTO company(id, goal, initial_budget_eur, created_at) VALUES(1,?,?,?)",
+            (goal, budget, utc_now()),
+        )
+        if profile is not None:
+            self.db.execute(
+                "INSERT OR REPLACE INTO company_profile(id,profile_json,updated_at) VALUES(1,?,?)",
+                (json.dumps(profile), utc_now()),
+            )
+            self.db.commit()
+        self.audit("company.initialized", {"goal": goal, "budget": budget})
+
+    def is_initialized(self) -> bool:
+        """Return whether the database contains a company header."""
+        return self.db.execute("SELECT 1 FROM company WHERE id=1").fetchone() is not None
+
+    def snapshot(self) -> CompanySnapshot:
+        """Build the compact, typed context supplied to agents.
+
+        Large artifact bodies are replaced with references so every reasoning
+        cycle does not resend generated HTML and exhaust context/token budgets.
+        """
+        company = self.db.execute("SELECT * FROM company WHERE id=1").fetchone()
+        if not company:
+            raise RuntimeError("Company is not initialized. Run `digital-company init` first.")
+        spent = float(self.db.execute("SELECT COALESCE(SUM(amount_eur),0) FROM ledger").fetchone()[0])
+        tasks = [dict(row) for row in self.db.execute(
+            "SELECT action,title,specialist,status,result_json FROM tasks WHERE status='completed' ORDER BY created_at"
+        )]
+        for task in tasks:
+            if task["result_json"]:
+                result = json.loads(task.pop("result_json"))
+                if result.get("artifact_content"):
+                    result["artifact_content"] = "[stored artifact omitted from decision context]"
+                task["result"] = result
+        approvals = [dict(row) for row in self.db.execute(
+            "SELECT id,task_id,status,reason FROM approvals WHERE status='pending' ORDER BY created_at"
+        )]
+        evidence = []
+        for task in tasks[-5:]:
+            result = task.get("result") or {}
+            evidence.extend({"task": task["title"], "evidence": item} for item in result.get("evidence", []))
+        messages = [dict(row) for row in self.db.execute(
+            "SELECT id,kind,content,status,response,created_at,addressed_at FROM stakeholder_messages "
+            "ORDER BY created_at DESC LIMIT 20"
+        )]
+        return CompanySnapshot(
+            goal=company["goal"], initial_budget_eur=company["initial_budget_eur"],
+            spent_eur=spent, remaining_budget_eur=company["initial_budget_eur"] - spent,
+            completed_tasks=tasks, pending_approvals=approvals, recent_evidence=evidence[-12:],
+            stakeholder_messages=messages,
+            profile=self.get_profile(),
+        )
+
+    def get_profile(self) -> dict:
+        """Return user-configurable company creation parameters."""
+        row = self.db.execute("SELECT profile_json FROM company_profile WHERE id=1").fetchone()
+        return json.loads(row["profile_json"]) if row else {}
+
+    def create_task(self, proposal: TaskProposal, status: str) -> str:
+        """Persist a CEO proposal before authorization or execution."""
+        task_id = str(uuid4())
+        self.db.execute(
+            "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (task_id, proposal.action.value, proposal.title, proposal.specialist,
+             proposal.objective, proposal.rationale, proposal.estimated_cost_eur,
+             status, None, utc_now(), None),
+        )
+        self.db.commit()
+        self.audit("task.created", {"task_id": task_id, "proposal": proposal.model_dump(mode="json")})
+        return task_id
+
+    def complete_task(self, task_id: str, result: SpecialistResult, cost: float) -> None:
+        """Atomically complete a task and append any authorized ledger cost."""
+        self.db.execute(
+            "UPDATE tasks SET status='completed', result_json=?, completed_at=? WHERE id=?",
+            (result.model_dump_json(), utc_now(), task_id),
+        )
+        if cost:
+            self.db.execute(
+                "INSERT INTO ledger VALUES(?,?,?,?,?)",
+                (str(uuid4()), task_id, cost, "Authorized task cost", utc_now()),
+            )
+        self.db.commit()
+        self.audit("task.completed", {"task_id": task_id, "result": result.model_dump(mode="json")})
+
+    def request_approval(self, task_id: str, proposal: TaskProposal, reason: str) -> str:
+        """Freeze the exact proposed payload as a pending human approval."""
+        approval_id = str(uuid4())
+        self.db.execute(
+            "INSERT INTO approvals VALUES(?,?,?,?,?,?,?)",
+            (approval_id, task_id, proposal.model_dump_json(), "pending", reason, utc_now(), None),
+        )
+        self.db.commit()
+        self.audit("approval.requested", {"approval_id": approval_id, "task_id": task_id})
+        return approval_id
+
+    def list_approvals(self) -> list[dict]:
+        """Return approval history, newest first."""
+        return [dict(row) for row in self.db.execute("SELECT * FROM approvals ORDER BY created_at DESC")]
+
+    def approve(self, approval_id: str) -> None:
+        """Approve one still-pending payload; approvals are single-use."""
+        row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()
+        if not row:
+            raise RuntimeError("Approval not found.")
+        if row["status"] != "pending":
+            raise RuntimeError("Approval has already been resolved.")
+        now = utc_now()
+        self.db.execute("UPDATE approvals SET status='approved', resolved_at=? WHERE id=?", (now, approval_id))
+        self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
+        self.db.commit()
+        self.audit("approval.approved", {"approval_id": approval_id, "task_id": row["task_id"]})
+
+    def reject(self, approval_id: str) -> None:
+        """Reject one still-pending payload and its associated task."""
+        row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()
+        if not row or row["status"] != "pending":
+            raise RuntimeError("Pending approval not found.")
+        now = utc_now()
+        self.db.execute("UPDATE approvals SET status='rejected', resolved_at=? WHERE id=?", (now, approval_id))
+        self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
+        self.db.commit()
+        self.audit("approval.rejected", {"approval_id": approval_id, "task_id": row["task_id"]})
+
+    def get_control(self) -> dict:
+        """Read cooperative runtime state for this company."""
+        return dict(self.db.execute("SELECT state,detail,updated_at FROM runtime_control WHERE id=1").fetchone())
+
+    def set_control(self, state: str, detail: str | None = None) -> None:
+        """Set runtime state and emit a corresponding audit event."""
+        if state not in {"running", "paused", "stopped", "waiting_approval", "error"}:
+            raise ValueError("Invalid runtime state")
+        self.db.execute("UPDATE runtime_control SET state=?,detail=?,updated_at=? WHERE id=1",
+                        (state, detail, utc_now()))
+        self.db.commit()
+        self.audit("runtime." + state, {"detail": detail})
+
+    def add_stakeholder_message(self, content: str, kind: str = "directive") -> str:
+        """Persist an owner message and supersede stale approvals for directives.
+
+        A directive changes the decision context, so an approval produced before
+        that intervention must not remain executable with stale assumptions.
+        """
+        if kind not in {"directive", "question"}:
+            raise ValueError("Invalid stakeholder message kind")
+        message_id = str(uuid4())
+        self.db.execute("INSERT INTO stakeholder_messages VALUES(?,?,?,?,?,?,?)",
+                        (message_id, kind, content, "pending", None, utc_now(), None))
+        if kind == "directive":
+            pending = list(self.db.execute("SELECT id,task_id FROM approvals WHERE status='pending'"))
+            for row in pending:
+                self.db.execute("UPDATE approvals SET status='superseded',resolved_at=? WHERE id=?", (utc_now(), row["id"]))
+                self.db.execute("UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],))
+        self.db.commit()
+        self.audit("stakeholder.message", {"message_id": message_id, "kind": kind})
+        return message_id
+
+    def address_messages(self, message_ids: list[str], response: str | None) -> None:
+        """Mark messages the CEO explicitly considered and save its response."""
+        now = utc_now()
+        for message_id in message_ids:
+            self.db.execute(
+                "UPDATE stakeholder_messages SET status='addressed',response=?,addressed_at=? "
+                "WHERE id=? AND status='pending'", (response, now, message_id)
+            )
+        self.db.commit()
+
+    def dashboard_data(self) -> dict:
+        """Return a UI-oriented projection of canonical state and recent audit."""
+        snapshot = self.snapshot().model_dump(mode="json")
+        snapshot["control"] = self.get_control()
+        snapshot["settings"] = self.get_settings()
+        snapshot["profile"] = self.get_profile()
+        snapshot["approvals"] = self.list_approvals()[:20]
+        snapshot["audit"] = [dict(row) for row in self.db.execute(
+            "SELECT event_type,payload_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 30"
+        )]
+        return snapshot
+
+    def get_settings(self) -> dict:
+        """Return per-company model routing settings."""
+        return dict(self.db.execute(
+            "SELECT model_mode,local_model,updated_at FROM runtime_settings WHERE id=1"
+        ).fetchone())
+
+    def set_model_mode(self, mode: str) -> None:
+        """Select local, hybrid, or cloud routing for future cycles."""
+        self.set_model_settings(mode, self.get_settings()["local_model"])
+
+    def set_model_settings(self, mode: str, local_model: str) -> None:
+        """Atomically select routing mode and the local model used by this company."""
+        if mode not in {"local", "hybrid", "cloud"}:
+            raise ValueError("Invalid model mode")
+        local_model = local_model.strip()
+        if not local_model or len(local_model) > 200:
+            raise ValueError("Local model name must contain 1 to 200 characters")
+        self.db.execute(
+            "UPDATE runtime_settings SET model_mode=?,local_model=?,updated_at=? WHERE id=1",
+            (mode, local_model, utc_now()),
+        )
+        self.db.commit()
+        self.audit("runtime.model_settings", {"mode": mode, "local_model": local_model})
+
+    def audit(self, event_type: str, payload: dict) -> None:
+        """Append an immutable event describing a meaningful state transition."""
+        self.db.execute(
+            "INSERT INTO audit_events VALUES(?,?,?,?)",
+            (str(uuid4()), event_type, json.dumps(payload), utc_now()),
+        )
+        self.db.commit()
