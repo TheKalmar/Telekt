@@ -30,6 +30,7 @@ class ActionType(StrEnum):
     DEFINE_PRODUCT = "define_product"
     BUILD_MVP = "build_mvp"
     QA_MVP = "qa_mvp"
+    PREPARE_OUTREACH = "prepare_outreach"
     EXTERNAL_OUTREACH = "external_outreach"
     SPEND_MONEY = "spend_money"
     DEPLOY_PRODUCTION = "deploy_production"

@@ -173,6 +173,15 @@ Pause and stop are cooperative. An in-flight model request or database write is 
 
 The current suite covers policy outcomes, durable state, model settings, operational telemetry, stakeholder messages, and multi-company isolation.
 
+CEO behavior has a separate real-agent eval harness. Fixture validation is free:
+
+```powershell
+.\.venv\Scripts\python evals\run_local.py --validate-only
+```
+
+An intentional live run uses five model calls and writes the detailed result to
+`evals/results/latest.json`; see `evals/README.md`.
+
 ## Repository map
 
 ```text
