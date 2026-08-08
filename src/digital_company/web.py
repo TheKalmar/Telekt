@@ -186,6 +186,16 @@ def i18n_catalog():
     return FileResponse(STATIC_DIR / "i18n.js", media_type="text/javascript")
 
 
+@app.get("/assets/telekt-logo.svg", include_in_schema=False)
+def telekt_logo():
+    return FileResponse(STATIC_DIR / "telekt-logo.svg", media_type="image/svg+xml")
+
+
+@app.get("/assets/telekt.ico", include_in_schema=False)
+def telekt_icon():
+    return FileResponse(STATIC_DIR / "telekt.ico", media_type="image/x-icon")
+
+
 @app.get("/health")
 def health():
     worker = registry.worker_status()
