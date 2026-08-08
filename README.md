@@ -14,6 +14,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Stakeholder directives that supersede stale approvals
 - Cooperative start, pause, and stop controls
 - Operations dashboard with active agent, model latency, failures, fallbacks, task states, and audit events
+- Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
 - Local web control plane
 - Local Ollama model support through an OpenAI-compatible API
 - Automatic adoption of the original single-company POC database
@@ -174,6 +175,7 @@ src/digital_company/
   agents.py          Agents SDK definitions and model routing
   models.py          Typed agent/application contracts
   orchestrator.py    Autonomous control loop
+  workspace.py       Confined artifact writes and deterministic validation
   policy.py          Deterministic Governor
   store.py           Per-company SQLite repository
   registry.py        Multi-company portfolio registry

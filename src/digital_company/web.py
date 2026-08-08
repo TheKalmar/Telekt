@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from digital_company.registry import CompanyRegistry
 from digital_company.store import CompanyStore
 from digital_company.email_service import verify_approval_token
+from digital_company.workspace import WorkspaceRuntime
 
 
 ROOT = Path.cwd()
@@ -116,6 +117,7 @@ def dashboard():
             "remaining_budget_eur": 0,
             "completed_tasks": [],
             "recent_tasks": [],
+            "artifacts": [],
             "operations": {"active_model_run": None, "model": {}, "tasks_by_status": {}, "estimated_spend_eur": 0, "recent_events": []},
             "approvals": [],
             "stakeholder_messages": [],
@@ -124,6 +126,7 @@ def dashboard():
     data = get_store(company_id).dashboard_data()
     data["portfolio"] = {"active_company_id": company_id, "companies": registry.list()}
     data["operations"]["worker"] = registry.worker_status()
+    data["artifacts"] = WorkspaceRuntime(registry.artifacts_for(company_id)).inventory()
     return data
 
 
@@ -147,6 +150,31 @@ def operations():
 @app.get("/api/companies")
 def companies():
     return {"active_company_id": registry.active_id(), "companies": registry.list()}
+
+
+@app.get("/api/artifacts")
+def artifacts():
+    """List immutable metadata for files in the active company's workspace."""
+    try:
+        return {"artifacts": WorkspaceRuntime(registry.artifacts_for()).inventory()}
+    except RuntimeError:
+        return {"artifacts": []}
+
+
+@app.get("/api/artifacts/{artifact_path:path}")
+def download_artifact(artifact_path: str):
+    """Download a confined artifact; generated HTML is never executed in the control plane."""
+    try:
+        workspace = WorkspaceRuntime(registry.artifacts_for())
+    except RuntimeError as exc:
+        raise HTTPException(404, "No active company") from exc
+    try:
+        target = workspace.resolve(artifact_path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not target.is_file():
+        raise HTTPException(404, "Artifact not found")
+    return FileResponse(target, filename=target.name, media_type="application/octet-stream")
 
 
 @app.post("/api/companies")

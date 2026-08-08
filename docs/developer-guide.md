@@ -67,7 +67,13 @@ Before calling a new provider production-ready, test:
 - Approval payloads are immutable snapshots of the proposal.
 - Budget changes are ledger entries, not a mutable remaining-balance field.
 - Artifacts are referenced from state but stored outside agent context.
+- All model-provided artifact paths and writes go through `WorkspaceRuntime`.
 - Registry data and company business data must remain separate.
+
+The current workspace permits only `.html`, `.css`, `.js`, `.json`, `.md`, and
+`.txt` files up to 2 MiB each. Extend the allowlist only with a matching threat
+model and tests. Do not replace `WorkspaceRuntime` with direct model-controlled
+`Path.write_text` or shell commands.
 
 ## Database migrations
 
@@ -75,7 +81,9 @@ The POC uses idempotent `CREATE TABLE IF NOT EXISTS` statements in `_migrate()`.
 
 ## Testing strategy
 
-Current tests are deterministic and make no model calls. They cover policy, storage, stakeholder semantics, model settings, and company isolation.
+Current tests are deterministic and make no model calls. They cover policy,
+storage, stakeholder semantics, model settings, company isolation, operational
+telemetry, and workspace confinement.
 
 Recommended next test layers:
 

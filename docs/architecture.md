@@ -101,7 +101,12 @@ Production policy should become data-driven and company-specific, but it must re
 
 `orchestrator.py` performs the bounded control loop. It checks cooperative stop state, blocks on existing approvals, obtains one CEO proposal, records stakeholder handling, evaluates policy, executes allowed specialist work, confines artifact paths, and records the result.
 
-The artifact path check resolves the model-provided path and rejects any destination outside the current company's artifact root.
+`workspace.py` is the first narrow execution-runtime boundary. It rejects
+absolute, traversal, backslash, unsupported, and oversized artifact paths;
+writes accepted UTF-8 files atomically; computes SHA-256 and byte-size evidence;
+and runs deterministic HTML preflight checks. Every successful write becomes an
+`artifact.written` audit event. It deliberately provides no general shell or
+host-filesystem access.
 
 ## Stakeholder intervention
 

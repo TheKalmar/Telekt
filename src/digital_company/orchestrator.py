@@ -9,6 +9,7 @@ from digital_company.email_service import ApprovalMailer
 from digital_company.models import ActionType
 from digital_company.policy import Governor
 from digital_company.store import CompanyStore
+from digital_company.workspace import WorkspaceRuntime
 
 
 class CompanyOrchestrator:
@@ -22,6 +23,7 @@ class CompanyOrchestrator:
                  company_id: str | None = None, mailer: ApprovalMailer | None = None):
         self.store = store
         self.artifacts_dir = artifacts_dir
+        self.workspace = WorkspaceRuntime(artifacts_dir)
         settings = store.get_settings()
         self.engine = engine or AgentEngine(
             settings["model_mode"], settings["local_model"],
@@ -110,35 +112,34 @@ class CompanyOrchestrator:
     def _persist_result(self, task_id: str, proposal, result) -> None:
         """Persist a specialist result and confine any model-provided artifact path."""
         if result.artifact_path and result.artifact_content:
-            target = (self.artifacts_dir / result.artifact_path).resolve()
-            root = self.artifacts_dir.resolve()
-            # Never trust an LLM-supplied path. Resolve it and prove that the
-            # final destination remains inside this company's artifact root.
-            if root not in target.parents and target != root:
-                raise RuntimeError("Specialist returned an unsafe artifact path.")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(result.artifact_content, encoding="utf-8")
+            try:
+                metadata = self.workspace.write_text(result.artifact_path, result.artifact_content)
+            except ValueError as exc:
+                raise RuntimeError(f"Specialist returned an unsafe artifact: {exc}") from exc
+            self.store.audit("artifact.written", {
+                "task_id": task_id,
+                "role": proposal.specialist,
+                **metadata,
+            })
+            result.evidence.append(
+                f"Workspace validation {'passed' if metadata['checks']['passed'] else 'failed'}; "
+                f"sha256={metadata['sha256'][:12]}, bytes={metadata['size_bytes']}"
+            )
         self.store.complete_task(task_id, result, proposal.estimated_cost_eur)
 
     def _artifact_context(self, specialist: str) -> dict | None:
         """Provide QA with the current MVP and cheap deterministic preflight data."""
         if specialist != "qa":
             return None
-        target = self.artifacts_dir / "mvp" / "index.html"
+        target = self.workspace.resolve("mvp/index.html")
         if not target.exists():
             return {"exists": False, "preflight": {"passed": False, "reason": "MVP artifact missing"}}
         content = target.read_text(encoding="utf-8")
-        checks = {
-            "has_html_document": "<html" in content.lower(),
-            "has_javascript": "<script" in content.lower(),
-            "has_local_persistence": "localStorage" in content,
-            "has_invoice_workflow": "invoice" in content.lower() or "faktur" in content.lower(),
-            "has_reminder_workflow": "reminder" in content.lower() or "podsjet" in content.lower(),
-        }
+        checks = self.workspace.validate("mvp/index.html", content)
         return {
             "exists": True,
             "path": str(target),
             "size_bytes": len(content.encode("utf-8")),
-            "preflight": {"passed": all(checks.values()), "checks": checks},
+            "preflight": {"passed": checks["passed"], "checks": checks},
             "content": content,
         }

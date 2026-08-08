@@ -26,6 +26,19 @@ token counts when the provider has not supplied them.
 
 Checks whether Ollama's model-list endpoint is reachable. It does not prove that the configured model can complete an inference.
 
+## Artifacts
+
+### `GET /api/artifacts`
+
+Lists artifact path, byte size, and SHA-256 digest for the active company's
+confined workspace. File contents are not included.
+
+### `GET /api/artifacts/{artifact_path}`
+
+Downloads one allowed artifact as an attachment. Traversal, absolute paths, and
+unsupported executable file types are rejected. Generated HTML is not rendered
+inside the control-plane origin because it is untrusted agent output.
+
 ## Portfolio
 
 ### `GET /api/companies`

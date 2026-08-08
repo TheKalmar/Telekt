@@ -43,7 +43,11 @@ The ledger records model-estimated task cost, not actual API, advertising, infra
 
 ## Agent execution
 
-Specialists generate artifacts but do not yet have a general sandbox, browser, shell, GitHub, deployment, email, or payment tool runtime. Browser QA evidence in the original POC was manually bridged into state.
+Development output now passes through a confined per-company file workspace with
+atomic writes, a small extension allowlist, size limits, hashes, and deterministic
+HTML checks. This is not yet a process/container sandbox: specialists still lack
+a general shell, browser, GitHub, deployment, or payment tool runtime. Generated
+HTML is downloadable rather than executed in the trusted control-plane origin.
 
 ## Concurrency
 
