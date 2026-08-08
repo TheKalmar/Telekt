@@ -14,7 +14,7 @@ tools later requires reevaluating whether a whole-run replay is safe.
 Environment defaults:
 
 ```env
-MODEL_TIMEOUT_SECONDS=120
+MODEL_TIMEOUT_SECONDS=240
 MODEL_TRANSIENT_RETRIES=2
 STRUCTURED_OUTPUT_RETRIES=1
 AGENT_MAX_TURNS=8
@@ -51,3 +51,7 @@ The audit records latency but not token usage or exact monetary cost. Circuit
 breaking and provider health scoring are not implemented. Fallback is a company
 preference, not a per-task budget policy; production must estimate and authorize
 cloud cost before fallback execution.
+Local structured agents default to `LOCAL_THINKING=false` and
+`LOCAL_MAX_OUTPUT_TOKENS=768`. This avoids long DeepSeek reasoning preambles
+and keeps Ollama responses inside the configured request timeout. Enable local
+thinking deliberately only when latency and output budgets have been raised.

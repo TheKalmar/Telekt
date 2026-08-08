@@ -139,7 +139,7 @@ Invoke-RestMethod http://127.0.0.1:8421/api/local-model/models
 ```
 
 Expected POC services are `app`, `worker`, and `browser-runtime`; bundled mode
-also runs `ollama` and the one-shot `ollama-init`. The current suite has 79 tests.
+also runs `ollama` and the one-shot `ollama-init`. The current suite has 83 tests.
 
 If the virtual environment does not exist:
 

@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from digital_company.models import ActionType, TaskProposal
 from digital_company.policy import Governor
 
@@ -35,3 +38,27 @@ def test_contract_is_denied():
 
 def test_over_budget_is_denied():
     assert Governor().evaluate(proposal(ActionType.RESEARCH_MARKET, 1001), 1000).outcome == "deny"
+
+
+def test_local_output_schema_avoids_ollama_grammar_repetition_limits():
+    schema_text = str(TaskProposal.model_json_schema())
+    assert "2000" not in schema_text
+    assert max_length_in_schema(TaskProposal.model_json_schema()) <= 500
+
+
+def test_application_validation_still_enforces_limits_removed_from_json_schema():
+    with pytest.raises(ValidationError):
+        TaskProposal(
+            action=ActionType.RESEARCH_MARKET, title="x" * 121,
+            objective="Test", rationale="Test", expected_evidence=["result"],
+            specialist="research", skill_ids=[str(index) for index in range(6)],
+        )
+
+
+def max_length_in_schema(value):
+    if isinstance(value, dict):
+        own = [value["maxLength"]] if "maxLength" in value else []
+        return max(own + [max_length_in_schema(item) for item in value.values()])
+    if isinstance(value, list):
+        return max([0] + [max_length_in_schema(item) for item in value])
+    return 0

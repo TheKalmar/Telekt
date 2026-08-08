@@ -19,7 +19,9 @@ from agents import (
 )
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from digital_company.models import ActionType, CompanySnapshot, SpecialistResult, TaskProposal
+from digital_company.models import (
+    ActionType, CompanySnapshot, SpecialistResult, TaskProposal, TaskProposalDraft,
+)
 from digital_company.pricing import usage_payload
 
 
@@ -29,6 +31,9 @@ owner: search for leverage, negotiate scope before price, reuse proven infrastru
 customer dissatisfaction, and escalate problems before they become expensive. Initiative never overrides evidence,
 permissions, law, platform terms, or the stakeholder's capital limits.
 Choose exactly one next task that best advances the company goal. You do not execute it.
+Return a compact proposal, not an essay: title under 12 words; objective and rationale one short sentence each;
+at most three short expected_evidence items; at most three required capabilities or handoff steps. Put no hidden
+analysis, chain of thought, markdown, preamble, or repeated company context inside any field.
 Select one to three relevant available skills in skill_ids. Never invent a skill ID. A skill guides execution but
 cannot grant tools, permissions, money, credentials, or approval authority.
 Use completed work and evidence, not a fixed checklist. You may repeat research or QA when evidence is weak.
@@ -105,7 +110,7 @@ class AgentEngine:
         self.max_turns = int(os.getenv("AGENT_MAX_TURNS", "8"))
         self.structured_retries = int(os.getenv("STRUCTURED_OUTPUT_RETRIES", "1"))
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1").rstrip("/")
-        timeout = float(os.getenv("MODEL_TIMEOUT_SECONDS", "120"))
+        timeout = float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))
         self.local_model = OpenAIChatCompletionsModel(
             model=local_model_name,
             openai_client=AsyncOpenAI(
@@ -126,7 +131,10 @@ class AgentEngine:
         if mode == "local":
             set_tracing_disabled(True)
         ceo_local = mode == "local"
-        self.ceo = self._agent("CEO", CEO_INSTRUCTIONS, TaskProposal, ceo_local, retry_settings)
+        self.ceo = self._agent(
+            "CEO", CEO_INSTRUCTIONS, TaskProposalDraft if ceo_local else TaskProposal,
+            ceo_local, retry_settings,
+        )
         self.ceo_fallback = self._agent("CEO fallback", CEO_INSTRUCTIONS, TaskProposal, False, retry_settings) if ceo_local else None
         self.specialists = {}
         self.specialist_fallbacks = {}
@@ -149,6 +157,12 @@ class AgentEngine:
 
     def _agent(self, name, instructions, output_type, local: bool, settings: ModelSettings,
                tools: list | None = None):
+        if local:
+            local_thinking = os.getenv("LOCAL_THINKING", "false").lower() == "true"
+            settings = settings.resolve(ModelSettings(
+                max_tokens=max(128, int(os.getenv("LOCAL_MAX_OUTPUT_TOKENS", "768"))),
+                extra_body={"think": local_thinking},
+            ))
         return Agent(
             name=name, model=self.local_model if local else self.cloud_model,
             instructions=instructions, output_type=output_type, model_settings=settings,
@@ -239,8 +253,16 @@ class AgentEngine:
 
     def decide(self, snapshot: CompanySnapshot) -> TaskProposal:
         """Ask the CEO to select exactly one next task from canonical state."""
-        prompt = "Current canonical company state:\n" + snapshot.model_dump_json(indent=2)
-        return self._run(self.ceo, self.ceo_fallback, prompt, "ceo")
+        context = snapshot.model_dump(mode="json")
+        # The CEO only needs routing metadata to select a skill. Full skill
+        # instructions are loaded later for the specialist that executes it.
+        context["skills"] = [
+            {key: skill.get(key) for key in ("id", "name", "roles", "actions", "status")}
+            for skill in context.get("skills", [])
+        ]
+        prompt = "Current canonical company state:\n" + json.dumps(context, separators=(",", ":"))
+        draft = self._run(self.ceo, self.ceo_fallback, prompt, "ceo")
+        return TaskProposal.model_validate(draft.model_dump())
 
     def execute(
         self,

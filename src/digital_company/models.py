@@ -8,7 +8,7 @@ responses against these schemas before the orchestrator acts on them.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, model_validator
@@ -38,27 +38,42 @@ class ActionType(StrEnum):
     STOP = "stop"
 
 
-class TaskProposal(BaseModel):
-    """One CEO-selected next action, including cost and required evidence."""
+class TaskProposalDraft(BaseModel):
+    """Grammar-safe CEO output before deterministic cross-field validation."""
     action: ActionType
+    # Keep grammar bounds deliberately small. Ollama 0.32 rejects very large
+    # repetitions (the former 2,000-character URL), while unbounded strings let
+    # reasoning models fill the entire output budget with prose.
     title: str = Field(min_length=3, max_length=120)
-    objective: str
-    rationale: str
-    expected_evidence: list[str] = Field(min_length=1)
+    objective: str = Field(max_length=200)
+    rationale: str = Field(max_length=200)
+    expected_evidence: list[Annotated[str, Field(max_length=120)]] = Field(min_length=1, max_length=3)
     estimated_cost_eur: float = Field(default=0, ge=0)
     specialist: Literal["research", "platform", "operations", "product", "development", "qa", "growth", "ceo"]
-    stakeholder_response: str | None = None
-    stakeholder_message_ids_considered: list[str] = Field(default_factory=list)
-    skill_ids: list[str] = Field(default_factory=list, max_length=5)
+    stakeholder_response: str | None = Field(default=None, max_length=240)
+    stakeholder_message_ids_considered: list[str] = Field(default_factory=list, max_length=20)
+    skill_ids: list[str] = Field(default_factory=list)
     platform_candidate: str | None = Field(default=None, max_length=80)
-    required_capabilities: list[str] = Field(default_factory=list)
+    required_capabilities: list[Annotated[str, Field(max_length=80)]] = Field(default_factory=list, max_length=5)
     execution_mode: Literal["reasoning", "api", "browser", "manual", "outsourced", "build"] = "reasoning"
-    handoff_url: str | None = Field(default=None, max_length=2000)
-    handoff_instructions: list[str] = Field(default_factory=list)
-    resume_evidence: list[str] = Field(default_factory=list)
+    handoff_url: str | None = Field(default=None, max_length=500)
+    handoff_instructions: list[Annotated[str, Field(max_length=160)]] = Field(default_factory=list, max_length=5)
+    resume_evidence: list[Annotated[str, Field(max_length=160)]] = Field(default_factory=list, max_length=5)
+
+
+class TaskProposal(TaskProposalDraft):
+    """One validated CEO-selected action, including conditional requirements."""
 
     @model_validator(mode="after")
     def platform_access_is_explicit(self):
+        if not 3 <= len(self.title) <= 120:
+            raise ValueError("Task title must contain between 3 and 120 characters")
+        if len(self.skill_ids) > 5:
+            raise ValueError("At most five skills may be assigned to one task")
+        if self.platform_candidate and len(self.platform_candidate) > 80:
+            raise ValueError("Platform candidate must not exceed 80 characters")
+        if self.handoff_url and len(self.handoff_url) > 500:
+            raise ValueError("Handoff URL must not exceed 500 characters")
         if self.action == ActionType.REQUEST_PLATFORM_ACCESS:
             if not self.platform_candidate or not self.required_capabilities:
                 raise ValueError(
