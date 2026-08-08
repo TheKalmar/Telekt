@@ -7,6 +7,8 @@ Digital AI Company explores a system in which a human supplies capital, goals, r
 ## Core design rule
 
 The LLM does not own the workflow, authorization, budget, or canonical state.
+In the opt-in durable stack, Temporal owns workflow history and retry timing;
+PostgreSQL is becoming canonical company state through a staged migration.
 
 ```text
 Observe canonical state
