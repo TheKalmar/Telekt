@@ -137,7 +137,12 @@ class CompanyRegistry:
         company_dir = self.state_dir / "companies" / company_id
         db_path = company_dir / "company.db"
         artifacts_path = company_dir / "artifacts"
-        store = CompanyStore(db_path)
+        database_url = __import__("os").getenv("DATABASE_URL")
+        use_postgres = __import__("os").getenv("DATABASE_BACKEND", "sqlite") == "postgres"
+        if use_postgres and not database_url:
+            raise RuntimeError("DATABASE_URL is required when DATABASE_BACKEND=postgres")
+        store = CompanyStore(db_path, database_url if use_postgres else None,
+                             company_id if use_postgres else None)
         store.initialize(profile["goal"], float(profile["budget"]), profile)
         now = utc_now()
         self.db.execute(
@@ -158,7 +163,7 @@ class CompanyRegistry:
         result = []
         for row in self.db.execute("SELECT * FROM companies ORDER BY created_at"):
             item = dict(row)
-            store = CompanyStore(Path(item["db_path"]))
+            store = self.store_for(item["id"])
             item["runtime"] = store.get_control()["state"]
             item["active"] = item["id"] == active
             result.append(item)
@@ -187,7 +192,13 @@ class CompanyRegistry:
 
     def store_for(self, company_id: str | None = None) -> CompanyStore:
         """Open the selected or explicitly requested company's state store."""
-        company = self.get(company_id or self.active_id())
+        selected_id = company_id or self.active_id()
+        company = self.get(selected_id)
+        if __import__("os").getenv("DATABASE_BACKEND", "sqlite") == "postgres":
+            database_url = __import__("os").getenv("DATABASE_URL")
+            if not database_url:
+                raise RuntimeError("DATABASE_URL is required when DATABASE_BACKEND=postgres")
+            return CompanyStore(Path(company["db_path"]), database_url, selected_id)
         return CompanyStore(Path(company["db_path"]))
 
     def artifacts_for(self, company_id: str | None = None) -> Path:

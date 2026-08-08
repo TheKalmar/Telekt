@@ -45,6 +45,7 @@ services:
 
   app:
     environment:
+      DATABASE_BACKEND: postgres
       DATABASE_URL: postgresql://${POSTGRES_USER:-telekt}:${POSTGRES_PASSWORD:-telekt-local-only}@postgres:5432/${POSTGRES_DB:-telekt}
       TEMPORAL_ADDRESS: temporal:7233
     depends_on:
@@ -56,6 +57,7 @@ services:
   worker:
     command: ["digital-company-temporal-worker"]
     environment:
+      DATABASE_BACKEND: postgres
       DATABASE_URL: postgresql://${POSTGRES_USER:-telekt}:${POSTGRES_PASSWORD:-telekt-local-only}@postgres:5432/${POSTGRES_DB:-telekt}
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default

@@ -10,6 +10,7 @@ from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
 import psycopg
 from psycopg.types.json import Jsonb
+from digital_company.store import CompanyStore
 
 TABLES = [
     "company", "tasks", "approvals", "ledger", "audit_events", "runtime_control",
@@ -37,7 +38,7 @@ def migrate(state_dir: Path, database_url: str) -> dict:
     registry = sqlite3.connect(f"file:{registry_path.as_posix()}?mode=ro", uri=True)
     registry.row_factory = sqlite3.Row
     companies = [dict(row) for row in registry.execute("SELECT * FROM companies ORDER BY created_at")]
-    verification, total = {}, 0
+    verification, native_verification, total = {}, {}, 0
     with psycopg.connect(database_url) as target:
         with target.transaction():
             for item in companies:
@@ -78,13 +79,37 @@ def migrate(state_dir: Path, database_url: str) -> dict:
                         raise RuntimeError(f"Verification failed for {item['id']}:{table}: {len(source_rows)} != {imported}")
                     total += len(source_rows)
                 verification[item["id"]] = counts
+                # Populate the native per-company schema used by CompanyStore.
+                native = CompanyStore(Path(item["db_path"]), database_url, item["id"])
+                for table in reversed(TABLES):
+                    native.db.execute(f'DELETE FROM "{table}"')
+                native.db.commit()
+                native_counts = {}
+                for table in TABLES:
+                    source_rows = rows(source_db, table)
+                    if source_rows:
+                        columns = list(source_rows[0])
+                        names = ",".join(f'"{name}"' for name in columns)
+                        placeholders = ",".join("?" for _ in columns)
+                        for payload in source_rows:
+                            native.db.execute(
+                                f'INSERT INTO "{table}" ({names}) VALUES ({placeholders})',
+                                tuple(payload[name] for name in columns),
+                            )
+                    native.db.commit()
+                    imported = native.db.execute(f'SELECT count(*) AS value FROM "{table}"').fetchone()["value"]
+                    if imported != len(source_rows):
+                        raise RuntimeError(f"Native verification failed for {item['id']}:{table}")
+                    native_counts[table] = imported
+                native_verification[item["id"]] = native_counts
+                native.db.close()
             run_id = uuid4()
             target.execute(
                 "INSERT INTO telekt.migration_runs(id,source_path,company_count,record_count,verification) VALUES(%s,%s,%s,%s,%s)",
                 (run_id, str(state_dir.resolve()), len(companies), total, Jsonb(verification)),
             )
     return {"status": "verified", "companies": len(companies), "records": total,
-            "verification": verification}
+            "verification": verification, "native_verification": native_verification}
 
 
 def main() -> None:

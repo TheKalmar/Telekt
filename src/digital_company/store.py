@@ -16,6 +16,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from digital_company.models import CompanySnapshot, SpecialistResult, TaskProposal
+from digital_company.postgres_compat import PostgresCompat, company_schema
 
 
 def utc_now() -> str:
@@ -25,13 +26,18 @@ def utc_now() -> str:
 
 class CompanyStore:
     """Repository for all canonical state belonging to exactly one company."""
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, database_url: str | None = None, company_id: str | None = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self.db = sqlite3.connect(path, timeout=30)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA busy_timeout=30000")
+        if database_url:
+            if not company_id:
+                raise ValueError("company_id is required for PostgreSQL stores")
+            self.db = PostgresCompat(database_url, company_schema(company_id))
+        else:
+            self.db = sqlite3.connect(path, timeout=30)
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA busy_timeout=30000")
         self._migrate()
 
     def _migrate(self) -> None:
@@ -117,12 +123,14 @@ class CompanyStore:
     def initialize(self, goal: str, budget: float, profile: dict | None = None) -> None:
         """Create or replace the singleton company header and optional profile."""
         self.db.execute(
-            "INSERT OR REPLACE INTO company(id, goal, initial_budget_eur, created_at) VALUES(1,?,?,?)",
+            "INSERT INTO company(id, goal, initial_budget_eur, created_at) VALUES(1,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET goal=excluded.goal,initial_budget_eur=excluded.initial_budget_eur,created_at=excluded.created_at",
             (goal, budget, utc_now()),
         )
         if profile is not None:
             self.db.execute(
-                "INSERT OR REPLACE INTO company_profile(id,profile_json,updated_at) VALUES(1,?,?)",
+                "INSERT INTO company_profile(id,profile_json,updated_at) VALUES(1,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET profile_json=excluded.profile_json,updated_at=excluded.updated_at",
                 (json.dumps(profile), utc_now()),
             )
             self.db.commit()
@@ -141,8 +149,8 @@ class CompanyStore:
         company = self.db.execute("SELECT * FROM company WHERE id=1").fetchone()
         if not company:
             raise RuntimeError("Company is not initialized. Run `digital-company init` first.")
-        spent = float(self.db.execute("SELECT COALESCE(SUM(amount_eur),0) FROM ledger").fetchone()[0])
-        spent += float(self.db.execute("SELECT COALESCE(SUM(estimated_budget_cost),0) FROM model_usage").fetchone()[0])
+        spent = float(self.db.execute("SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger").fetchone()["value"])
+        spent += float(self.db.execute("SELECT COALESCE(SUM(estimated_budget_cost),0) AS value FROM model_usage").fetchone()["value"])
         tasks = [dict(row) for row in self.db.execute(
             "SELECT action,title,specialist,status,result_json FROM tasks WHERE status='completed' ORDER BY created_at"
         )]
@@ -505,7 +513,8 @@ class CompanyStore:
         profile["approval_emails"] = approvers
         profile["approval_sender_name"] = sender_name.strip() or profile.get("name", "Digital Company")
         self.db.execute(
-            "INSERT OR REPLACE INTO company_profile(id,profile_json,updated_at) VALUES(1,?,?)",
+            "INSERT INTO company_profile(id,profile_json,updated_at) VALUES(1,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET profile_json=excluded.profile_json,updated_at=excluded.updated_at",
             (json.dumps(profile), utc_now()),
         )
         self.db.commit()
@@ -623,8 +632,8 @@ class CompanyStore:
             )
         }
         authorized_spend = float(self.db.execute(
-            "SELECT COALESCE(SUM(amount_eur),0) FROM ledger"
-        ).fetchone()[0])
+            "SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger"
+        ).fetchone()["value"])
         usage = dict(self.db.execute(
             "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(input_tokens),0) input_tokens,"
             "COALESCE(SUM(cached_tokens),0) cached_tokens,COALESCE(SUM(output_tokens),0) output_tokens,"
@@ -689,7 +698,7 @@ class CompanyStore:
     def record_model_usage(self, payload: dict) -> None:
         """Persist one idempotent usage record without prompts or secrets."""
         self.db.execute(
-            "INSERT OR IGNORE INTO model_usage VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_usage VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO NOTHING",
             (payload["run_id"], payload["provider"], payload["model"], payload["requests"],
              payload["input_tokens"], payload["cached_tokens"], payload["output_tokens"],
              payload["reasoning_tokens"], payload["total_tokens"], payload.get("estimated_usd"),

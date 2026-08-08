@@ -2,6 +2,7 @@ import sqlite3
 from uuid import UUID
 
 from scripts.migrate_sqlite_to_postgres import canonical_uuid, rows
+from digital_company.postgres_compat import company_schema
 
 
 def test_legacy_company_ids_map_to_stable_uuid():
@@ -9,6 +10,7 @@ def test_legacy_company_ids_map_to_stable_uuid():
     assert isinstance(first, UUID)
     assert first == canonical_uuid("invoice-chase-ventures")
     assert canonical_uuid(str(first)) == first
+    assert company_schema("invoice-chase-ventures") == "company_" + first.hex
 
 
 def test_rows_handles_present_and_missing_tables():

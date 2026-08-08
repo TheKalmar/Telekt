@@ -44,9 +44,13 @@ It is safe to rerun: company records are keyed by company, record type, and
 source record ID. Each successful attempt creates an immutable summary in
 `telekt.migration_runs`. The importer does not delete or edit SQLite files.
 
-Import completion is not the canonical-store cutover. Keep SQLite enabled until
-the PostgreSQL adapter passes read/write parity and the operator explicitly
-switches `DATABASE_BACKEND`.
+The infrastructure overlay sets `DATABASE_BACKEND=postgres` after import. Each
+company uses an isolated native schema named from a stable company UUID. The
+same `CompanyStore` business API is exercised against both backends, keeping
+SQLite available as a rollback source while PostgreSQL becomes canonical for
+company state. Portfolio discovery metadata (`registry.db`) remains SQLite in
+this stage and is the final database component still awaiting PostgreSQL
+cutover.
 
 ## Verify
 
