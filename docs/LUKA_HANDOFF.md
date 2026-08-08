@@ -122,9 +122,10 @@ it is not copied into an image or stored in company state.
 ### D. Hybrid
 
 Configure both a reachable Ollama server and `OPENAI_API_KEY`, start with
-`-Mode Existing` or `-Mode Bundled`, then choose **Hybrid**. CEO and Development
-use OpenAI; Research, Platform, Operations, Product, QA, and Growth use the chosen
-local model. Computer Use is always a cloud capability and requires its own
+`-Mode Existing` or `-Mode Bundled`, then choose **Hybrid**. CEO, Development,
+and evidence-backed Research use OpenAI; Platform, Operations, Product, QA, and
+Growth use the chosen local model. Research receives hosted web search and must
+return direct sources. Computer Use is always a cloud capability and requires its own
 approved `browser_operate` task.
 
 ## 4. Verify the installation
@@ -231,4 +232,3 @@ payment submission, or unrestricted browser/shell access.
 4. [Browser missions and human takeover](browser-handoffs.md)
 5. [Operations](operations.md)
 6. [Known limitations](known-limitations.md)
-

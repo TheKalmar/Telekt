@@ -81,7 +81,7 @@ The CEO returns `TaskProposal`. Specialists return `SpecialistResult`. Pydantic 
 Model routing is currently static:
 
 - local: all roles use Ollama;
-- hybrid: CEO and Development use OpenAI; other specialists use Ollama;
+- hybrid: CEO, Development, and evidence-backed Research use OpenAI; other specialists use Ollama;
 - cloud: all roles use OpenAI.
 
 ### Governor

@@ -103,8 +103,9 @@ the Docker image.
 
 Provide both a reachable Ollama server and `OPENAI_API_KEY`. Start either bundled
 or existing-local mode, then choose **Hybrid** in **Model settings**. The current
-router uses OpenAI for CEO and Development and the selected local model for
-Research, Product, QA, Growth, and supporting analysis.
+router uses OpenAI for CEO, Development, and Research. Research also receives the
+hosted web-search tool. The selected local model handles Product, Platform,
+Operations, QA, Growth, and supporting analysis.
 
 ## Working with another developer
 

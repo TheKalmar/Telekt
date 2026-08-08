@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import html
 import re
+import time
 from pathlib import Path
 
 import uvicorn
@@ -26,11 +27,68 @@ load_dotenv(ROOT / ".env.local")
 
 app = FastAPI(title="Digital Company Control Plane")
 registry = CompanyRegistry(STATE_DIR)
+_preflight_cache: dict[str, tuple[float, tuple, dict]] = {}
 
 
 def get_store(company_id: str | None = None) -> CompanyStore:
     """Open state for an explicit company or the currently selected company."""
     return registry.store_for(company_id)
+
+
+def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
+    """Evaluate whether the selected company can safely start its configured loop."""
+    settings = store.get_settings()
+    mode = settings["model_mode"]
+    cache_key = str(store.path)
+    signature = (settings["updated_at"], bool(os.getenv("OPENAI_API_KEY")))
+    cached = _preflight_cache.get(cache_key)
+    if not force and cached and cached[1] == signature and time.monotonic() - cached[0] < 5:
+        return cached[2]
+    checks: list[dict] = []
+
+    worker = registry.worker_status()
+    checks.append({
+        "id": "worker", "status": "pass" if worker["status"] == "online" else "block",
+        "detail": "Background worker is online" if worker["status"] == "online"
+                  else "Background worker is offline; restart the worker container",
+    })
+
+    installed: list[str] = []
+    ollama_online = False
+    if mode in {"local", "hybrid"}:
+        model_inventory = local_models()
+        installed = model_inventory["models"]
+        ollama_online = model_inventory["status"] == "online"
+        local_ready = ollama_online and settings["local_model"] in installed
+        detail = (f"Local model {settings['local_model']} is installed" if local_ready else
+                  "Ollama is offline; start Ollama and refresh model settings" if not ollama_online else
+                  f"Local model {settings['local_model']} is not installed; select one of: "
+                  + (", ".join(installed) or "none"))
+        checks.append({"id": "local_model", "status": "pass" if local_ready else "block", "detail": detail})
+    else:
+        checks.append({"id": "local_model", "status": "skip", "detail": "Cloud mode does not require Ollama"})
+
+    cloud_required = mode in {"cloud", "hybrid"}
+    cloud_present = bool(os.getenv("OPENAI_API_KEY"))
+    checks.append({
+        "id": "openai", "status": "pass" if cloud_present else "block" if cloud_required else "warn",
+        "detail": "OpenAI key is configured" if cloud_present else
+                  "OPENAI_API_KEY is required for this routing mode" if cloud_required else
+                  "OpenAI key is absent; local work can run but Computer Use is unavailable",
+    })
+
+    browser = browser_health()
+    browser_ready = browser["status"] == "ok"
+    checks.append({
+        "id": "browser", "status": "pass" if browser_ready else "warn",
+        "detail": "Isolated browser runtime is online" if browser_ready
+                  else "Browser runtime is offline; reasoning work can run but Browser Missions cannot",
+    })
+    blockers = [check for check in checks if check["status"] == "block"]
+    result = {"ready": not blockers, "mode": mode, "checks": checks,
+              "blockers": [check["detail"] for check in blockers]}
+    _preflight_cache[cache_key] = (time.monotonic(), signature, result)
+    return result
 
 
 class MessageIn(BaseModel):
@@ -156,7 +214,14 @@ def dashboard():
     data["portfolio"] = {"active_company_id": company_id, "companies": registry.list()}
     data["operations"]["worker"] = registry.worker_status()
     data["artifacts"] = WorkspaceRuntime(registry.artifacts_for(company_id)).inventory()
+    data["preflight"] = runtime_preflight(get_store(company_id))
     return data
+
+
+@app.get("/api/runtime/preflight")
+def preflight():
+    """Return actionable readiness checks without exposing secret values."""
+    return runtime_preflight(get_store(), force=True)
 
 
 @app.get("/api/operations")
@@ -227,6 +292,9 @@ def control(action: str):
     company_id = registry.active_id()
     store = get_store(company_id)
     if action == "start":
+        readiness = runtime_preflight(store, force=True)
+        if not readiness["ready"]:
+            raise HTTPException(409, {"message": "Runtime preflight failed", "blockers": readiness["blockers"]})
         store.set_control("running", "Queued for autonomous worker")
     elif action in {"pause", "stop"}:
         store.set_control("paused" if action == "pause" else "stopped",
@@ -282,7 +350,8 @@ def ollama_api_url(path: str) -> str:
     return base_url.rstrip("/").removesuffix("/v1") + path
 
 
-def browser_runtime_request(method: str, path: str, payload: dict | None = None) -> tuple[bytes, str]:
+def browser_runtime_request(method: str, path: str, payload: dict | None = None,
+                            timeout: float = 40) -> tuple[bytes, str]:
     """Call only the configured internal browser service; user input never selects the host."""
     import json
     import urllib.error
@@ -294,7 +363,7 @@ def browser_runtime_request(method: str, path: str, payload: dict | None = None)
         headers={"Content-Type": "application/json"} if body else {},
     )
     try:
-        with urllib.request.urlopen(request, timeout=40) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read(), response.headers.get_content_type()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -306,7 +375,7 @@ def browser_runtime_request(method: str, path: str, payload: dict | None = None)
 @app.get("/api/browser/health")
 def browser_health():
     try:
-        body, _ = browser_runtime_request("GET", "/health")
+        body, _ = browser_runtime_request("GET", "/health", timeout=2)
         return __import__("json").loads(body)
     except HTTPException:
         return {"status": "offline", "browser": None}

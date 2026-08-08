@@ -28,8 +28,13 @@ open **Model settings**, and explicitly select **Use OpenAI after local failure*
 Fallback additionally requires `OPENAI_API_KEY`; without both conditions the
 original local error is raised.
 
-Hybrid mode already routes CEO and Development to cloud. Its local specialist
+Hybrid mode already routes CEO, Development, and web-enabled Research to cloud. Its local specialist
 roles can use the same opt-in fallback. Cloud mode has no secondary fallback.
+
+Local-only Research cannot claim online market evidence. It returns a failed
+result explaining that no web source was queried. Cloud and Hybrid research use
+the hosted Web Search tool and must return at least two distinct HTTP(S) source
+URLs; otherwise the result fails the deterministic evidence gate.
 
 ## Audit events
 

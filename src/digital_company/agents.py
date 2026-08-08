@@ -15,11 +15,11 @@ from uuid import uuid4
 
 from agents import (
     Agent, AsyncOpenAI, ModelBehaviorError, ModelRetrySettings, ModelSettings,
-    OpenAIChatCompletionsModel, Runner, retry_policies, set_tracing_disabled,
+    OpenAIChatCompletionsModel, Runner, WebSearchTool, retry_policies, set_tracing_disabled,
 )
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from digital_company.models import CompanySnapshot, SpecialistResult, TaskProposal
+from digital_company.models import ActionType, CompanySnapshot, SpecialistResult, TaskProposal
 
 
 CEO_INSTRUCTIONS = """You are the CEO of a constrained autonomous digital company.
@@ -56,7 +56,7 @@ stakeholder_response explaining what you will do, adapt, defer, or refuse and wh
 a direct response through stakeholder_response."""
 
 SPECIALIST_INSTRUCTIONS = {
-    "research": "You are a skeptical B2B market researcher. Produce a concise evidence-based opportunity brief. Clearly label assumptions and avoid invented sources.",
+    "research": """You are a skeptical B2B market researcher. You must use web search before drawing market conclusions. Produce a concise opportunity brief that separates verified facts, inference, and assumptions. Put at least two distinct direct HTTP(S) source URLs in the sources field and connect every important claim to one of them in evidence. Prefer primary sources, official product/pricing pages, public datasets, and direct customer language. Never invent a source, statistic, quote, interview, customer reaction, or completed experiment. If credible evidence is unavailable, return failed rather than filling gaps with plausible prose.""",
     "platform": "You are a platform strategy lead. Compare build, buy, integrate, and manual validation using total cost, setup time, API capability, lock-in, operational burden, and reversibility. Recommend one path and list the minimum human setup and permissions. Never claim access already exists.",
     "operations": "You are a resourceful operations lead. Design browser missions, human handoffs, and contractor sourcing plans. Produce exact URLs, bounded steps, success evidence, fallback routes, and risks. Never claim a login, CAPTCHA, 2FA, outreach, agreement, or payment was completed.",
     "product": "You are a pragmatic product manager. Produce a narrow PRD with ICP, pain, workflow, acceptance criteria, non-goals, pricing hypothesis, and measurable validation test.",
@@ -114,17 +114,28 @@ class AgentEngine:
         self.specialists = {}
         self.specialist_fallbacks = {}
         for name, instructions in SPECIALIST_INSTRUCTIONS.items():
-            use_local = mode == "local" or (mode == "hybrid" and name != "development")
-            self.specialists[name] = self._agent(name.title(), instructions, SpecialistResult, use_local, retry_settings)
+            # Hosted web search only works on OpenAI Responses models. Hybrid
+            # therefore routes Research to cloud while routine roles stay local.
+            use_local = mode == "local" or (mode == "hybrid" and name not in {"development", "research"})
+            tools = [WebSearchTool(search_context_size="medium")] if name == "research" and not use_local else []
+            self.specialists[name] = self._agent(
+                name.title(), instructions, SpecialistResult, use_local, retry_settings, tools,
+            )
             self.specialist_fallbacks[name] = (
-                self._agent(name.title() + " fallback", instructions, SpecialistResult, False, retry_settings)
+                self._agent(
+                    name.title() + " fallback", instructions, SpecialistResult, False,
+                    retry_settings,
+                    [WebSearchTool(search_context_size="medium")] if name == "research" else [],
+                )
                 if use_local else None
             )
 
-    def _agent(self, name, instructions, output_type, local: bool, settings: ModelSettings):
+    def _agent(self, name, instructions, output_type, local: bool, settings: ModelSettings,
+               tools: list | None = None):
         return Agent(
             name=name, model=self.local_model if local else self.cloud_model,
             instructions=instructions, output_type=output_type, model_settings=settings,
+            tools=tools or [],
         )
 
     def _run(self, agent, fallback, prompt: str, role: str):
@@ -203,12 +214,34 @@ class AgentEngine:
         artifact_context: dict | None = None,
     ) -> SpecialistResult:
         """Execute an approved internal task with the selected specialist."""
+        selected = self.specialists[proposal.specialist]
+        if proposal.action == ActionType.RESEARCH_MARKET and selected.model is self.local_model:
+            return SpecialistResult(
+                status="failed",
+                summary="Online market research was not run because the selected local model has no web-search capability.",
+                evidence=["No external source was queried; fabricated market evidence is forbidden."],
+                recommendation="Switch this company to Hybrid or Cloud for evidence-backed research, then retry.",
+            )
         prompt = json.dumps({
             "assigned_task": proposal.model_dump(mode="json"),
             "company_state": snapshot.model_dump(mode="json"),
             "artifact_context": artifact_context,
         }, indent=2)
-        return self._run(
-            self.specialists[proposal.specialist], self.specialist_fallbacks[proposal.specialist],
+        result = self._run(
+            selected, self.specialist_fallbacks[proposal.specialist],
             prompt, proposal.specialist,
         )
+        if proposal.action == ActionType.RESEARCH_MARKET:
+            valid_sources = {
+                value for value in result.sources
+                if value.startswith("https://") or value.startswith("http://")
+            }
+            if result.status == "completed" and len(valid_sources) < 2:
+                return SpecialistResult(
+                    status="failed",
+                    summary="Research output failed the evidence gate: fewer than two source URLs were returned.",
+                    evidence=result.evidence,
+                    sources=sorted(valid_sources),
+                    recommendation="Repeat research with web search and return direct, verifiable URLs.",
+                )
+        return result

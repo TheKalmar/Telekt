@@ -82,6 +82,7 @@ class SpecialistResult(BaseModel):
     status: Literal["completed", "failed"]
     summary: str
     evidence: list[str]
+    sources: list[str] = Field(default_factory=list)
     artifact_path: str | None = None
     artifact_content: str | None = None
     recommendation: str

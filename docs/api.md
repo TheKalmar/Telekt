@@ -24,6 +24,17 @@ dashboard. Metrics are projected from the latest 250 audit events.
 `token_usage` is currently `null`. The application does not estimate or invent
 token counts when the provider has not supplied them.
 
+### `GET /api/runtime/preflight`
+
+Runs fresh readiness checks for the selected company. It returns pass, warning,
+skip, or blocking results for the worker, selected local model, OpenAI credential
+presence, and isolated browser runtime. Secret values are never returned.
+
+`POST /api/control/start` runs the same checks without cache and returns `409`
+with actionable blockers instead of queuing a company that cannot execute its
+configured model route. Browser availability and a cloud key in local-only mode
+are warnings because reasoning work can still proceed.
+
 ### `GET /api/local-model/health`
 
 Checks whether Ollama's model-list endpoint is reachable. It does not prove that the configured model can complete an inference.

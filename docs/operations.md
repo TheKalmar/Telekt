@@ -55,6 +55,12 @@ Token usage is deliberately shown as unavailable. Exact token and provider-cost
 telemetry requires capturing provider response usage; the ledger amount is the
 company's authorized estimated task spend, not an API invoice.
 
+The **Runtime readiness** panel checks that the worker is online, the exact
+per-company Ollama tag exists when local inference is required, the OpenAI key is
+present for cloud/hybrid routing, and the browser runtime is reachable. Dashboard
+checks are cached briefly to avoid polling dependent services every two seconds;
+pressing Start always performs a fresh check and fails closed on blockers.
+
 ## Failure recovery
 
 ### Ollama offline

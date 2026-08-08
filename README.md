@@ -14,6 +14,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Stakeholder directives that supersede stale approvals
 - Cooperative start, pause, and stop controls
 - Operations dashboard with active agent, model latency, failures, fallbacks, task states, and audit events
+- Runtime readiness gate for worker, selected Ollama model, OpenAI key, and browser service
 - Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
 - Build/buy/integrate/manual strategy gate with durable platform capability tracking
 - Human takeover missions for login, CAPTCHA, 2FA, identity, terms, and other manual checkpoints
@@ -146,11 +147,11 @@ Open [http://127.0.0.1:8421](http://127.0.0.1:8421). The readiness endpoint is `
 
 ## Model modes
 
-| Mode | CEO | Development | Research / Product / QA / Growth | Intended use |
-|---|---|---|---|---|
-| Local | Ollama | Ollama | Ollama | Free workflow testing and simple work |
-| Hybrid | OpenAI | OpenAI | Ollama | Better quality with controlled cloud cost |
-| Cloud | OpenAI | OpenAI | OpenAI | Highest quality |
+| Mode | CEO | Development | Research | Product / QA / Growth | Intended use |
+|---|---|---|---|---|---|
+| Local | Ollama | Ollama | Ollama (offline only) | Ollama | Free workflow testing and simple work |
+| Hybrid | OpenAI | OpenAI | OpenAI + web search | Ollama | Evidence-backed strategy with controlled cloud cost |
+| Cloud | OpenAI | OpenAI | OpenAI + web search | OpenAI | Highest quality |
 
 Mode changes apply to future cycles and are rejected while a company is running. Local mode disables OpenAI trace export.
 
