@@ -116,12 +116,31 @@ def dashboard():
             "remaining_budget_eur": 0,
             "completed_tasks": [],
             "recent_tasks": [],
+            "operations": {"active_model_run": None, "model": {}, "tasks_by_status": {}, "estimated_spend_eur": 0, "recent_events": []},
             "approvals": [],
             "stakeholder_messages": [],
             "portfolio": {"active_company_id": None, "companies": []},
         }
     data = get_store(company_id).dashboard_data()
     data["portfolio"] = {"active_company_id": company_id, "companies": registry.list()}
+    data["operations"]["worker"] = registry.worker_status()
+    return data
+
+
+@app.get("/api/operations")
+def operations():
+    """Return operational telemetry for the selected company and worker."""
+    try:
+        data = get_store().operations_data()
+    except RuntimeError:
+        data = {
+            "active_model_run": None,
+            "model": {},
+            "tasks_by_status": {},
+            "estimated_spend_eur": 0,
+            "recent_events": [],
+        }
+    data["worker"] = registry.worker_status()
     return data
 
 

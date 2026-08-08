@@ -12,6 +12,16 @@ Returns basic server readiness.
 
 Returns the active company snapshot, runtime control, settings, approvals, recent audit events, and portfolio switcher data.
 
+### `GET /api/operations`
+
+Returns operational telemetry for the active company: the currently inferred
+model run, worker heartbeat, task counts by status, model successes and errors,
+latency, provider usage, fallback count, ledger-estimated spend, and the latest
+40 decoded audit events. Metrics are projected from the latest 250 audit events.
+
+`token_usage` is currently `null`. The application does not estimate or invent
+token counts when the provider has not supplied them.
+
 ### `GET /api/local-model/health`
 
 Checks whether Ollama's model-list endpoint is reachable. It does not prove that the configured model can complete an inference.

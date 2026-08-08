@@ -32,7 +32,9 @@ def test_invalid_structured_output_is_repaired_once(monkeypatch):
     assert engine._run(local_agent, None, "original", "ceo") == {"valid": True}
     assert len(calls) == 2
     assert "failed schema validation" in calls[1]
-    assert [event for event, _ in events] == ["model.structured_output_error", "model.succeeded"]
+    assert [event for event, _ in events] == [
+        "model.started", "model.structured_output_error", "model.succeeded",
+    ]
 
 
 def test_cloud_fallback_requires_explicit_setting_and_api_key(monkeypatch):

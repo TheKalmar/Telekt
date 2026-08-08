@@ -11,6 +11,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from uuid import uuid4
 
 from agents import (
     Agent, AsyncOpenAI, ModelBehaviorError, ModelRetrySettings, ModelSettings,
@@ -107,13 +108,16 @@ class AgentEngine:
     def _run(self, agent, fallback, prompt: str, role: str):
         """Run with SDK transient retries, structured repair, audit, and opt-in fallback."""
         started = time.monotonic()
+        run_id = str(uuid4())
         provider = "local" if agent.model is self.local_model else "cloud"
+        self.reporter("model.started", {"run_id": run_id, "role": role, "provider": provider})
         last_error = None
         for repair_attempt in range(self.structured_retries + 1):
             try:
                 result = Runner.run_sync(agent, prompt, max_turns=self.max_turns).final_output
                 self.reporter("model.succeeded", {
                     "role": role, "provider": provider, "repair_attempt": repair_attempt,
+                    "run_id": run_id,
                     "latency_ms": round((time.monotonic() - started) * 1000),
                 })
                 return result
@@ -121,6 +125,7 @@ class AgentEngine:
                 last_error = exc
                 self.reporter("model.structured_output_error", {
                     "role": role, "provider": provider, "attempt": repair_attempt + 1,
+                    "run_id": run_id,
                     "error": str(exc)[:500],
                 })
                 prompt += "\n\nYour previous response failed schema validation. Return only a complete response matching the required structured output."
@@ -128,6 +133,7 @@ class AgentEngine:
                 last_error = exc
                 self.reporter("model.provider_error", {
                     "role": role, "provider": provider, "error_type": type(exc).__name__,
+                    "run_id": run_id,
                     "error": str(exc)[:500],
                     "latency_ms": round((time.monotonic() - started) * 1000),
                 })
@@ -138,8 +144,29 @@ class AgentEngine:
         if fallback_allowed and isinstance(last_error, (
             ModelBehaviorError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError,
         )):
-            self.reporter("model.cloud_fallback", {"role": role, "reason": type(last_error).__name__})
-            return Runner.run_sync(fallback, prompt, max_turns=self.max_turns).final_output
+            self.reporter("model.cloud_fallback", {
+                "run_id": run_id, "role": role, "reason": type(last_error).__name__,
+            })
+            fallback_started = time.monotonic()
+            try:
+                output = Runner.run_sync(fallback, prompt, max_turns=self.max_turns).final_output
+                self.reporter("model.succeeded", {
+                    "run_id": run_id, "role": role, "provider": "cloud_fallback",
+                    "repair_attempt": 0,
+                    "latency_ms": round((time.monotonic() - fallback_started) * 1000),
+                })
+                return output
+            except Exception as exc:
+                self.reporter("model.fallback_failed", {
+                    "run_id": run_id, "role": role, "provider": "cloud_fallback",
+                    "error_type": type(exc).__name__, "error": str(exc)[:500],
+                })
+                raise
+        self.reporter("model.failed", {
+            "run_id": run_id, "role": role, "provider": provider,
+            "error_type": type(last_error).__name__, "error": str(last_error)[:500],
+            "latency_ms": round((time.monotonic() - started) * 1000),
+        })
         raise last_error
 
     def decide(self, snapshot: CompanySnapshot) -> TaskProposal:

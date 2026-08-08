@@ -13,6 +13,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Durable tasks, decisions, approvals, budget ledger, chat, and audit history
 - Stakeholder directives that supersede stale approvals
 - Cooperative start, pause, and stop controls
+- Operations dashboard with active agent, model latency, failures, fallbacks, task states, and audit events
 - Local web control plane
 - Local Ollama model support through an OpenAI-compatible API
 - Automatic adoption of the original single-company POC database
@@ -164,7 +165,7 @@ Pause and stop are cooperative. An in-flight model request or database write is 
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The current suite covers policy outcomes, durable state, model settings, stakeholder messages, and multi-company isolation.
+The current suite covers policy outcomes, durable state, model settings, operational telemetry, stakeholder messages, and multi-company isolation.
 
 ## Repository map
 

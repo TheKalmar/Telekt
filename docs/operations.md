@@ -22,6 +22,10 @@ Invoke-RestMethod http://127.0.0.1:8421/health
 Invoke-RestMethod http://127.0.0.1:8421/api/local-model/health
 ```
 
+The app container probes the HTTP health endpoint. The worker container probes
+its PID 1 process; the dashboard separately reports functional worker liveness
+from its durable heartbeat.
+
 ## Backups
 
 Stop all company loops before taking a consistent filesystem backup. Back up the complete `.company` directory, including `registry.db`, every company database, and artifact directories.
@@ -33,6 +37,23 @@ SQLite WAL mode is not explicitly configured. Do not copy a database while write
 Uvicorn writes process logs to stdout/stderr. Domain-level transitions are stored in each company's `audit_events` table and returned in the dashboard projection.
 
 The audit log is application-level and not tamper-proof. Production requires immutable external audit storage.
+
+## Operations dashboard
+
+Mission control includes an **Operations & model telemetry** panel. It shows the
+active agent and elapsed time, provider, worker heartbeat, successful and failed
+model calls, structured-output retries, cloud fallbacks, average and p95 latency,
+task-state counts, ledger-estimated spend, and recent audit events.
+
+The projection uses the latest 250 audit events, so it is a recent operational
+window rather than lifetime accounting. An active run is inferred from a
+`model.started` event without a matching terminal `model.succeeded`,
+`model.failed`, or `model.fallback_failed` event. After a hard process crash, the
+last run may appear active until later recovery tooling marks it abandoned.
+
+Token usage is deliberately shown as unavailable. Exact token and provider-cost
+telemetry requires capturing provider response usage; the ledger amount is the
+company's authorized estimated task spend, not an API invoice.
 
 ## Failure recovery
 

@@ -400,7 +400,67 @@ class CompanyStore:
         snapshot["audit"] = [dict(row) for row in self.db.execute(
             "SELECT event_type,payload_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 30"
         )]
+        snapshot["operations"] = self.operations_data()
         return snapshot
+
+    def operations_data(self) -> dict:
+        """Project audit/task state into compact operational telemetry."""
+        rows = [dict(row) for row in self.db.execute(
+            "SELECT event_type,payload_json,created_at FROM audit_events "
+            "ORDER BY created_at DESC LIMIT 250"
+        )]
+        events = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            events.append({"event_type": row["event_type"], "created_at": row["created_at"], "payload": payload})
+
+        model_events = [event for event in events if event["event_type"].startswith("model.")]
+        completed_run_ids = {
+            event["payload"].get("run_id") for event in model_events
+            if event["event_type"] in {"model.succeeded", "model.failed", "model.fallback_failed"}
+        }
+        active = next((
+            event for event in model_events
+            if event["event_type"] == "model.started"
+            and event["payload"].get("run_id") not in completed_run_ids
+        ), None)
+        successes = [event for event in model_events if event["event_type"] == "model.succeeded"]
+        latencies = sorted(
+            event["payload"]["latency_ms"] for event in successes
+            if isinstance(event["payload"].get("latency_ms"), (int, float))
+        )
+        provider_counts: dict[str, int] = {}
+        for event in successes:
+            provider = event["payload"].get("provider", "unknown")
+            provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        task_counts = {
+            row["status"]: row["count"] for row in self.db.execute(
+                "SELECT status,COUNT(*) AS count FROM tasks GROUP BY status"
+            )
+        }
+        estimated_spend = float(self.db.execute(
+            "SELECT COALESCE(SUM(amount_eur),0) FROM ledger"
+        ).fetchone()[0])
+        return {
+            "active_model_run": active,
+            "model": {
+                "successful_calls": len(successes),
+                "structured_errors": sum(e["event_type"] == "model.structured_output_error" for e in model_events),
+                "provider_errors": sum(e["event_type"] == "model.provider_error" for e in model_events),
+                "failed_calls": sum(e["event_type"] in {"model.failed", "model.fallback_failed"} for e in model_events),
+                "fallbacks": sum(e["event_type"] == "model.cloud_fallback" for e in model_events),
+                "average_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
+                "p95_latency_ms": latencies[max(0, int(len(latencies) * .95) - 1)] if latencies else None,
+                "provider_counts": provider_counts,
+                "token_usage": None,
+            },
+            "tasks_by_status": task_counts,
+            "estimated_spend_eur": estimated_spend,
+            "recent_events": events[:40],
+        }
 
     def get_settings(self) -> dict:
         """Return per-company model routing settings."""

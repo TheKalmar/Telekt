@@ -54,6 +54,12 @@ services:
       - company_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
     restart: unless-stopped
 
 volumes:
