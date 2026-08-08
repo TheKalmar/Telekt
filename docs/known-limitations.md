@@ -13,10 +13,11 @@ has an idempotency contract.
 
 ## Persistence
 
-PostgreSQL is canonical for company business state in the infrastructure
-overlay and has schema versioning and pooled connections. Portfolio discovery
-metadata still lives in `registry.db`; moving it to PostgreSQL, production
-backup/restore automation, and encryption-at-rest configuration remain open.
+PostgreSQL is canonical for company business and portfolio state in the
+infrastructure overlay and has schema versioning. `registry.db` remains only as
+a lightweight-mode fallback and idempotent import source. Production connection
+pooling, backup/restore automation, and encryption-at-rest configuration remain
+open.
 
 ## Security
 

@@ -19,8 +19,8 @@ POC history, including:
 - automatic human takeover for login, CAPTCHA, 2FA, safety checks, and form submission.
 
 This is a POC, not production software. The durable overlay now uses PostgreSQL
-and signal-driven Temporal workflows; `registry.db` and the lightweight polling
-worker remain transitional development components.
+for company and portfolio state plus signal-driven Temporal workflows. The
+lightweight polling worker and SQLite backend remain development fallbacks.
 
 ## 2. Clone and select the correct branch
 
@@ -218,7 +218,7 @@ Highest-value next engineering steps:
 1. Add an end-to-end Browser Mission fixture/site and replayable Computer Use evals.
 2. Persist a resumable mission conversation instead of ending a paused mission.
 3. Add authentication and tenant authorization before any remote deployment.
-4. Move the remaining portfolio `registry.db` metadata into PostgreSQL.
+4. Add production PostgreSQL/Temporal backup and restore drills.
 5. Add real provider connectors with idempotency: Shopify OAuth/catalog drafts first.
 6. Reconcile recorded token estimates with provider invoices and add tool-call pricing.
 

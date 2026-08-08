@@ -47,7 +47,11 @@ development fallback when Temporal is not configured.
 
 ### Portfolio registry
 
-`registry.py` stores portfolio metadata in `.company/registry.db`. It maps a company ID to its own SQLite database and artifact directory.
+`registry.py` stores portfolio metadata, active selection, worker heartbeats, and
+leases in PostgreSQL when the infrastructure stack is enabled. The lightweight
+development stack retains `.company/registry.db` as a SQLite fallback. Artifact
+paths are resolved for the current runtime so host-specific paths are not reused
+inside Docker or another machine.
 
 ```text
 .company/
@@ -173,7 +177,7 @@ The intended production evolution is:
 
 | POC | Production target |
 |---|---|
-| SQLite `registry.db` portfolio metadata | PostgreSQL portfolio tables with tenant isolation |
+| SQLite `registry.db` portfolio metadata | Completed in the infrastructure stack; retained only as fallback/import source |
 | Lightweight polling-worker fallback | Temporal-only production execution |
 | Local artifact directories | GitHub plus object storage |
 | Static Governor rules | Versioned policy engine |

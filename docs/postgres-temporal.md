@@ -51,9 +51,11 @@ The infrastructure overlay sets `DATABASE_BACKEND=postgres` after import. Each
 company uses an isolated native schema named from a stable company UUID. The
 same `CompanyStore` business API is exercised against both backends, keeping
 SQLite available as a rollback source while PostgreSQL becomes canonical for
-company state. Portfolio discovery metadata (`registry.db`) remains SQLite in
-this stage and is the final database component still awaiting PostgreSQL
-cutover.
+company state. Schema version 3 also makes portfolio metadata, active selection,
+worker liveness, and work leases canonical in PostgreSQL. Existing
+`registry.db` metadata is imported idempotently on startup; stale leases are
+intentionally not copied. The source file remains untouched for rollback and
+for the lightweight SQLite-only stack.
 
 ## Workflow version cutover
 

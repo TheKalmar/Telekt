@@ -28,7 +28,9 @@ from its durable heartbeat.
 
 ## Backups
 
-Stop all company loops before taking a consistent filesystem backup. Back up the complete `.company` directory, including `registry.db`, every company database, and artifact directories.
+For the lightweight stack, stop all company loops before backing up the complete
+`.company` directory. For the infrastructure stack, back up PostgreSQL and
+runtime artifact volumes; `registry.db` is only a fallback/import source there.
 
 SQLite WAL mode is not explicitly configured. Do not copy a database while writes are active and assume the result is transactionally consistent.
 

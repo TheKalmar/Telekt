@@ -1,6 +1,6 @@
 # Digital AI Company
 
-A proof of concept for a portfolio of autonomous digital companies. A stakeholder creates a company with a goal, budget, profile, constraints, and success criteria. A CEO agent selects the next job, specialist agents execute internal work, a deterministic Governor enforces authority boundaries, and PostgreSQL stores durable company state in the infrastructure stack.
+A proof of concept for a portfolio of autonomous digital companies. A stakeholder creates a company with a goal, budget, profile, constraints, and success criteria. A CEO agent selects the next job, specialist agents execute internal work, a deterministic Governor enforces authority boundaries, and PostgreSQL stores durable company and portfolio state in the infrastructure stack.
 
 An opt-in free self-hosted infrastructure overlay now runs PostgreSQL, Temporal,
 Temporal UI, and the durable Temporal company worker. See
