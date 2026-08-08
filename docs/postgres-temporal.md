@@ -20,13 +20,16 @@ gRPC on `127.0.0.1:7233` by default.
 - PostgreSQL schema `telekt` is reserved for canonical application state.
 - Temporal creates and owns separate internal databases. Application code must
   never use Temporal tables as company memory.
-- `CompanyLoopWorkflow` schedules durable cycles. LLM calls, SQLite access,
-  email, browser work, and filesystem changes run only inside Activities.
+- `CompanyLoopWorkflowV2` schedules durable cycles on the isolated
+  `digital-company-v2` task queue. LLM calls, PostgreSQL access, email, browser
+  work, and filesystem changes run only inside Activities.
 - The original polling worker is replaced by `digital-company-temporal-worker`
   only when `compose.infrastructure.yaml` is included.
-- During this first migration stage, company business records remain in SQLite.
-PostgreSQL schema version 1 is intentionally a foundation, not a claim that
-data migration has already completed.
+- Start, pause, stop, approvals, handoffs, and stakeholder directives wake the
+  workflow through durable Temporal signals. Waiting companies do not poll the
+  database. An hourly durable timer only checks whether a daily brief is due.
+- PostgreSQL is canonical for company business records when the infrastructure
+  overlay is enabled. SQLite company files remain rollback/import sources.
 
 ## Import existing SQLite companies
 
@@ -51,6 +54,21 @@ SQLite available as a rollback source while PostgreSQL becomes canonical for
 company state. Portfolio discovery metadata (`registry.db`) remains SQLite in
 this stage and is the final database component still awaiting PostgreSQL
 cutover.
+
+## Workflow version cutover
+
+The signal-driven implementation uses workflow type `CompanyLoopWorkflowV2`,
+workflow ID `company-loop-v2-<company-id>`, and task queue
+`digital-company-v2`. These new identities are intentional: existing polling
+workflow histories cannot be replayed by structurally different workflow code.
+Legacy histories may remain visible in Temporal UI for audit, but no current
+worker polls their task queue.
+
+Each side-effecting company cycle has `maximum_attempts=1` at the Temporal
+level because a whole cycle is not universally idempotent yet. Provider-level
+transient retries remain inside the activity. An activity failure records an
+error in canonical state and waits for an explicit signal instead of risking a
+duplicate side effect.
 
 ## Verify
 

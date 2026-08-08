@@ -1,11 +1,12 @@
 # Digital AI Company
 
-A proof of concept for a portfolio of autonomous digital companies. A stakeholder creates a company with a goal, budget, profile, constraints, and success criteria. A CEO agent selects the next job, specialist agents execute internal work, a deterministic Governor enforces authority boundaries, and SQLite stores durable company state.
+A proof of concept for a portfolio of autonomous digital companies. A stakeholder creates a company with a goal, budget, profile, constraints, and success criteria. A CEO agent selects the next job, specialist agents execute internal work, a deterministic Governor enforces authority boundaries, and PostgreSQL stores durable company state in the infrastructure stack.
 
 An opt-in free self-hosted infrastructure overlay now runs PostgreSQL, Temporal,
 Temporal UI, and the durable Temporal company worker. See
-[`docs/postgres-temporal.md`](docs/postgres-temporal.md). SQLite remains the
-canonical business store during the staged migration.
+[`docs/postgres-temporal.md`](docs/postgres-temporal.md). Temporal owns durable,
+signal-driven company scheduling; SQLite remains available as a lightweight
+development and import fallback.
 
 Agents use a versioned, role- and action-scoped Skill Registry. See
 [`docs/agent-skills.md`](docs/agent-skills.md).
@@ -42,11 +43,13 @@ Browser control plane
         v
 FastAPI API ---- Portfolio registry
         |              |
-        |              +---- Company A SQLite + artifacts
-        |              +---- Company B SQLite + artifacts
+        |              +---- PostgreSQL company state
+        |              +---- Isolated artifact workspaces
         |
-        v
-CompanyOrchestrator
+        +---- Temporal signal ---- CompanyLoopWorkflowV2
+                                      |
+                                      v
+                               CompanyOrchestrator activity
         |
         +---- AgentEngine (local / hybrid / cloud)
         +---- Governor (deterministic policy)
@@ -205,7 +208,7 @@ src/digital_company/
   browser_policy.py  URL allowlist and human-checkpoint rules
   computer_use.py    Bounded OpenAI Computer Use mission controller
   policy.py          Deterministic Governor
-  store.py           Per-company SQLite repository
+  store.py           PostgreSQL/SQLite-compatible company repository
   registry.py        Multi-company portfolio registry
   web.py             FastAPI control plane
   worker.py          Restart-safe autonomous cycle worker

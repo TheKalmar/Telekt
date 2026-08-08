@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import html
 import re
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field
 from digital_company.registry import CompanyRegistry
 from digital_company.store import CompanyStore
 from digital_company.email_service import verify_approval_token
+from digital_company.temporal_gateway import TemporalCommandError, signal_company
 from digital_company.workspace import WorkspaceRuntime
 
 
@@ -33,6 +35,18 @@ _preflight_cache: dict[str, tuple[float, tuple, dict]] = {}
 def get_store(company_id: str | None = None) -> CompanyStore:
     """Open state for an explicit company or the currently selected company."""
     return registry.store_for(company_id)
+
+
+def signal_temporal(company_id: str, signal_name: str, reason: str) -> bool:
+    """Deliver a durable command when the Temporal infrastructure is enabled."""
+    try:
+        return signal_company(company_id, signal_name, reason)
+    except TemporalCommandError as exc:
+        store = get_store(company_id)
+        store.audit("temporal.signal_failed", {
+            "signal": signal_name, "reason": reason, "error": str(exc),
+        })
+        raise HTTPException(503, str(exc)) from exc
 
 
 def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
@@ -328,9 +342,11 @@ def control(action: str):
         if not readiness["ready"]:
             raise HTTPException(409, {"message": "Runtime preflight failed", "blockers": readiness["blockers"]})
         store.set_control("running", "Queued for autonomous worker")
+        signal_temporal(company_id, "start", "operator_start")
     elif action in {"pause", "stop"}:
         store.set_control("paused" if action == "pause" else "stopped",
                           "Will halt after current atomic action")
+        signal_temporal(company_id, action, f"operator_{action}")
     else:
         raise HTTPException(400, "Unknown control action")
     return store.get_control()
@@ -347,6 +363,7 @@ def message(payload: MessageIn):
         raise HTTPException(400, str(exc)) from exc
     if store.get_control()["state"] in {"waiting_approval", "waiting_human", "paused"} and payload.kind == "directive":
         store.set_control("running", "Stakeholder directive queued for worker")
+        signal_temporal(company_id, "wake", "stakeholder_directive")
     return {"id": message_id, "status": "pending"}
 
 
@@ -547,6 +564,7 @@ def approval(approval_id: str, decision: str, payload: ApprovalDecisionIn):
             raise HTTPException(400, "Unknown decision")
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
+    signal_temporal(registry.active_id(), "wake", f"approval_{decision}")
     return {"status": decision}
 
 
@@ -561,6 +579,7 @@ def handoff(handoff_id: str, decision: str, payload: HandoffDecisionIn):
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(404, str(exc)) from exc
+    signal_temporal(registry.active_id(), "wake", f"handoff_{decision}")
     return {"status": "completed" if decision == "complete" else "cancelled"}
 
 
@@ -610,6 +629,7 @@ async def email_approval_decision(company_id: str, approval_id: str, request: Re
             raise ValueError("Choose Approve or Decline")
     except (RuntimeError, ValueError) as exc:
         return HTMLResponse(approval_page(company_id, approval_id, email, expires, token, str(exc)), status_code=400)
+    await asyncio.to_thread(signal_temporal, company_id, "wake", f"email_approval_{decision}")
     return approval_page(company_id, approval_id, email, expires, token, message)
 
 

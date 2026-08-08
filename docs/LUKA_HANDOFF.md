@@ -6,7 +6,7 @@ the subsystem being changed.
 
 ## 1. What this branch contains
 
-Use branch `codex/browser-mission-dashboard`. It contains the complete current
+Use branch `codex/usage-budget-accounting`. It contains the complete current
 POC history, including:
 
 - multi-company portfolio and per-company goals, budgets, settings, and state;
@@ -18,8 +18,9 @@ POC history, including:
 - governed OpenAI Computer Use missions with live dashboard visibility;
 - automatic human takeover for login, CAPTCHA, 2FA, safety checks, and form submission.
 
-This is a POC, not production software. SQLite and the polling worker deliberately
-stand in for the planned PostgreSQL and Temporal layers.
+This is a POC, not production software. The durable overlay now uses PostgreSQL
+and signal-driven Temporal workflows; `registry.db` and the lightweight polling
+worker remain transitional development components.
 
 ## 2. Clone and select the correct branch
 
@@ -27,7 +28,7 @@ stand in for the planned PostgreSQL and Temporal layers.
 git clone https://github.com/TheKalmar/Telekt.git
 Set-Location Telekt
 git fetch origin
-git switch --track origin/codex/browser-mission-dashboard
+git switch --track origin/codex/usage-budget-accounting
 Copy-Item .env.example .env.local
 ```
 
@@ -138,7 +139,7 @@ Invoke-RestMethod http://127.0.0.1:8421/api/local-model/models
 ```
 
 Expected POC services are `app`, `worker`, and `browser-runtime`; bundled mode
-also runs `ollama` and the one-shot `ollama-init`. The current suite has 50 tests.
+also runs `ollama` and the one-shot `ollama-init`. The current suite has 74 tests.
 
 If the virtual environment does not exist:
 
@@ -192,7 +193,7 @@ or setup command changes.
 ## 7. Safe development workflow
 
 ```powershell
-git switch codex/browser-mission-dashboard
+git switch codex/usage-budget-accounting
 git pull --ff-only
 git switch -c luka/<short-feature-name>
 ```
@@ -217,7 +218,7 @@ Highest-value next engineering steps:
 1. Add an end-to-end Browser Mission fixture/site and replayable Computer Use evals.
 2. Persist a resumable mission conversation instead of ending a paused mission.
 3. Add authentication and tenant authorization before any remote deployment.
-4. Replace SQLite/leases with PostgreSQL and Temporal.
+4. Move the remaining portfolio `registry.db` metadata into PostgreSQL.
 5. Add real provider connectors with idempotency: Shopify OAuth/catalog drafts first.
 6. Reconcile recorded token estimates with provider invoices and add tool-call pricing.
 

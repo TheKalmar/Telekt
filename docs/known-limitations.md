@@ -4,11 +4,19 @@ This document is intentionally candid so a new developer does not mistake POC be
 
 ## Workflow durability
 
-Background execution uses a separate polling worker with durable SQLite state and per-company leases. It recovers `running` companies after a process restart, but does not provide Temporal workflow history, activity retries, timers, signals, or multi-node scheduling guarantees. Temporal is planned but not implemented.
+The infrastructure overlay uses a signal-driven Temporal workflow per company,
+including durable pause/start/stop, approval, handoff, stakeholder-message
+signals, hourly brief timers, and startup recovery. The lightweight stack still
+ships the legacy SQLite polling worker as a development fallback. Whole-cycle
+Temporal retries are deliberately disabled until every connector and activity
+has an idempotency contract.
 
 ## Persistence
 
-SQLite is used per company. There is no migration versioning, connection pool, WAL configuration, distributed locking, encryption at rest, or production backup mechanism.
+PostgreSQL is canonical for company business state in the infrastructure
+overlay and has schema versioning and pooled connections. Portfolio discovery
+metadata still lives in `registry.db`; moving it to PostgreSQL, production
+backup/restore automation, and encryption-at-rest configuration remain open.
 
 ## Security
 
@@ -75,7 +83,9 @@ human-only; bypass behavior is out of scope.
 
 ## Concurrency
 
-Durable per-company leases suppress duplicate cycles across worker processes. The current fixed one-hour lease has no heartbeat extension; a worker that hangs longer than the lease could overlap with a replacement. Temporal should replace this mechanism before horizontal scaling.
+Temporal owns company-cycle scheduling in the infrastructure overlay. The old
+lease implementation remains only for the lightweight polling-worker fallback
+and must not be horizontally scaled.
 
 ## Portfolio registry
 

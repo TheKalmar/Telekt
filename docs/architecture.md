@@ -38,7 +38,12 @@ This separation makes the probabilistic reasoning layer replaceable and keeps au
 
 `web.py` exposes a FastAPI server and serves the single-page dashboard. It owns portfolio selection, runtime controls, stakeholder chat, approvals, and model-mode settings. It persists operator intent but never executes an agent cycle inside an HTTP process.
 
-`worker.py` runs as a separate service. It polls canonical state, claims a durable per-company lease, and advances each running company by one bounded cycle. A container restart therefore resumes companies whose persisted state is still `running`. This is not yet a replacement for Temporal history, retries, timers, or signals, but it establishes the process boundary and recovery contract needed for that migration.
+With `compose.infrastructure.yaml`, `temporal_worker.py` runs as the execution
+service. One `CompanyLoopWorkflowV2` exists per company. API handlers persist
+operator intent and signal the workflow; approvals, handoffs, and stakeholder
+directives also signal it. A waiting workflow consumes no model calls and does
+not poll company state. `worker.py` remains only as the lightweight SQLite
+development fallback when Temporal is not configured.
 
 ### Portfolio registry
 
@@ -168,8 +173,8 @@ The intended production evolution is:
 
 | POC | Production target |
 |---|---|
-| SQLite company databases | PostgreSQL with tenant isolation |
-| SQLite polling worker with durable leases | Temporal workflows and activities |
+| SQLite `registry.db` portfolio metadata | PostgreSQL portfolio tables with tenant isolation |
+| Lightweight polling-worker fallback | Temporal-only production execution |
 | Local artifact directories | GitHub plus object storage |
 | Static Governor rules | Versioned policy engine |
 | Direct local execution | Isolated local/cloud runtime |
