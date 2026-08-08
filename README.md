@@ -10,6 +10,9 @@ canonical business store during the staged migration.
 Agents use a versioned, role- and action-scoped Skill Registry. See
 [`docs/agent-skills.md`](docs/agent-skills.md).
 
+The control-plane UI supports English and Serbian through an extensible
+translation catalog. See [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
+
 This repository proves the control loop and governance model. It is not yet a production-ready autonomous business platform.
 
 ## What is implemented

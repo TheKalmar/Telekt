@@ -180,6 +180,12 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/assets/i18n.js", include_in_schema=False)
+def i18n_catalog():
+    """Serve the zero-build UI translation catalog."""
+    return FileResponse(STATIC_DIR / "i18n.js", media_type="text/javascript")
+
+
 @app.get("/health")
 def health():
     worker = registry.worker_status()
