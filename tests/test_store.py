@@ -51,3 +51,19 @@ def test_cloud_fallback_is_explicit_and_disabled_by_default(tmp_path: Path):
     assert store.get_settings()["allow_cloud_fallback"] == 0
     store.set_model_settings("local", "llama3.1:8b", allow_cloud_fallback=True)
     assert store.get_settings()["allow_cloud_fallback"] == 1
+
+
+def test_operations_projects_live_browser_mission(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Research pricing", 1000)
+    store.audit("browser.mission_started", {
+        "task_id": "task-1", "objective": "Inspect competitor pricing",
+        "allowed_domains": ["example.com"], "max_steps": 12,
+    })
+    store.audit("browser.mission_action", {
+        "task_id": "task-1", "step": 2, "kind": "click", "url": "https://example.com/pricing",
+    })
+    mission = store.operations_data()["browser_mission"]
+    assert mission["status"] == "running"
+    assert mission["step"] == 2
+    assert mission["last_action"]["kind"] == "click"

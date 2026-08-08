@@ -588,6 +588,36 @@ class CompanyStore:
         estimated_spend = float(self.db.execute(
             "SELECT COALESCE(SUM(amount_eur),0) FROM ledger"
         ).fetchone()[0])
+        browser_events = [event for event in events if event["event_type"].startswith("browser.mission_")]
+        latest_start = next((event for event in browser_events
+                             if event["event_type"] == "browser.mission_started"), None)
+        mission = None
+        if latest_start:
+            task_id = latest_start["payload"].get("task_id")
+            related = [event for event in browser_events if event["payload"].get("task_id") == task_id]
+            terminal = next((event for event in related if event["event_type"] in {
+                "browser.mission_completed", "browser.mission_handoff"
+            } or (event["event_type"] == "browser.mission_stopped"
+                  and event["payload"].get("status") != "step_limit")), None)
+            last_action = next((event for event in related
+                                if event["event_type"] == "browser.mission_action"), None)
+            last_stop = next((event for event in related
+                              if event["event_type"] == "browser.mission_stopped"), None)
+            mission = {
+                "task_id": task_id,
+                "status": (last_stop["payload"].get("status") if last_stop else
+                           "completed" if terminal and terminal["event_type"] == "browser.mission_completed" else
+                           "waiting_human" if terminal and terminal["event_type"] == "browser.mission_handoff" else
+                           "running"),
+                "objective": latest_start["payload"].get("objective"),
+                "allowed_domains": latest_start["payload"].get("allowed_domains", []),
+                "max_steps": latest_start["payload"].get("max_steps"),
+                "step": (last_action or last_stop or {"payload": {}})["payload"].get("step",
+                         (last_stop or {"payload": {}})["payload"].get("steps", 0)),
+                "last_action": last_action["payload"] if last_action else None,
+                "detail": last_stop["payload"].get("summary") if last_stop else None,
+                "started_at": latest_start["created_at"],
+            }
         return {
             "active_model_run": active,
             "model": {
@@ -604,6 +634,7 @@ class CompanyStore:
             "tasks_by_status": task_counts,
             "estimated_spend_eur": estimated_spend,
             "recent_events": events[:40],
+            "browser_mission": mission,
         }
 
     def get_settings(self) -> dict:

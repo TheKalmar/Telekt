@@ -40,7 +40,8 @@ class BrowserMissionRunner:
     """
 
     def __init__(self, runtime_request: Callable = browser_runtime_request, client: Any | None = None,
-                 model: str | None = None, reporter: Callable | None = None):
+                 model: str | None = None, reporter: Callable | None = None,
+                 control_state: Callable[[], str] | None = None):
         if client is None:
             from openai import OpenAI
             client = OpenAI()
@@ -48,6 +49,7 @@ class BrowserMissionRunner:
         self.runtime_request = runtime_request
         self.model = model or os.getenv("COMPUTER_USE_MODEL", "gpt-5.6")
         self.reporter = reporter or (lambda _event, _payload: None)
+        self.control_state = control_state or (lambda: "running")
 
     def run(self, company_id: str, objective: str, max_steps: int = 12) -> MissionOutcome:
         if not os.getenv("OPENAI_API_KEY") and self.client.__class__.__module__.startswith("openai"):
@@ -65,6 +67,9 @@ class BrowserMissionRunner:
             model=self.model, tools=[{"type": "computer"}], input=prompt,
         )
         for step in range(1, max_steps + 1):
+            interrupted = self._interrupted(step - 1)
+            if interrupted:
+                return interrupted
             calls = [item for item in response.output if getattr(item, "type", None) == "computer_call"]
             if not calls:
                 summary = getattr(response, "output_text", "") or "Mission completed"
@@ -75,6 +80,9 @@ class BrowserMissionRunner:
             if pending:
                 return self._stop("waiting_human", "Model safety confirmation requires a stakeholder", step - 1)
             for raw_action in call.actions:
+                interrupted = self._interrupted(step - 1)
+                if interrupted:
+                    return interrupted
                 action = self._action_dict(raw_action)
                 reason = self._blocked_action_reason(action)
                 if reason:
@@ -95,6 +103,12 @@ class BrowserMissionRunner:
                                    "detail": "original"}}],
             )
         return self._stop("step_limit", f"Mission stopped at the {max_steps}-step limit", max_steps)
+
+    def _interrupted(self, steps: int) -> MissionOutcome | None:
+        state = self.control_state()
+        if state in {"paused", "stopped"}:
+            return self._stop(state, f"Stakeholder {state} the browser mission", steps)
+        return None
 
     def _json(self, method: str, path: str) -> dict:
         body, _ = self.runtime_request(method, path)

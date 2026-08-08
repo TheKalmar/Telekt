@@ -88,3 +88,13 @@ def test_step_limit_is_deterministic():
     outcome = BrowserMissionRunner(request, fake).run("acme", "observe", 1)
     assert outcome.status == "step_limit"
     assert outcome.steps == 1
+
+
+def test_pause_interrupts_before_browser_action():
+    request, calls = runtime()
+    fake = SimpleNamespace(responses=FakeResponses([response(action("click", x=20, y=30))]))
+    outcome = BrowserMissionRunner(request, fake, control_state=lambda: "paused").run(
+        "acme", "inspect pricing", 3
+    )
+    assert outcome.status == "paused"
+    assert not any(call[0] == "POST" for call in calls)

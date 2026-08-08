@@ -132,16 +132,18 @@ class CompanyOrchestrator:
         browser_runtime_request("PUT", f"/sessions/{self.company_id}", {
             "url": proposal.handoff_url, "allowed_domains": [hostname],
         })
+        max_steps = max(1, min(30, int(__import__("os").getenv("COMPUTER_USE_MAX_STEPS", "12"))))
         self.store.audit("browser.mission_started", {
             "task_id": task_id, "objective": proposal.objective,
-            "allowed_domains": [hostname],
+            "allowed_domains": [hostname], "max_steps": max_steps,
         })
         outcome = BrowserMissionRunner(
-            reporter=lambda event, payload: self.store.audit(event, {"task_id": task_id, **payload})
+            reporter=lambda event, payload: self.store.audit(event, {"task_id": task_id, **payload}),
+            control_state=lambda: self.store.get_control()["state"],
         ).run(
             self.company_id,
             proposal.objective,
-            max_steps=max(1, min(30, int(__import__("os").getenv("COMPUTER_USE_MAX_STEPS", "12")))),
+            max_steps=max_steps,
         )
         if outcome.status in {"waiting_human", "blocked"}:
             handoff = proposal.model_copy(update={
@@ -156,7 +158,8 @@ class CompanyOrchestrator:
                     "handoff_id": handoff_id, "reason": outcome.summary}
         if outcome.status != "completed":
             self.store.fail_task(task_id, outcome.summary)
-            return {"status": "failed", "cycles": cycle, "task_id": task_id,
+            status = outcome.status if outcome.status in {"paused", "stopped"} else "failed"
+            return {"status": status, "cycles": cycle, "task_id": task_id,
                     "mission_status": outcome.status}
         result = SpecialistResult(
             status="completed",
