@@ -25,8 +25,28 @@ gRPC on `127.0.0.1:7233` by default.
 - The original polling worker is replaced by `digital-company-temporal-worker`
   only when `compose.infrastructure.yaml` is included.
 - During this first migration stage, company business records remain in SQLite.
-  PostgreSQL schema version 1 is intentionally a foundation, not a claim that
-  data migration has already completed.
+PostgreSQL schema version 1 is intentionally a foundation, not a claim that
+data migration has already completed.
+
+## Import existing SQLite companies
+
+The importer opens SQLite in read-only mode, upserts every record into
+`telekt.company_records`, and aborts the PostgreSQL transaction if any per-table
+row count differs:
+
+```powershell
+.\.venv\Scripts\python scripts\migrate_sqlite_to_postgres.py `
+  --state-dir .company `
+  --database-url "postgresql://telekt:telekt-local-only@127.0.0.1:5432/telekt"
+```
+
+It is safe to rerun: company records are keyed by company, record type, and
+source record ID. Each successful attempt creates an immutable summary in
+`telekt.migration_runs`. The importer does not delete or edit SQLite files.
+
+Import completion is not the canonical-store cutover. Keep SQLite enabled until
+the PostgreSQL adapter passes read/write parity and the operator explicitly
+switches `DATABASE_BACKEND`.
 
 ## Verify
 
