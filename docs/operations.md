@@ -101,16 +101,21 @@ Large prompts can still exceed context. Keep snapshots compact and load artifact
 - Add end-to-end tests and agent evals.
 # Container operations
 
-The bundled-local Compose stack contains four services:
+The bundled-local Compose stack contains five services:
 
 - `app`: FastAPI control plane and autonomous loop.
 - `worker`: autonomous loop execution and restart recovery.
 - `ollama`: persistent local inference server.
 - `ollama-init`: idempotent one-shot model bootstrapper.
+- `browser-runtime`: isolated persistent headless Chromium controlled through the app proxy.
 
 Company databases and artifacts live in the `company_data` named volume. Ollama
 models live in `ollama_models`. Rebuilding or replacing containers therefore
 does not erase operating state.
+
+Browser cookies and profiles live in `browser_data`. Treat this volume as
+sensitive authentication material: restrict host access, encrypt production
+storage, and delete it when revoking all retained browser sessions.
 
 Use `compose.gpu.yaml` only on a host with a working NVIDIA Container Toolkit.
 The base `compose.yaml` remains CPU-compatible. Useful diagnostics are:

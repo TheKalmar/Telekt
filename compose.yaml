@@ -22,10 +22,24 @@ services:
       APPROVAL_LINK_TTL_HOURS: ${APPROVAL_LINK_TTL_HOURS:-72}
       SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
       SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
+      BROWSER_RUNTIME_URL: http://browser-runtime:8430
     volumes:
       - company_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  browser-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8430
+      BROWSER_DATA_DIR: /browser-data
+    volumes:
+      - browser_data:/browser-data
+    shm_size: "1gb"
     restart: unless-stopped
 
   worker:
@@ -68,3 +82,4 @@ services:
 
 volumes:
   company_data:
+  browser_data:

@@ -8,7 +8,13 @@ browser operation, manual stakeholder action, outsourced work, or custom build.
 
 ## Browser mission contract
 
-A future browser worker will receive a mission, not unrestricted internet access:
+The first browser-runtime slice provides a persistent Playwright/Chromium context
+per company, an HTTPS/domain boundary, screenshots, manual coordinate clicks,
+keyboard input, navigation, and checkpoint detection. Browser profiles persist
+in a Docker volume so cookies can survive container replacement.
+
+The cockpit is currently human-operated. A later Computer Use worker will receive
+a mission, not unrestricted internet access:
 
 - objective and allowed domains;
 - allowed read/write actions;
@@ -18,7 +24,7 @@ A future browser worker will receive a mission, not unrestricted internet access
 - success evidence and captured screenshots;
 - approval class for each side effect.
 
-Authenticated browser operation currently requires approval. Sending a message,
+AI-controlled authenticated browser operation currently requires approval. Sending a message,
 submitting a proposal, negotiating, hiring, spending, publishing, accepting terms,
 and production changes remain separate governed actions.
 
@@ -34,7 +40,9 @@ details, or another account-owner checkpoint, it stops. The dashboard shows:
 - **Done** and **Can't complete** outcomes.
 
 The human opens the site in their normal browser, performs the checkpoint, and
-records the outcome. That outcome becomes canonical CEO context and wakes the
+records the outcome. For sites that work in headless Chromium, the human can also
+use the dashboard cockpit's screenshot, click, type, and Enter controls. That
+outcome becomes canonical CEO context and wakes the
 worker. CAPTCHA must never be bypassed, outsourced to a solving service, or
 misrepresented as completed.
 

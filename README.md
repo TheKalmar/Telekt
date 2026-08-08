@@ -17,6 +17,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
 - Build/buy/integrate/manual strategy gate with durable platform capability tracking
 - Human takeover missions for login, CAPTCHA, 2FA, identity, terms, and other manual checkpoints
+- Isolated persistent Chromium cockpit with domain allowlists, screenshots, manual clicks, and direct typing
 - Local web control plane
 - Local Ollama model support through an OpenAI-compatible API
 - Automatic adoption of the original single-company POC database
@@ -55,7 +56,7 @@ The local model configuration is in [config/Modelfile.deepseek-company](config/M
 
 ### Docker (recommended)
 
-Docker Compose runs the control plane, Ollama, the customized local model, and
+Docker Compose runs the control plane, browser runtime, Ollama, the customized local model, and
 persistent volumes for company state and model files. No OpenAI key is required
 when a company uses Local mode.
 
@@ -96,8 +97,9 @@ deleting company data or models with:
 ```
 
 The named volumes `digital-company_company_data` and
-`digital-company_ollama_models` intentionally survive normal shutdown. Running
-`docker compose down --volumes` permanently deletes both and should only be used
+`digital-company_ollama_models` intentionally survive normal shutdown. Browser
+profiles and cookies live in `digital-company_browser_data`. Running
+`docker compose down --volumes` permanently deletes all three and should only be used
 for a full reset.
 
 For cloud or hybrid mode, copy `.env.example` to `.env` and set
@@ -178,6 +180,8 @@ src/digital_company/
   models.py          Typed agent/application contracts
   orchestrator.py    Autonomous control loop
   workspace.py       Confined artifact writes and deterministic validation
+  browser_runtime.py Isolated Playwright/Chromium session service
+  browser_policy.py  URL allowlist and human-checkpoint rules
   policy.py          Deterministic Governor
   store.py           Per-company SQLite repository
   registry.py        Multi-company portfolio registry

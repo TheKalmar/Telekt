@@ -119,6 +119,20 @@ resumes the company. The body is `{ "outcome": "..." }`.
 Records why the manual checkpoint could not be completed and resumes CEO
 reconsideration. Handoffs are single-use and distinct from permission approvals.
 
+## Browser cockpit
+
+- `GET /api/browser/health` checks the internal Chromium runtime.
+- `PUT /api/browser/session` opens/replaces the active company's persistent session.
+- `GET /api/browser/session` returns URL, title, viewport, and checkpoint status.
+- `GET /api/browser/screenshot` returns the current PNG viewport.
+- `POST /api/browser/actions` accepts a bounded manual click, type, key, or navigation action.
+- `DELETE /api/browser/session` closes Chromium while retaining its profile volume.
+
+Session creation requires an HTTPS URL and explicit public-domain allowlist.
+Loopback, private-network, link-local, embedded-credential, and off-list targets
+are rejected. The browser container is not published to the host; these control
+plane routes are the only supported access path.
+
 ### `POST /api/approvals/{approval_id}/approve`
 
 Approves one exact pending payload.

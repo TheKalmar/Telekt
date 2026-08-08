@@ -14,11 +14,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+browser = ["playwright>=1.54"]
 
 [project.scripts]
 digital-company = "digital_company.cli:main"
 digital-company-web = "digital_company.web:main"
 digital-company-worker = "digital_company.worker:main"
+digital-company-browser = "digital_company.browser_runtime:main"
 
 [build-system]
 requires = ["hatchling"]

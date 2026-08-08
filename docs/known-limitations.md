@@ -59,10 +59,11 @@ supplier marketplace connectors are not implemented yet.
 
 ## Browser and outsourcing
 
-The system now models browser missions, human takeover, tool discovery, talent
-sourcing, negotiation, and hiring as distinct governed actions. It does not yet
-run a persistent Playwright/Computer Use session, retain browser cookies, search
-Upwork/Fiverr automatically, send proposals, or hire contractors. CAPTCHA, login,
+The system now has an isolated persistent Playwright/Chromium cockpit with
+screenshots and manual input, and models browser missions, human takeover, tool
+discovery, talent sourcing, negotiation, and hiring as distinct governed actions.
+It does not yet run the AI Computer Use screenshot/action loop, stream live video,
+search Upwork/Fiverr automatically, send proposals, or hire contractors. CAPTCHA, login,
 2FA, identity checks, terms acceptance, and payment entry are intentionally
 human-only; bypass behavior is out of scope.
 

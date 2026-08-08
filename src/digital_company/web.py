@@ -10,7 +10,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from digital_company.registry import CompanyRegistry
@@ -59,6 +59,20 @@ class ApprovalDecisionIn(BaseModel):
 class HandoffDecisionIn(BaseModel):
     """Stakeholder evidence returned after a manual browser/account step."""
     outcome: str = Field(min_length=1, max_length=4000)
+
+
+class BrowserSessionIn(BaseModel):
+    url: str = Field(max_length=2000)
+    allowed_domains: list[str] = Field(min_length=1, max_length=30)
+
+
+class BrowserActionIn(BaseModel):
+    kind: str
+    x: float | None = None
+    y: float | None = None
+    text: str | None = Field(default=None, max_length=4000)
+    key: str | None = Field(default=None, max_length=40)
+    url: str | None = Field(default=None, max_length=2000)
 
 
 class EmailSettingsIn(BaseModel):
@@ -266,6 +280,83 @@ def ollama_api_url(path: str) -> str:
     """Build a native Ollama API URL from its OpenAI-compatible base URL."""
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
     return base_url.rstrip("/").removesuffix("/v1") + path
+
+
+def browser_runtime_request(method: str, path: str, payload: dict | None = None) -> tuple[bytes, str]:
+    """Call only the configured internal browser service; user input never selects the host."""
+    import json
+    import urllib.error
+    import urllib.request
+    base = os.getenv("BROWSER_RUNTIME_URL", "http://127.0.0.1:8430").rstrip("/")
+    body = json.dumps(payload).encode() if payload is not None else None
+    request = urllib.request.Request(
+        base + path, data=body, method=method,
+        headers={"Content-Type": "application/json"} if body else {},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=40) as response:
+            return response.read(), response.headers.get_content_type()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(exc.code, detail) from exc
+    except Exception as exc:
+        raise HTTPException(503, f"Browser runtime unavailable: {type(exc).__name__}") from exc
+
+
+@app.get("/api/browser/health")
+def browser_health():
+    try:
+        body, _ = browser_runtime_request("GET", "/health")
+        return __import__("json").loads(body)
+    except HTTPException:
+        return {"status": "offline", "browser": None}
+
+
+@app.put("/api/browser/session")
+def open_browser_session(payload: BrowserSessionIn):
+    company_id = registry.active_id()
+    body, _ = browser_runtime_request(
+        "PUT", f"/sessions/{company_id}", payload.model_dump(mode="json")
+    )
+    get_store(company_id).audit("browser.session_opened", {
+        "url": payload.url, "allowed_domains": payload.allowed_domains, "actor": "human",
+    })
+    return __import__("json").loads(body)
+
+
+@app.get("/api/browser/session")
+def browser_session():
+    body, _ = browser_runtime_request("GET", f"/sessions/{registry.active_id()}")
+    return __import__("json").loads(body)
+
+
+@app.get("/api/browser/screenshot")
+def browser_screenshot():
+    body, content_type = browser_runtime_request(
+        "GET", f"/sessions/{registry.active_id()}/screenshot"
+    )
+    return Response(body, media_type=content_type, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/browser/actions")
+def browser_action(payload: BrowserActionIn):
+    company_id = registry.active_id()
+    body, _ = browser_runtime_request(
+        "POST", f"/sessions/{company_id}/actions", payload.model_dump(mode="json")
+    )
+    get_store(company_id).audit("browser.human_action", {
+        "kind": payload.kind, "url": payload.url,
+        "coordinates": [payload.x, payload.y] if payload.kind == "click" else None,
+    })
+    return __import__("json").loads(body)
+
+
+@app.delete("/api/browser/session")
+def close_browser_session():
+    company_id = registry.active_id()
+    body, _ = browser_runtime_request("DELETE", f"/sessions/{company_id}")
+    get_store(company_id).audit("browser.session_closed", {"actor": "human"})
+    return __import__("json").loads(body)
 
 
 @app.get("/api/local-model/models")
