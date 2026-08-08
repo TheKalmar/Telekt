@@ -15,7 +15,7 @@ from digital_company.store import CompanyStore
 TABLES = [
     "company", "tasks", "approvals", "ledger", "audit_events", "runtime_control",
     "stakeholder_messages", "runtime_settings", "company_profile", "integrations",
-    "human_handoffs", "model_usage",
+    "human_handoffs", "model_usage", "agent_skills", "activity_executions",
 ]
 
 

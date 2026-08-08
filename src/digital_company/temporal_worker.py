@@ -36,27 +36,52 @@ def _apply_result_state(store, result: dict) -> None:
 
 
 @activity.defn(name="advance_company")
-async def advance_company(company_id: str) -> dict:
+async def advance_company(input_value: str | dict) -> dict:
     """Run one bounded company cycle without blocking Temporal's event loop."""
-    return await asyncio.to_thread(_advance_company_sync, company_id)
+    if isinstance(input_value, dict):
+        company_id = input_value["company_id"]
+        execution_key = input_value["execution_key"]
+    else:
+        company_id, execution_key = input_value, f"legacy:{input_value}"
+    try:
+        return await asyncio.to_thread(_advance_company_sync, company_id, execution_key)
+    except Exception as exc:
+        if activity.info().attempt < 3:
+            raise
+        return await asyncio.to_thread(_finalize_activity_failure, company_id, execution_key, exc)
 
 
-def _advance_company_sync(company_id: str) -> dict:
+def _finalize_activity_failure(company_id: str, execution_key: str, exc: Exception) -> dict:
     portfolio = registry()
     store = portfolio.store_for(company_id)
+    detail = f"{type(exc).__name__}: {exc}"
+    result = store.fail_activity(execution_key, detail)
+    store.set_control("error", detail)
+    store.audit("temporal.activity_failed", {
+        "activity": "advance_company", "execution_key": execution_key,
+        "attempts": 3, "error": detail,
+    })
+    return result
+
+
+def _advance_company_sync(company_id: str, execution_key: str | None = None) -> dict:
+    portfolio = registry()
+    store = portfolio.store_for(company_id)
+    execution_key = execution_key or f"manual:{company_id}"
+    cached = store.begin_activity(execution_key)
+    if cached is not None:
+        return cached
     if store.get_control()["state"] != "running":
-        return {"status": store.get_control()["state"], "cycles": 0}
-    try:
-        result = CompanyOrchestrator(
-            store, portfolio.artifacts_for(company_id), company_id=company_id,
-        ).run(max_cycles=1)
-        _apply_result_state(store, result)
+        result = {"status": store.get_control()["state"], "cycles": 0}
+        store.complete_activity(execution_key, result)
         return result
-    except Exception as exc:
-        detail = f"{type(exc).__name__}: {exc}"
-        store.set_control("error", detail)
-        store.audit("temporal.activity_failed", {"activity": "advance_company", "error": detail})
-        return {"status": "error", "cycles": 0, "error": detail}
+    result = CompanyOrchestrator(
+        store, portfolio.artifacts_for(company_id), company_id=company_id,
+        execution_key=execution_key,
+    ).run(max_cycles=1)
+    _apply_result_state(store, result)
+    store.complete_activity(execution_key, result)
+    return result
 
 
 @activity.defn(name="send_company_brief")

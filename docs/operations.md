@@ -111,12 +111,11 @@ Large prompts can still exceed context. Keep snapshots compact and load artifact
 
 ## Production checklist
 
-- Replace daemon threads with Temporal.
-- Replace SQLite with PostgreSQL and explicit tenant isolation.
+- Run only the Temporal worker and PostgreSQL backend in production.
 - Add identity, authentication, authorization, and CSRF protection.
 - Encrypt secrets and remove environment-file dependency.
 - Add sandboxed execution and network egress policy.
-- Add idempotency keys for every external action.
+- Pass the existing activity execution key into every future external provider adapter.
 - Add provider timeouts, retries, circuit breakers, and fallback policy.
 - Reconcile estimated usage costs with provider billing exports.
 - Add schema migrations and database backups.

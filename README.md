@@ -46,7 +46,7 @@ FastAPI API ---- Portfolio registry
         |              +---- PostgreSQL company state
         |              +---- Isolated artifact workspaces
         |
-        +---- Temporal signal ---- CompanyLoopWorkflowV2
+        +---- Temporal signal ---- CompanyLoopWorkflowV3
                                       |
                                       v
                                CompanyOrchestrator activity

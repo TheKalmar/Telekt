@@ -20,8 +20,8 @@ gRPC on `127.0.0.1:7233` by default.
 - PostgreSQL schema `telekt` is reserved for canonical application state.
 - Temporal creates and owns separate internal databases. Application code must
   never use Temporal tables as company memory.
-- `CompanyLoopWorkflowV2` schedules durable cycles on the isolated
-  `digital-company-v2` task queue. LLM calls, PostgreSQL access, email, browser
+- `CompanyLoopWorkflowV3` schedules durable cycles on the isolated
+  `digital-company-v3` task queue. LLM calls, PostgreSQL access, email, browser
   work, and filesystem changes run only inside Activities.
 - The original polling worker is replaced by `digital-company-temporal-worker`
   only when `compose.infrastructure.yaml` is included.
@@ -59,18 +59,20 @@ for the lightweight SQLite-only stack.
 
 ## Workflow version cutover
 
-The signal-driven implementation uses workflow type `CompanyLoopWorkflowV2`,
-workflow ID `company-loop-v2-<company-id>`, and task queue
-`digital-company-v2`. These new identities are intentional: existing polling
-workflow histories cannot be replayed by structurally different workflow code.
+The recovery-safe implementation uses workflow type `CompanyLoopWorkflowV3`,
+workflow ID `company-loop-v3-<company-id>`, and task queue
+`digital-company-v3`. These new identities are intentional: existing polling
+and V2 workflow histories cannot be replayed by structurally different workflow code.
 Legacy histories may remain visible in Temporal UI for audit, but no current
 worker polls their task queue.
 
-Each side-effecting company cycle has `maximum_attempts=1` at the Temporal
-level because a whole cycle is not universally idempotent yet. Provider-level
-transient retries remain inside the activity. An activity failure records an
-error in canonical state and waits for an explicit signal instead of risking a
-duplicate side effect.
+Each company cycle receives a monotonic execution key. PostgreSQL checkpoints
+the key, frozen proposal, owned task, attempt count, and final result. Temporal
+may retry the activity up to three times: unfinished work resumes the same task,
+while a committed result is returned from the cache if the worker died before
+acknowledging it. This prevents duplicate task and ledger records. External API
+adapters must additionally pass this key to providers that support idempotency;
+SMTP and providers without such a contract cannot offer true exactly-once delivery.
 
 ## Verify
 

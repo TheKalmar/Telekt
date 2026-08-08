@@ -19,7 +19,7 @@ POC history, including:
 - automatic human takeover for login, CAPTCHA, 2FA, safety checks, and form submission.
 
 This is a POC, not production software. The durable overlay now uses PostgreSQL
-for company and portfolio state plus signal-driven Temporal workflows. The
+for company and portfolio state plus recovery-safe Temporal V3 workflows. The
 lightweight polling worker and SQLite backend remain development fallbacks.
 
 ## 2. Clone and select the correct branch
@@ -139,7 +139,7 @@ Invoke-RestMethod http://127.0.0.1:8421/api/local-model/models
 ```
 
 Expected POC services are `app`, `worker`, and `browser-runtime`; bundled mode
-also runs `ollama` and the one-shot `ollama-init`. The current suite has 74 tests.
+also runs `ollama` and the one-shot `ollama-init`. The current suite has 79 tests.
 
 If the virtual environment does not exist:
 

@@ -22,7 +22,8 @@ class CompanyOrchestrator:
     approval, persistence, or artifact path checks.
     """
     def __init__(self, store: CompanyStore, artifacts_dir: Path, engine: AgentEngine | None = None,
-                 company_id: str | None = None, mailer: ApprovalMailer | None = None):
+                 company_id: str | None = None, mailer: ApprovalMailer | None = None,
+                 execution_key: str | None = None):
         self.store = store
         self.artifacts_dir = artifacts_dir
         self.workspace = WorkspaceRuntime(artifacts_dir)
@@ -36,6 +37,7 @@ class CompanyOrchestrator:
         self.governor = Governor()
         self.company_id = company_id
         self.mailer = mailer or ApprovalMailer()
+        self.execution_key = execution_key
 
     def _report(self, event: str, payload: dict) -> None:
         if event == "model.usage":
@@ -53,9 +55,27 @@ class CompanyOrchestrator:
             if control["state"] in {"paused", "stopped"}:
                 return {"status": control["state"], "cycles": cycle - 1}
 
+            recovered = self.store.recover_activity_task(self.execution_key) if self.execution_key else None
+            if recovered:
+                task_id, proposal, status = recovered
+                self.store.audit("activity.task_recovered", {
+                    "execution_key": self.execution_key, "task_id": task_id, "status": status,
+                })
+                if status == "executing":
+                    return self._execute_claimed(task_id, proposal, cycle)
+                snapshot = self.store.snapshot()
+                skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value)
+                result = self.engine.execute(
+                    proposal, snapshot, self._artifact_context(proposal.specialist), skills,
+                )
+                self._persist_result(task_id, proposal, result)
+                return {"status": "recovered_task_completed", "cycles": cycle, "task_id": task_id}
+
             approved = self.store.claim_approved_task()
             if approved:
                 task_id, proposal = approved
+                if self.execution_key:
+                    self.store.link_activity_task(self.execution_key, task_id, proposal)
                 return self._execute_claimed(task_id, proposal, cycle)
 
             snapshot = self.store.snapshot()
@@ -67,7 +87,7 @@ class CompanyOrchestrator:
                 proposal.stakeholder_response,
             )
             policy = self.governor.evaluate(proposal, snapshot.remaining_budget_eur)
-            task_id = self.store.create_task(proposal, "proposed")
+            task_id = self.store.create_task(proposal, "proposed", self.execution_key)
 
             if policy.outcome == "deny":
                 self.store.set_task_status(task_id, "denied")

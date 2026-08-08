@@ -25,9 +25,9 @@ def enabled() -> bool:
 
 
 def workflow_id(company_id: str) -> str:
-    # V2 intentionally starts a fresh history. Replaying the former polling
-    # workflow with signal-driven code would be nondeterministic.
-    return f"company-loop-v2-{company_id}"
+    # V3 starts a fresh history because activity inputs and retry policy changed
+    # for durable idempotency. Replaying V2 history would be nondeterministic.
+    return f"company-loop-v3-{company_id}"
 
 
 async def ensure_workflow(client: Client, company_id: str):

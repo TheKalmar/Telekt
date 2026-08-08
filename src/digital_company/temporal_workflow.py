@@ -8,7 +8,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 
-TASK_QUEUE = "digital-company-v2"
+TASK_QUEUE = "digital-company-v3"
 WAITING_STATUSES = {
     "waiting_for_approval", "waiting_for_human", "paused", "stopped",
     "error", "failed",
@@ -20,7 +20,7 @@ def waits_for_external_signal(status: str) -> bool:
     return status in WAITING_STATUSES
 
 
-@workflow.defn(name="CompanyLoopWorkflowV2")
+@workflow.defn(name="CompanyLoopWorkflowV3")
 class CompanyLoopWorkflow:
     """Own durable scheduling while Activities own every side effect.
 
@@ -37,6 +37,7 @@ class CompanyLoopWorkflow:
         self._wake_count = 0
         self._last_status = "idle"
         self._last_wake_reason = "workflow_created"
+        self._execution_sequence = 0
 
     @workflow.signal
     async def start(self, reason: str = "operator_start") -> None:
@@ -92,6 +93,7 @@ class CompanyLoopWorkflow:
         if isinstance(input_value, dict):
             company_id = input_value["company_id"]
             self._running = bool(input_value.get("running", False))
+            self._execution_sequence = int(input_value.get("execution_sequence", 0))
         else:
             company_id = input_value
 
@@ -115,14 +117,17 @@ class CompanyLoopWorkflow:
 
             result = await workflow.execute_activity(
                 "advance_company",
-                company_id,
+                {"company_id": company_id,
+                 "execution_key": f"{company_id}:execution:{self._execution_sequence + 1}"},
                 start_to_close_timeout=timedelta(minutes=10),
-                # A complete orchestration cycle is not generally idempotent.
-                # Provider retries live inside the activity; Temporal must not
-                # replay the whole side-effecting cycle automatically.
-                retry_policy=RetryPolicy(maximum_attempts=1),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=5),
+                    maximum_interval=timedelta(minutes=1),
+                ),
             )
             self._cycles += 1
+            self._execution_sequence += 1
             self._last_status = str(result.get("status", "unknown"))
             if waits_for_external_signal(self._last_status):
                 self._running = False
@@ -133,6 +138,7 @@ class CompanyLoopWorkflow:
                 workflow.continue_as_new({
                     "company_id": company_id,
                     "running": self._running and not self._paused,
+                    "execution_sequence": self._execution_sequence,
                 })
 
         return {"status": "shutdown", "cycles": self._cycles}

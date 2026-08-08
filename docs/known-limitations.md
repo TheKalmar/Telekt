@@ -6,10 +6,11 @@ This document is intentionally candid so a new developer does not mistake POC be
 
 The infrastructure overlay uses a signal-driven Temporal workflow per company,
 including durable pause/start/stop, approval, handoff, stakeholder-message
-signals, hourly brief timers, and startup recovery. The lightweight stack still
-ships the legacy SQLite polling worker as a development fallback. Whole-cycle
-Temporal retries are deliberately disabled until every connector and activity
-has an idempotency contract.
+signals, hourly brief timers, and startup recovery. V3 gives every company cycle
+a stable execution key, frozen task checkpoint, cached result, and up to three
+Temporal attempts. The lightweight stack still ships the legacy SQLite polling
+worker as a development fallback. External connectors still require their own
+provider-level idempotency contracts.
 
 ## Persistence
 

@@ -104,7 +104,15 @@ class CompanyStore:
           id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL,
           definition_json TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS activity_executions (
+          execution_key TEXT PRIMARY KEY, status TEXT NOT NULL,
+          task_id TEXT, result_json TEXT, attempt_count INTEGER NOT NULL,
+          started_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         """)
+        task_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(tasks)")}
+        if "proposal_json" not in task_columns:
+            self.db.execute("ALTER TABLE tasks ADD COLUMN proposal_json TEXT")
         approval_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(approvals)")}
         if "decision_comment" not in approval_columns:
             self.db.execute("ALTER TABLE approvals ADD COLUMN decision_comment TEXT")
@@ -280,15 +288,130 @@ class CompanyStore:
             })
         return result
 
-    def create_task(self, proposal: TaskProposal, status: str) -> str:
+    def begin_activity(self, execution_key: str) -> dict | None:
+        """Start/recover one Temporal activity or return its cached result."""
+        row = self.db.execute(
+            "SELECT status,task_id,result_json FROM activity_executions WHERE execution_key=?",
+            (execution_key,),
+        ).fetchone()
+        now = utc_now()
+        if row and row["status"] == "completed":
+            return json.loads(row["result_json"])
+        if row and row["task_id"]:
+            task = self.db.execute("SELECT status FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
+            if task and task["status"] in {
+                "completed", "denied", "stopped", "superseded", "waiting_approval", "waiting_human",
+                "failed", "rejected",
+            }:
+                status_map = {
+                    "waiting_approval": "waiting_for_approval",
+                    "waiting_human": "waiting_for_human",
+                    "completed": "recovered_task_completed",
+                    "failed": "error",
+                    "rejected": "failed",
+                }
+                result = {
+                    "status": status_map.get(task["status"], task["status"]),
+                    "cycles": 1, "task_id": row["task_id"], "recovered": True,
+                }
+                self.complete_activity(execution_key, result)
+                return result
+        if row:
+            self.db.execute(
+                "UPDATE activity_executions SET attempt_count=attempt_count+1,updated_at=? WHERE execution_key=?",
+                (now, execution_key),
+            )
+        else:
+            self.db.execute(
+                "INSERT INTO activity_executions VALUES(?,?,?,?,?,?,?)",
+                (execution_key, "started", None, None, 1, now, now),
+            )
+        self.db.commit()
+        return None
+
+    def fail_activity(self, execution_key: str, reason: str) -> dict:
+        """Finalize unfinished work after the final Temporal attempt."""
+        now = utc_now()
+        row = self.db.execute(
+            "SELECT task_id FROM activity_executions WHERE execution_key=?", (execution_key,),
+        ).fetchone()
+        if row and row["task_id"]:
+            result = SpecialistResult(
+                status="failed", summary=reason, evidence=[], recommendation="Human review required",
+            )
+            self.db.execute(
+                "UPDATE tasks SET status='failed',result_json=?,completed_at=? "
+                "WHERE id=? AND status IN ('proposed','executing')",
+                (result.model_dump_json(), now, row["task_id"]),
+            )
+            self.db.execute(
+                "UPDATE approvals SET status='execution_failed' "
+                "WHERE task_id=? AND status='executing'", (row["task_id"],),
+            )
+        outcome = {"status": "error", "cycles": 0, "error": reason}
+        self.db.execute(
+            "UPDATE activity_executions SET status='completed',result_json=?,updated_at=? "
+            "WHERE execution_key=?", (json.dumps(outcome), now, execution_key),
+        )
+        self.db.commit()
+        return outcome
+
+    def complete_activity(self, execution_key: str, result: dict) -> None:
+        """Cache the durable activity outcome before Temporal receives its ACK."""
+        self.db.execute(
+            "UPDATE activity_executions SET status='completed',result_json=?,updated_at=? WHERE execution_key=?",
+            (json.dumps(result), utc_now(), execution_key),
+        )
+        self.db.commit()
+
+    def recover_activity_task(self, execution_key: str) -> tuple[str, TaskProposal, str] | None:
+        """Return unfinished frozen work belonging to a retried activity."""
+        row = self.db.execute(
+            "SELECT t.id,t.status,t.proposal_json FROM activity_executions e "
+            "JOIN tasks t ON t.id=e.task_id WHERE e.execution_key=? "
+            "AND t.status IN ('proposed','executing')", (execution_key,),
+        ).fetchone()
+        if not row or not row["proposal_json"]:
+            return None
+        return row["id"], TaskProposal.model_validate_json(row["proposal_json"]), row["status"]
+
+    def link_activity_task(
+        self, execution_key: str, task_id: str, proposal: TaskProposal | None = None,
+    ) -> None:
+        """Attach an already-created approved task to its current activity."""
+        if proposal is not None:
+            self.db.execute(
+                "UPDATE tasks SET proposal_json=COALESCE(proposal_json,?) WHERE id=?",
+                (proposal.model_dump_json(), task_id),
+            )
+        changed = self.db.execute(
+            "UPDATE activity_executions SET task_id=?,updated_at=? "
+            "WHERE execution_key=? AND (task_id IS NULL OR task_id=?)",
+            (task_id, utc_now(), execution_key, task_id),
+        ).rowcount
+        if changed != 1:
+            raise RuntimeError("Activity already owns a different task")
+        self.db.commit()
+
+    def create_task(self, proposal: TaskProposal, status: str, execution_key: str | None = None) -> str:
         """Persist a CEO proposal before authorization or execution."""
         task_id = str(uuid4())
         self.db.execute(
-            "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO tasks(id,action,title,specialist,objective,rationale,estimated_cost_eur,status,"
+            "result_json,created_at,completed_at,proposal_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (task_id, proposal.action.value, proposal.title, proposal.specialist,
              proposal.objective, proposal.rationale, proposal.estimated_cost_eur,
-             status, None, utc_now(), None),
+             status, None, utc_now(), None, proposal.model_dump_json()),
         )
+        if execution_key:
+            changed = self.db.execute(
+                "UPDATE activity_executions SET task_id=?,updated_at=? "
+                "WHERE execution_key=? AND task_id IS NULL",
+                (task_id, utc_now(), execution_key),
+            ).rowcount
+            if changed != 1:
+                self.db.rollback()
+                raise RuntimeError("Activity already owns a different task")
         self.db.commit()
         self.audit("task.created", {"task_id": task_id, "proposal": proposal.model_dump(mode="json")})
         return task_id

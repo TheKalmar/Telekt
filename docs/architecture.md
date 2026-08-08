@@ -8,7 +8,7 @@ Digital AI Company explores a system in which a human supplies capital, goals, r
 
 The LLM does not own the workflow, authorization, budget, or canonical state.
 In the opt-in durable stack, Temporal owns workflow history and retry timing;
-PostgreSQL is becoming canonical company state through a staged migration.
+PostgreSQL is canonical company and portfolio state in the infrastructure stack.
 
 ```text
 Observe canonical state
@@ -39,11 +39,16 @@ This separation makes the probabilistic reasoning layer replaceable and keeps au
 `web.py` exposes a FastAPI server and serves the single-page dashboard. It owns portfolio selection, runtime controls, stakeholder chat, approvals, and model-mode settings. It persists operator intent but never executes an agent cycle inside an HTTP process.
 
 With `compose.infrastructure.yaml`, `temporal_worker.py` runs as the execution
-service. One `CompanyLoopWorkflowV2` exists per company. API handlers persist
+service. One `CompanyLoopWorkflowV3` exists per company. API handlers persist
 operator intent and signal the workflow; approvals, handoffs, and stakeholder
 directives also signal it. A waiting workflow consumes no model calls and does
 not poll company state. `worker.py` remains only as the lightweight SQLite
 development fallback when Temporal is not configured.
+
+Every V3 company cycle has a stable execution key stored with its frozen task
+and result. Temporal can retry a crashed activity without creating another task,
+charging the ledger twice, or advancing past a result whose database commit
+succeeded before the Temporal acknowledgement.
 
 ### Portfolio registry
 
