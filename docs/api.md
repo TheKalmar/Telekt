@@ -107,6 +107,18 @@ Approving a pending item queues its exact frozen proposal for worker execution.
 Rejecting it permanently closes that task and lets the CEO reconsider. Repeating
 either decision on a resolved approval returns an error; an approval is single-use.
 
+## Human takeover
+
+### `POST /api/handoffs/{handoff_id}/complete`
+
+Records the stakeholder's outcome/evidence for a pending manual checkpoint and
+resumes the company. The body is `{ "outcome": "..." }`.
+
+### `POST /api/handoffs/{handoff_id}/cancel`
+
+Records why the manual checkpoint could not be completed and resumes CEO
+reconsideration. Handoffs are single-use and distinct from permission approvals.
+
 ### `POST /api/approvals/{approval_id}/approve`
 
 Approves one exact pending payload.

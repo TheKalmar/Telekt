@@ -82,6 +82,11 @@ class CompanyStore:
           config_json TEXT NOT NULL, required_secrets_json TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS human_handoffs (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, payload_json TEXT NOT NULL,
+          status TEXT NOT NULL, outcome TEXT, created_at TEXT NOT NULL,
+          resolved_at TEXT
+        );
         """)
         approval_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(approvals)")}
         if "decision_comment" not in approval_columns:
@@ -158,6 +163,7 @@ class CompanyStore:
             stakeholder_messages=messages,
             profile=self.get_profile(),
             capabilities=self.list_integrations(),
+            human_handoffs=self.list_handoffs(status="pending"),
         )
 
     def get_profile(self) -> dict:
@@ -220,6 +226,76 @@ class CompanyStore:
         self.db.commit()
         self.audit("task.created", {"task_id": task_id, "proposal": proposal.model_dump(mode="json")})
         return task_id
+
+    def create_handoff(self, task_id: str, proposal: TaskProposal) -> str:
+        """Pause execution on a precise human-only browser/account checkpoint."""
+        handoff_id = str(uuid4())
+        now = utc_now()
+        self.db.execute(
+            "INSERT INTO human_handoffs VALUES(?,?,?,?,?,?,?)",
+            (handoff_id, task_id, proposal.model_dump_json(), "pending", None, now, None),
+        )
+        self.db.execute("UPDATE tasks SET status='waiting_human' WHERE id=?", (task_id,))
+        self.db.execute(
+            "UPDATE runtime_control SET state='waiting_human',detail=?,updated_at=? WHERE id=1",
+            (proposal.title, now),
+        )
+        self.db.commit()
+        self.audit("handoff.requested", {
+            "handoff_id": handoff_id, "task_id": task_id,
+            "url": proposal.handoff_url,
+            "instructions": proposal.handoff_instructions,
+            "resume_evidence": proposal.resume_evidence,
+        })
+        return handoff_id
+
+    def list_handoffs(self, status: str | None = None) -> list[dict]:
+        query = "SELECT * FROM human_handoffs"
+        params: tuple = ()
+        if status:
+            query += " WHERE status=?"
+            params = (status,)
+        query += " ORDER BY created_at DESC LIMIT 30"
+        return [dict(row) for row in self.db.execute(query, params)]
+
+    def resolve_handoff(self, handoff_id: str, outcome: str, completed: bool) -> None:
+        """Record human evidence and resume the CEO without pretending the agent did it."""
+        if not outcome.strip():
+            raise ValueError("A handoff outcome is required")
+        row = self.db.execute(
+            "SELECT task_id,status,payload_json FROM human_handoffs WHERE id=?", (handoff_id,)
+        ).fetchone()
+        if not row or row["status"] != "pending":
+            raise RuntimeError("Pending handoff not found")
+        now = utc_now()
+        status = "completed" if completed else "cancelled"
+        result = SpecialistResult(
+            status="completed" if completed else "failed",
+            summary=f"Human handoff {status}: {outcome.strip()}",
+            evidence=[f"Stakeholder-reported handoff outcome: {outcome.strip()}"],
+            recommendation="CEO should verify the evidence and choose the next action",
+        )
+        self.db.execute(
+            "UPDATE human_handoffs SET status=?,outcome=?,resolved_at=? WHERE id=?",
+            (status, outcome.strip(), now, handoff_id),
+        )
+        self.db.execute(
+            "UPDATE tasks SET status=?,result_json=?,completed_at=? WHERE id=?",
+            ("completed" if completed else "rejected", result.model_dump_json(), now, row["task_id"]),
+        )
+        message_id = str(uuid4())
+        self.db.execute(
+            "INSERT INTO stakeholder_messages VALUES(?,?,?,?,?,?,?)",
+            (message_id, "handoff_result", outcome.strip(), "pending", None, now, None),
+        )
+        self.db.execute(
+            "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
+            (f"Human handoff {status}; CEO reconsideration queued", now),
+        )
+        self.db.commit()
+        self.audit(f"handoff.{status}", {
+            "handoff_id": handoff_id, "task_id": row["task_id"], "message_id": message_id,
+        })
 
     def complete_task(self, task_id: str, result: SpecialistResult, cost: float) -> None:
         """Atomically complete a task, its approval, and authorized ledger cost."""
@@ -397,7 +473,7 @@ class CompanyStore:
 
     def set_control(self, state: str, detail: str | None = None) -> None:
         """Set runtime state and emit a corresponding audit event."""
-        if state not in {"running", "paused", "stopped", "waiting_approval", "error"}:
+        if state not in {"running", "paused", "stopped", "waiting_approval", "waiting_human", "error"}:
             raise ValueError("Invalid runtime state")
         self.db.execute("UPDATE runtime_control SET state=?,detail=?,updated_at=? WHERE id=1",
                         (state, detail, utc_now()))
@@ -422,6 +498,15 @@ class CompanyStore:
             for row in pending:
                 self.db.execute("UPDATE approvals SET status='superseded',resolved_at=? WHERE id=?", (utc_now(), row["id"]))
                 self.db.execute("UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],))
+            handoffs = list(self.db.execute(
+                "SELECT id,task_id FROM human_handoffs WHERE status='pending'"
+            ))
+            for row in handoffs:
+                self.db.execute(
+                    "UPDATE human_handoffs SET status='superseded',resolved_at=? WHERE id=?",
+                    (utc_now(), row["id"]),
+                )
+                self.db.execute("UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],))
         self.db.commit()
         self.audit("stakeholder.message", {"message_id": message_id, "kind": kind})
         return message_id
@@ -443,6 +528,7 @@ class CompanyStore:
         snapshot["settings"] = self.get_settings()
         snapshot["profile"] = self.get_profile()
         snapshot["approvals"] = self.list_approvals()[:20]
+        snapshot["human_handoffs"] = self.list_handoffs()
         snapshot["recent_tasks"] = [dict(row) for row in self.db.execute(
             "SELECT id,action,title,specialist,status,created_at,completed_at FROM tasks "
             "ORDER BY created_at DESC LIMIT 20"

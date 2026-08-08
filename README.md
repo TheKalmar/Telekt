@@ -16,6 +16,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Operations dashboard with active agent, model latency, failures, fallbacks, task states, and audit events
 - Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
 - Build/buy/integrate/manual strategy gate with durable platform capability tracking
+- Human takeover missions for login, CAPTCHA, 2FA, identity, terms, and other manual checkpoints
 - Local web control plane
 - Local Ollama model support through an OpenAI-compatible API
 - Automatic adoption of the original single-company POC database
@@ -209,6 +210,7 @@ Read these in order:
 7. [Email approvals](docs/email-approvals.md)
 8. [Model reliability](docs/model-reliability.md)
 9. [Platform strategy and Shopify](docs/platform-integrations.md)
+10. [Browser missions and human takeover](docs/browser-handoffs.md)
 
 ## Security warning
 

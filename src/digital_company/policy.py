@@ -18,6 +18,9 @@ class Governor:
             ActionType.DEPLOY_PRODUCTION,
             ActionType.REQUEST_PLATFORM_ACCESS,
             ActionType.PUBLISH_CATALOG,
+            ActionType.BROWSER_OPERATE,
+            ActionType.NEGOTIATE_VENDOR,
+            ActionType.HIRE_VENDOR,
         }:
             return PolicyDecision(
                 outcome="require_approval",

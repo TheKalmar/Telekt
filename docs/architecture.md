@@ -68,6 +68,7 @@ Business data never lives in the registry. This prevents normal queries from mix
 - stakeholder messages and CEO responses;
 - audit events.
 - integration capability records containing non-secret configuration, requested permissions, and secret-presence flags.
+- resumable human handoffs with a URL, bounded instructions, required return evidence, and outcome.
 
 `snapshot()` creates the compact typed context sent to agents. Large artifact bodies are omitted so generated code is not resent on every model call.
 
@@ -92,6 +93,9 @@ Model routing is currently static:
 | Internal research, product, development, QA | Allow |
 | Platform evaluation and product sourcing research | Allow |
 | Request platform access or publish a catalog | Require approval |
+| Discover tools or research contractor candidates | Allow |
+| Authenticated browser operation, vendor negotiation, or hiring | Require approval |
+| CAPTCHA, login, 2FA, identity verification, terms, or payment entry | Human takeover |
 | External outreach | Require approval |
 | Spend money | Require approval |
 | Production deployment | Require approval |
@@ -141,12 +145,18 @@ Runtime states are:
 ```text
 stopped -> running -> waiting_approval
    ^          |
+   |          +---- waiting_human
    |          +---- paused
    |          +---- error
    +--------------- stopped
 ```
 
 Pause and stop are cooperative. They are evaluated between complete model calls and database operations.
+
+`waiting_human` is a resumable checkpoint rather than a generic approval. The
+CEO supplies the target URL, numbered human steps, and required return evidence.
+Completing or cancelling the card creates canonical stakeholder evidence and
+wakes the worker for CEO reconsideration.
 
 ## Migration path
 

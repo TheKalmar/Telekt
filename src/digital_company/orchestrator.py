@@ -69,6 +69,12 @@ class CompanyOrchestrator:
                 self.store.set_task_status(task_id, "denied")
                 self.store.audit("task.denied", {"task_id": task_id, "reason": policy.reason})
                 continue
+            if proposal.action == ActionType.REQUEST_HUMAN_HANDOFF:
+                handoff_id = self.store.create_handoff(task_id, proposal)
+                return {
+                    "status": "waiting_for_human", "cycles": cycle,
+                    "handoff_id": handoff_id, "task": proposal.model_dump(mode="json"),
+                }
             if policy.outcome == "require_approval":
                 if proposal.action == ActionType.REQUEST_PLATFORM_ACCESS:
                     self.store.request_integration(

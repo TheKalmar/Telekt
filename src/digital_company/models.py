@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -20,6 +21,12 @@ class ActionType(StrEnum):
     REQUEST_PLATFORM_ACCESS = "request_platform_access"
     SOURCE_PRODUCTS = "source_products"
     PUBLISH_CATALOG = "publish_catalog"
+    DISCOVER_TOOL = "discover_tool"
+    SOURCE_TALENT = "source_talent"
+    BROWSER_OPERATE = "browser_operate"
+    REQUEST_HUMAN_HANDOFF = "request_human_handoff"
+    NEGOTIATE_VENDOR = "negotiate_vendor"
+    HIRE_VENDOR = "hire_vendor"
     DEFINE_PRODUCT = "define_product"
     BUILD_MVP = "build_mvp"
     QA_MVP = "qa_mvp"
@@ -38,11 +45,15 @@ class TaskProposal(BaseModel):
     rationale: str
     expected_evidence: list[str] = Field(min_length=1)
     estimated_cost_eur: float = Field(default=0, ge=0)
-    specialist: Literal["research", "platform", "product", "development", "qa", "growth", "ceo"]
+    specialist: Literal["research", "platform", "operations", "product", "development", "qa", "growth", "ceo"]
     stakeholder_response: str | None = None
     stakeholder_message_ids_considered: list[str] = Field(default_factory=list)
     platform_candidate: str | None = Field(default=None, max_length=80)
     required_capabilities: list[str] = Field(default_factory=list)
+    execution_mode: Literal["reasoning", "api", "browser", "manual", "outsourced", "build"] = "reasoning"
+    handoff_url: str | None = Field(default=None, max_length=2000)
+    handoff_instructions: list[str] = Field(default_factory=list)
+    resume_evidence: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def platform_access_is_explicit(self):
@@ -51,6 +62,13 @@ class TaskProposal(BaseModel):
                 raise ValueError(
                     "Platform access requests require platform_candidate and required_capabilities"
                 )
+        if self.action == ActionType.REQUEST_HUMAN_HANDOFF:
+            if self.execution_mode != "manual" or not self.handoff_instructions or not self.resume_evidence:
+                raise ValueError(
+                    "Human handoffs require manual execution_mode, instructions, and resume evidence"
+                )
+            if self.handoff_url and urlparse(self.handoff_url).scheme not in {"http", "https"}:
+                raise ValueError("Handoff URL must use http or https")
         return self
 
 
@@ -82,3 +100,4 @@ class CompanySnapshot(BaseModel):
     stakeholder_messages: list[dict] = Field(default_factory=list)
     profile: dict = Field(default_factory=dict)
     capabilities: list[dict] = Field(default_factory=list)
+    human_handoffs: list[dict] = Field(default_factory=list)

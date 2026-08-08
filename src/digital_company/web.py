@@ -56,6 +56,11 @@ class ApprovalDecisionIn(BaseModel):
     comment: str = Field(default="", max_length=4000)
 
 
+class HandoffDecisionIn(BaseModel):
+    """Stakeholder evidence returned after a manual browser/account step."""
+    outcome: str = Field(min_length=1, max_length=4000)
+
+
 class EmailSettingsIn(BaseModel):
     """Non-secret per-company approval notification settings."""
     enabled: bool = False
@@ -129,6 +134,7 @@ def dashboard():
             "capabilities": [],
             "operations": {"active_model_run": None, "model": {}, "tasks_by_status": {}, "estimated_spend_eur": 0, "recent_events": []},
             "approvals": [],
+            "human_handoffs": [],
             "stakeholder_messages": [],
             "portfolio": {"active_company_id": None, "companies": []},
         }
@@ -225,7 +231,7 @@ def message(payload: MessageIn):
         message_id = store.add_stakeholder_message(payload.content.strip(), payload.kind)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    if store.get_control()["state"] in {"waiting_approval", "paused"} and payload.kind == "directive":
+    if store.get_control()["state"] in {"waiting_approval", "waiting_human", "paused"} and payload.kind == "directive":
         store.set_control("running", "Stakeholder directive queued for worker")
     return {"id": message_id, "status": "pending"}
 
@@ -350,6 +356,20 @@ def approval(approval_id: str, decision: str, payload: ApprovalDecisionIn):
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"status": decision}
+
+
+@app.post("/api/handoffs/{handoff_id}/{decision}")
+def handoff(handoff_id: str, decision: str, payload: HandoffDecisionIn):
+    """Complete or cancel a human takeover and wake the autonomous loop."""
+    if decision not in {"complete", "cancel"}:
+        raise HTTPException(400, "Unknown handoff decision")
+    try:
+        get_store().resolve_handoff(handoff_id, payload.outcome, decision == "complete")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"status": "completed" if decision == "complete" else "cancelled"}
 
 
 def approval_page(company_id: str, approval_id: str, email: str, expires: int, token: str, message: str = "") -> str:
