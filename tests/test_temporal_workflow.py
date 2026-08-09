@@ -43,9 +43,9 @@ def test_temporal_gateway_is_optional_without_infrastructure(monkeypatch):
     assert temporal_gateway.signal_company("company-1", "start", "test") is False
 
 
-def test_v3_workflow_id_does_not_replay_pre_idempotency_history():
-    assert temporal_gateway.workflow_id("abc") == "company-loop-v3-abc"
-    assert TASK_QUEUE == "digital-company-v3"
+def test_v4_workflow_id_does_not_replay_pre_heartbeat_history():
+    assert temporal_gateway.workflow_id("abc") == "company-loop-v4-abc"
+    assert TASK_QUEUE == "digital-company-v4"
 
 
 class FakeStore:

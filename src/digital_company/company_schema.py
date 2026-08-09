@@ -4,6 +4,9 @@ from __future__ import annotations
 
 
 BASE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS company_schema_versions (
+  version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS company (
   id INTEGER PRIMARY KEY CHECK (id = 1), goal TEXT NOT NULL,
   initial_budget_eur REAL NOT NULL, created_at TEXT NOT NULL
@@ -92,11 +95,34 @@ CREATE TABLE IF NOT EXISTS activity_executions (
   task_id TEXT, result_json TEXT, attempt_count INTEGER NOT NULL,
   started_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS tasks_status_created ON tasks(status, created_at);
+CREATE INDEX IF NOT EXISTS approvals_status_created ON approvals(status, created_at);
+CREATE INDEX IF NOT EXISTS approvals_task ON approvals(task_id);
+CREATE INDEX IF NOT EXISTS approval_votes_approval ON approval_votes(approval_id, decision);
+CREATE INDEX IF NOT EXISTS audit_events_time ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS stakeholder_messages_status ON stakeholder_messages(status, created_at);
+CREATE INDEX IF NOT EXISTS handoffs_status_created ON human_handoffs(status, created_at);
+CREATE INDEX IF NOT EXISTS activities_status_updated ON activity_executions(status, updated_at);
 """
+
+
+SCHEMA_VERSIONS = (
+    (1, "Canonical company state"),
+    (2, "Model routing and stakeholder control"),
+    (3, "Temporal activity recovery"),
+    (4, "Skill and platform capability registry"),
+    (5, "Provider-neutral integration connections"),
+    (6, "Versioned policy and approval quorum"),
+)
 
 
 def migrate_company_database(db, now: str) -> None:
     """Create the current additive POC schema and singleton defaults."""
+    if getattr(db, "is_postgres", False):
+        # App and worker can open the same company simultaneously during a
+        # rolling deployment. Serialize DDL inside this schema transaction.
+        db.execute("BEGIN")
+        db.execute("SELECT pg_advisory_xact_lock(hashtext(current_schema()))")
     db.executescript(BASE_SCHEMA)
     _add_column(db, "tasks", "proposal_json", "TEXT")
     _add_column(db, "approvals", "decision_comment", "TEXT")
@@ -133,6 +159,12 @@ def migrate_company_database(db, now: str) -> None:
         "VALUES(1,'local','deepseek-company:8b',?)",
         (now,),
     )
+    for version, description in SCHEMA_VERSIONS:
+        db.execute(
+            "INSERT INTO company_schema_versions(version,description,applied_at) VALUES(?,?,?) "
+            "ON CONFLICT(version) DO NOTHING",
+            (version, description, now),
+        )
     db.commit()
 
 

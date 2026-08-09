@@ -8,7 +8,9 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 
-TASK_QUEUE = "digital-company-v3"
+TASK_QUEUE = "digital-company-v4"
+HISTORY_EVENT_LIMIT = 1000
+RUN_CYCLE_LIMIT = 250
 WAITING_STATUSES = {
     "waiting_for_approval", "waiting_for_human", "paused", "stopped",
     "error", "failed",
@@ -20,7 +22,7 @@ def waits_for_external_signal(status: str) -> bool:
     return status in WAITING_STATUSES
 
 
-@workflow.defn(name="CompanyLoopWorkflowV3")
+@workflow.defn(name="CompanyLoopWorkflowV4")
 class CompanyLoopWorkflow:
     """Own durable scheduling while Activities own every side effect.
 
@@ -38,6 +40,7 @@ class CompanyLoopWorkflow:
         self._last_status = "idle"
         self._last_wake_reason = "workflow_created"
         self._execution_sequence = 0
+        self._run_cycles = 0
 
     @workflow.signal
     async def start(self, reason: str = "operator_start") -> None:
@@ -94,6 +97,10 @@ class CompanyLoopWorkflow:
             company_id = input_value["company_id"]
             self._running = bool(input_value.get("running", False))
             self._execution_sequence = int(input_value.get("execution_sequence", 0))
+            self._cycles = int(input_value.get("cycles", 0))
+            self._wake_count = int(input_value.get("wake_count", 0))
+            self._last_status = str(input_value.get("last_status", "idle"))
+            self._last_wake_reason = str(input_value.get("last_wake_reason", "continued_as_new"))
         else:
             company_id = input_value
 
@@ -111,6 +118,7 @@ class CompanyLoopWorkflow:
                         start_to_close_timeout=timedelta(minutes=2),
                         retry_policy=RetryPolicy(maximum_attempts=1),
                     )
+                    self._continue_if_history_is_large(company_id)
                     continue
                 if self._shutdown:
                     break
@@ -120,6 +128,9 @@ class CompanyLoopWorkflow:
                 {"company_id": company_id,
                  "execution_key": f"{company_id}:execution:{self._execution_sequence + 1}"},
                 start_to_close_timeout=timedelta(minutes=10),
+                schedule_to_start_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=35),
+                heartbeat_timeout=timedelta(seconds=45),
                 retry_policy=RetryPolicy(
                     maximum_attempts=3,
                     initial_interval=timedelta(seconds=5),
@@ -127,6 +138,7 @@ class CompanyLoopWorkflow:
                 ),
             )
             self._cycles += 1
+            self._run_cycles += 1
             self._execution_sequence += 1
             self._last_status = str(result.get("status", "unknown"))
             if waits_for_external_signal(self._last_status):
@@ -134,11 +146,25 @@ class CompanyLoopWorkflow:
             else:
                 await workflow.sleep(1)
 
-            if self._cycles >= 500:
-                workflow.continue_as_new({
-                    "company_id": company_id,
-                    "running": self._running and not self._paused,
-                    "execution_sequence": self._execution_sequence,
-                })
+            self._continue_if_history_is_large(company_id)
 
         return {"status": "shutdown", "cycles": self._cycles}
+
+    def _continue_if_history_is_large(self, company_id: str) -> None:
+        """Bound history for both busy and months-long idle companies."""
+        info = workflow.info()
+        if (
+            self._run_cycles < RUN_CYCLE_LIMIT
+            and info.get_current_history_length() < HISTORY_EVENT_LIMIT
+            and not info.is_continue_as_new_suggested()
+        ):
+            return
+        workflow.continue_as_new({
+            "company_id": company_id,
+            "running": self._running and not self._paused,
+            "execution_sequence": self._execution_sequence,
+            "cycles": self._cycles,
+            "wake_count": self._wake_count,
+            "last_status": self._last_status,
+            "last_wake_reason": self._last_wake_reason,
+        })

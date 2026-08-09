@@ -6,7 +6,7 @@ This document is intentionally candid so a new developer does not mistake POC be
 
 The infrastructure overlay uses a signal-driven Temporal workflow per company,
 including durable pause/start/stop, approval, handoff, stakeholder-message
-signals, hourly brief timers, and startup recovery. V3 gives every company cycle
+signals, hourly brief timers, and startup recovery. V4 gives every company cycle
 a stable execution key, frozen task checkpoint, cached result, and up to three
 Temporal attempts. The lightweight stack still ships the legacy SQLite polling
 worker as a development fallback. External connectors still require their own
@@ -22,8 +22,9 @@ does not prove exactly-once behavior for future external provider adapters.
 PostgreSQL is canonical for company business and portfolio state in the
 infrastructure overlay and has schema versioning. `registry.db` remains only as
 a lightweight-mode fallback and idempotent import source. Database connections
-now have explicit request/activity lifetimes. Production connection pooling,
-backup/restore automation, and encryption-at-rest configuration remain open.
+now have explicit request/activity lifetimes and a bounded process-local
+connection pool. A validated backup script is included; scheduled off-machine
+backups, restore drills, and encryption-at-rest configuration remain open.
 
 ## Security
 

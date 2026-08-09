@@ -23,7 +23,7 @@ POC history, including:
 - deterministic autonomy reliability scenarios and operator recovery from committed state.
 
 This is a POC, not production software. The durable overlay now uses PostgreSQL
-for company and portfolio state plus recovery-safe Temporal V3 workflows. The
+for company and portfolio state plus recovery-safe Temporal V4 workflows. The
 lightweight polling worker and SQLite backend remain development fallbacks.
 
 ## 2. Clone and select the correct branch

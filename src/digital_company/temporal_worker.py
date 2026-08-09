@@ -37,14 +37,39 @@ async def advance_company(input_value: str | dict) -> dict:
     else:
         company_id, execution_key = input_value, f"legacy:{input_value}"
     try:
-        return await asyncio.to_thread(_advance_company_sync, company_id, execution_key)
+        return await _to_thread_with_heartbeat(
+            _advance_company_sync, company_id, execution_key,
+        )
+    except (KeyError, PermissionError, ValueError) as exc:
+        # Schema/policy/validation failures are deterministic. Re-running the
+        # same frozen input would only repeat work and potentially spend tokens.
+        return await asyncio.to_thread(
+            _finalize_activity_failure, company_id, execution_key, exc,
+            activity.info().attempt,
+        )
     except Exception as exc:
         if activity.info().attempt < 3:
             raise
-        return await asyncio.to_thread(_finalize_activity_failure, company_id, execution_key, exc)
+        return await asyncio.to_thread(
+            _finalize_activity_failure, company_id, execution_key, exc,
+            activity.info().attempt,
+        )
 
 
-def _finalize_activity_failure(company_id: str, execution_key: str, exc: Exception) -> dict:
+async def _to_thread_with_heartbeat(function, *args):
+    """Heartbeat while a blocking company cycle runs in its worker thread."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    while not task.done():
+        done, _ = await asyncio.wait({task}, timeout=20)
+        if done:
+            break
+        activity.heartbeat({"phase": function.__name__})
+    return await task
+
+
+def _finalize_activity_failure(
+    company_id: str, execution_key: str, exc: Exception, attempts: int = 3,
+) -> dict:
     portfolio = registry()
     try:
         with portfolio.store_for(company_id) as store:
@@ -54,7 +79,7 @@ def _finalize_activity_failure(company_id: str, execution_key: str, exc: Excepti
             store.set_control("error", detail)
             store.audit("temporal.activity_failed", {
                 "activity": "advance_company", "execution_key": execution_key,
-                "attempts": 3, "error": detail,
+                "attempts": attempts, "error": detail,
             })
             return result
     finally:

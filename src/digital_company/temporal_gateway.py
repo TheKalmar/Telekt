@@ -25,9 +25,9 @@ def enabled() -> bool:
 
 
 def workflow_id(company_id: str) -> str:
-    # V3 starts a fresh history because activity inputs and retry policy changed
-    # for durable idempotency. Replaying V2 history would be nondeterministic.
-    return f"company-loop-v3-{company_id}"
+    # V4 adds activity heartbeats/timeouts and history-size rollover. A fresh
+    # identity avoids replaying V3 history with structurally different commands.
+    return f"company-loop-v4-{company_id}"
 
 
 async def ensure_workflow(client: Client, company_id: str):

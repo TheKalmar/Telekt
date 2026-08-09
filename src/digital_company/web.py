@@ -46,6 +46,7 @@ from digital_company.runtime_secrets import apply_runtime_secrets, save_secret
 from digital_company.runtime_secrets import get_secret
 from digital_company.model_connections import ADAPTERS, ModelConnectionRegistry
 from digital_company.models import ActionType
+from digital_company.postgres_compat import pool_stats
 from digital_company.preflight import (
     connection_ready as check_model_connection,
     evaluate_runtime_preflight,
@@ -171,7 +172,15 @@ def telekt_icon():
 @app.get("/health")
 def health():
     worker = registry.worker_status()
-    return {"status": "ok" if worker["status"] == "online" else "degraded", "worker": worker}
+    try:
+        database = registry.database_status()
+    except Exception as exc:
+        database = {"status": "offline", "detail": type(exc).__name__}
+    status = "ok" if worker["status"] == "online" and database["status"] == "online" else "degraded"
+    return {
+        "status": status, "worker": worker, "database": database,
+        "company_store_pool": pool_stats(),
+    }
 
 
 @app.get("/api/dashboard")

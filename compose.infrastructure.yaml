@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-telekt-local-only}
       POSTGRES_DB: ${POSTGRES_DB:-telekt}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -15,6 +15,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
+    stop_grace_period: 60s
 
   temporal:
     image: temporalio/auto-setup:1.29.1
@@ -26,12 +28,20 @@ services:
       POSTGRES_SEEDS: postgres
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     ports:
-      - "${TEMPORAL_PORT:-7233}:7233"
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
     volumes:
       - ./infra/temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
+    restart: unless-stopped
+    stop_grace_period: 60s
 
   temporal-ui:
     image: temporalio/ui:2.34.0
@@ -39,20 +49,24 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:${PORT:-8421}
     ports:
-      - "${TEMPORAL_UI_PORT:-8080}:8080"
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8080}:8080"
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
+    restart: unless-stopped
 
   app:
     environment:
       DATABASE_BACKEND: postgres
       DATABASE_URL: postgresql://${POSTGRES_USER:-telekt}:${POSTGRES_PASSWORD:-telekt-local-only}@postgres:5432/${POSTGRES_DB:-telekt}
       TEMPORAL_ADDRESS: temporal:7233
+      POSTGRES_POOL_MAX_SIZE: ${POSTGRES_POOL_MAX_SIZE:-10}
+      POSTGRES_POOL_TIMEOUT_SECONDS: ${POSTGRES_POOL_TIMEOUT_SECONDS:-10}
     depends_on:
       postgres:
         condition: service_healthy
       temporal:
-        condition: service_started
+        condition: service_healthy
 
   worker:
     command: ["digital-company-temporal-worker"]
@@ -61,11 +75,13 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-telekt}:${POSTGRES_PASSWORD:-telekt-local-only}@postgres:5432/${POSTGRES_DB:-telekt}
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
+      POSTGRES_POOL_MAX_SIZE: ${POSTGRES_POOL_MAX_SIZE:-10}
+      POSTGRES_POOL_TIMEOUT_SECONDS: ${POSTGRES_POOL_TIMEOUT_SECONDS:-10}
     depends_on:
       postgres:
         condition: service_healthy
       temporal:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres_data:

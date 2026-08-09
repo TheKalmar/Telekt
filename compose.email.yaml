@@ -18,5 +18,5 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     ports:
-      - "${MAILPIT_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
     restart: unless-stopped

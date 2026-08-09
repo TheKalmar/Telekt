@@ -5,7 +5,7 @@ services:
     build:
       context: .
     ports:
-      - "${PORT:-8421}:8421"
+      - "127.0.0.1:${PORT:-8421}:8421"
     environment:
       HOST: 0.0.0.0
       PORT: 8421
@@ -41,6 +41,7 @@ services:
       - default
       - execution
     restart: unless-stopped
+    stop_grace_period: 30s
 
   browser-runtime:
     build:
@@ -54,6 +55,7 @@ services:
       - browser_data:/browser-data
     shm_size: "1gb"
     restart: unless-stopped
+    stop_grace_period: 30s
 
   execution-runtime:
     build:
@@ -80,6 +82,7 @@ services:
     mem_limit: 768m
     cpus: 1.5
     restart: unless-stopped
+    stop_grace_period: 45s
 
   worker:
     build:
@@ -133,6 +136,7 @@ services:
       start_period: 5s
       retries: 3
     restart: unless-stopped
+    stop_grace_period: 45s
 
 volumes:
   company_data:

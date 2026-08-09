@@ -99,18 +99,25 @@ class CompanyStore:
         validated = PolicyDocument.model_validate(document)
         if ActionType.SIGN_CONTRACT not in validated.deny_actions:
             validated.deny_actions.append(ActionType.SIGN_CONTRACT)
-        row = self.db.execute(
-            "SELECT COALESCE(MAX(version),0) AS value FROM policy_versions"
-        ).fetchone()
-        version = int(row["value"]) + 1
-        now = utc_now()
-        self.db.execute("UPDATE policy_versions SET status='superseded' WHERE status='active'")
-        self.db.execute(
-            "INSERT INTO policy_versions(version,document_json,status,created_at,created_by) "
-            "VALUES(?,?,'active',?,?)",
-            (version, validated.model_dump_json(), now, created_by.strip() or "dashboard"),
-        )
-        self.db.commit()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            if getattr(self.db, "is_postgres", False):
+                self.db.execute("SELECT pg_advisory_xact_lock(hashtext('telekt-policy-version'))")
+            row = self.db.execute(
+                "SELECT COALESCE(MAX(version),0) AS value FROM policy_versions"
+            ).fetchone()
+            version = int(row["value"]) + 1
+            now = utc_now()
+            self.db.execute("UPDATE policy_versions SET status='superseded' WHERE status='active'")
+            self.db.execute(
+                "INSERT INTO policy_versions(version,document_json,status,created_at,created_by) "
+                "VALUES(?,?,'active',?,?)",
+                (version, validated.model_dump_json(), now, created_by.strip() or "dashboard"),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.audit("policy.version_created", {"version": version, "created_by": created_by})
         return self.get_policy()
 
@@ -133,6 +140,13 @@ class CompanyStore:
     def is_initialized(self) -> bool:
         """Return whether the database contains a company header."""
         return self.db.execute("SELECT 1 FROM company WHERE id=1").fetchone() is not None
+
+    def schema_version(self) -> int:
+        """Return the highest recorded company schema version."""
+        row = self.db.execute(
+            "SELECT COALESCE(MAX(version),0) AS value FROM company_schema_versions"
+        ).fetchone()
+        return int(row["value"])
 
     def snapshot(self) -> CompanySnapshot:
         """Build the compact, typed context supplied to agents.
@@ -705,14 +719,23 @@ class CompanyStore:
         approval_id = str(uuid4())
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(hours=ttl_hours)).isoformat()
-        self.db.execute(
-            "INSERT INTO approvals(id,task_id,payload_json,status,reason,created_at,resolved_at,"
-            "required_approvals,expires_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (approval_id, task_id, proposal.model_dump_json(), "pending", reason,
-             now.isoformat(), None, required_approvals, expires_at),
-        )
-        self.db.execute("UPDATE tasks SET status='waiting_approval' WHERE id=?", (task_id,))
-        self.db.commit()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute(
+                "INSERT INTO approvals(id,task_id,payload_json,status,reason,created_at,resolved_at,"
+                "required_approvals,expires_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (approval_id, task_id, proposal.model_dump_json(), "pending", reason,
+                 now.isoformat(), None, required_approvals, expires_at),
+            )
+            changed = self.db.execute(
+                "UPDATE tasks SET status='waiting_approval' WHERE id=? AND status='proposed'", (task_id,)
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("Only a proposed task can request approval")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.audit("approval.requested", {
             "approval_id": approval_id, "task_id": task_id,
             "required_approvals": required_approvals, "expires_at": expires_at,
@@ -766,67 +789,83 @@ class CompanyStore:
         """Close approvals after their policy TTL so stale authority cannot be used."""
         now = datetime.now(timezone.utc)
         expired = []
-        rows = self.db.execute(
-            "SELECT id,task_id,expires_at FROM approvals WHERE status='pending' AND expires_at IS NOT NULL"
-        ).fetchall()
-        for row in rows:
-            if datetime.fromisoformat(row["expires_at"]) > now:
-                continue
-            self.db.execute(
-                "UPDATE approvals SET status='expired',resolved_at=?,decision_comment=?,decided_by='system' "
-                "WHERE id=? AND status='pending'",
-                (now.isoformat(), "Approval window expired", row["id"]),
-            )
-            self.db.execute(
-                "UPDATE tasks SET status='rejected',completed_at=? WHERE id=? AND status='waiting_approval'",
-                (now.isoformat(), row["task_id"]),
-            )
-            expired.append(row["id"])
-        if expired:
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            rows = self.db.execute(
+                "SELECT id,task_id,expires_at FROM approvals "
+                "WHERE status='pending' AND expires_at IS NOT NULL"
+            ).fetchall()
+            for row in rows:
+                if datetime.fromisoformat(row["expires_at"]) > now:
+                    continue
+                changed = self.db.execute(
+                    "UPDATE approvals SET status='expired',resolved_at=?,decision_comment=?,decided_by='system' "
+                    "WHERE id=? AND status='pending'",
+                    (now.isoformat(), "Approval window expired", row["id"]),
+                ).rowcount
+                if changed != 1:
+                    continue
+                self.db.execute(
+                    "UPDATE tasks SET status='rejected',completed_at=? "
+                    "WHERE id=? AND status='waiting_approval'",
+                    (now.isoformat(), row["task_id"]),
+                )
+                expired.append(row["id"])
             self.db.commit()
-            for approval_id in expired:
-                self.audit("approval.expired", {"approval_id": approval_id})
+        except Exception:
+            self.db.rollback()
+            raise
+        for approval_id in expired:
+            self.audit("approval.expired", {"approval_id": approval_id})
         return expired
 
     def approve(self, approval_id: str, comment: str = "", decided_by: str = "dashboard") -> dict:
         """Record a distinct approval vote and release only after quorum is reached."""
         self.expire_pending_approvals()
-        row = self.db.execute(
-            "SELECT task_id,status,required_approvals FROM approvals WHERE id=?", (approval_id,)
-        ).fetchone()
-        if not row:
-            raise RuntimeError("Approval not found.")
-        if row["status"] != "pending":
-            raise RuntimeError("Approval has already been resolved.")
         voter = decided_by.strip().lower() or "dashboard"
-        existing = self.db.execute(
-            "SELECT decision FROM approval_votes WHERE approval_id=? AND voter=?",
-            (approval_id, voter),
-        ).fetchone()
-        if existing:
-            raise RuntimeError("This approver has already voted.")
         now = utc_now()
-        self.db.execute(
-            "INSERT INTO approval_votes(approval_id,voter,decision,comment,created_at) VALUES(?,?,?,?,?)",
-            (approval_id, voter, "approve", comment.strip() or None, now),
-        )
-        vote_count = int(self.db.execute(
-            "SELECT COUNT(*) AS value FROM approval_votes WHERE approval_id=? AND decision='approve'",
-            (approval_id,),
-        ).fetchone()["value"])
-        required = int(row["required_approvals"])
-        final = vote_count >= required
-        if final:
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            lock = " FOR UPDATE" if getattr(self.db, "is_postgres", False) else ""
+            row = self.db.execute(
+                "SELECT task_id,status,required_approvals FROM approvals WHERE id=?" + lock,
+                (approval_id,),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Approval not found.")
+            if row["status"] != "pending":
+                raise RuntimeError("Approval has already been resolved.")
+            existing = self.db.execute(
+                "SELECT decision FROM approval_votes WHERE approval_id=? AND voter=?",
+                (approval_id, voter),
+            ).fetchone()
+            if existing:
+                raise RuntimeError("This approver has already voted.")
             self.db.execute(
-                "UPDATE approvals SET status='approved',resolved_at=?,decision_comment=?,decided_by=? WHERE id=?",
-                (now, comment.strip() or None, voter, approval_id),
+                "INSERT INTO approval_votes(approval_id,voter,decision,comment,created_at) VALUES(?,?,?,?,?)",
+                (approval_id, voter, "approve", comment.strip() or None, now),
             )
-            self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
-            self.db.execute(
-                "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
-                ("Approval quorum reached; task queued for execution", now),
-            )
-        self.db.commit()
+            vote_count = int(self.db.execute(
+                "SELECT COUNT(*) AS value FROM approval_votes WHERE approval_id=? AND decision='approve'",
+                (approval_id,),
+            ).fetchone()["value"])
+            required = int(row["required_approvals"])
+            final = vote_count >= required
+            if final:
+                self.db.execute(
+                    "UPDATE approvals SET status='approved',resolved_at=?,decision_comment=?,decided_by=? "
+                    "WHERE id=? AND status='pending'",
+                    (now, comment.strip() or None, voter, approval_id),
+                )
+                self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
+                self.db.execute(
+                    "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
+                    ("Approval quorum reached; task queued for execution", now),
+                )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         event = "approval.approved" if final else "approval.vote_recorded"
         self.audit(event, {
             "approval_id": approval_id, "task_id": row["task_id"],
@@ -874,29 +913,38 @@ class CompanyStore:
         if not comment.strip():
             raise ValueError("A decline reason is required.")
         self.expire_pending_approvals()
-        row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()
-        if not row or row["status"] != "pending":
-            raise RuntimeError("Pending approval not found.")
         voter = decided_by.strip().lower() or "dashboard"
-        if self.db.execute(
-            "SELECT 1 FROM approval_votes WHERE approval_id=? AND voter=?", (approval_id, voter)
-        ).fetchone():
-            raise RuntimeError("This approver has already voted.")
         now = utc_now()
-        self.db.execute(
-            "INSERT INTO approval_votes(approval_id,voter,decision,comment,created_at) VALUES(?,?,?,?,?)",
-            (approval_id, voter, "reject", comment.strip(), now),
-        )
-        self.db.execute(
-            "UPDATE approvals SET status='rejected',resolved_at=?,decision_comment=?,decided_by=? WHERE id=?",
-            (now, comment.strip(), voter, approval_id),
-        )
-        self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
-        self.db.execute(
-            "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
-            ("Rejected task; queued for CEO reconsideration", now),
-        )
-        self.db.commit()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            lock = " FOR UPDATE" if getattr(self.db, "is_postgres", False) else ""
+            row = self.db.execute(
+                "SELECT task_id,status FROM approvals WHERE id=?" + lock, (approval_id,)
+            ).fetchone()
+            if not row or row["status"] != "pending":
+                raise RuntimeError("Pending approval not found.")
+            if self.db.execute(
+                "SELECT 1 FROM approval_votes WHERE approval_id=? AND voter=?", (approval_id, voter)
+            ).fetchone():
+                raise RuntimeError("This approver has already voted.")
+            self.db.execute(
+                "INSERT INTO approval_votes(approval_id,voter,decision,comment,created_at) VALUES(?,?,?,?,?)",
+                (approval_id, voter, "reject", comment.strip(), now),
+            )
+            self.db.execute(
+                "UPDATE approvals SET status='rejected',resolved_at=?,decision_comment=?,decided_by=? "
+                "WHERE id=? AND status='pending'",
+                (now, comment.strip(), voter, approval_id),
+            )
+            self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
+            self.db.execute(
+                "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
+                ("Rejected task; queued for CEO reconsideration", now),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.audit("approval.rejected", {"approval_id": approval_id, "task_id": row["task_id"]})
         self.add_approval_feedback(comment, approval_id, voter, "rejected")
 

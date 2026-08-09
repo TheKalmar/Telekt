@@ -95,6 +95,17 @@ class CompanyRegistry:
             "INSERT INTO telekt.schema_version(version,description) "
             "VALUES(3,'PostgreSQL portfolio registry') ON CONFLICT(version) DO NOTHING"
         )
+        self.db.execute("CREATE INDEX IF NOT EXISTS companies_source_id ON telekt.companies(source_id)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS companies_updated_at ON telekt.companies(updated_at DESC)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS work_leases_expiry ON telekt.work_leases(expires_at)")
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS worker_heartbeats_time "
+            "ON telekt.worker_heartbeats(heartbeat_at DESC)"
+        )
+        self.db.execute(
+            "INSERT INTO telekt.schema_version(version,description) "
+            "VALUES(4,'Connection pooling and runtime hardening') ON CONFLICT(version) DO NOTHING"
+        )
         self.db.commit()
 
     def _import_legacy_registry(self) -> None:
@@ -231,6 +242,16 @@ class CompanyRegistry:
             "owner": row["owner"],
             "heartbeat_at": row["heartbeat_at"],
         }
+
+    def database_status(self) -> dict:
+        """Run a cheap canonical-store probe for liveness/readiness endpoints."""
+        if self.is_postgres:
+            row = self.db.execute(
+                "SELECT COALESCE(MAX(version),0) AS version FROM telekt.schema_version"
+            ).fetchone()
+            return {"status": "online", "backend": "postgres", "schema_version": row["version"]}
+        self.db.execute("SELECT 1").fetchone()
+        return {"status": "online", "backend": "sqlite", "schema_version": None}
 
     def _adopt_legacy_company(self) -> None:
         """Register the original POC database once without moving or rewriting it."""
