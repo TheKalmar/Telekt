@@ -9,6 +9,7 @@ import re
 import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 import uvicorn
 from dotenv import load_dotenv
@@ -467,6 +468,44 @@ def close_browser_session():
     body, _ = browser_runtime_request("DELETE", f"/sessions/{company_id}")
     with store_scope(company_id) as store:
         store.audit("browser.session_closed", {"actor": "human"})
+    return __import__("json").loads(body)
+
+
+@app.post("/api/handoffs/{handoff_id}/browser")
+def open_handoff_browser(handoff_id: str):
+    """Open the frozen handoff URL in the selected company's isolated cockpit."""
+    company_id = registry.active_id()
+    try:
+        with store_scope(company_id) as store:
+            handoff = store.get_handoff(handoff_id, require_pending=True)
+            proposal = handoff["proposal"]
+            if not proposal.handoff_url:
+                raise ValueError(
+                    "This handoff has no starting URL. Tell the CEO to return an exact setup URL."
+                )
+            parsed = urlparse(proposal.handoff_url)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError(
+                    "The guided browser requires an exact HTTPS URL. Use the normal-browser link instead."
+                )
+            allowed_domains = list(dict.fromkeys([
+                parsed.hostname, *(proposal.handoff_allowed_domains or []),
+            ]))
+            body, _ = browser_runtime_request(
+                "PUT", f"/sessions/{company_id}",
+                {"url": proposal.handoff_url, "allowed_domains": allowed_domains},
+            )
+            store.audit("handoff.browser_opened", {
+                "handoff_id": handoff_id,
+                "task_id": handoff["task_id"],
+                "url": proposal.handoff_url,
+                "allowed_domains": allowed_domains,
+                "actor": "human",
+            })
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(404, str(exc)) from exc
     return __import__("json").loads(body)
 
 

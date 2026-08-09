@@ -42,16 +42,27 @@ details, or another account-owner checkpoint, it stops. The dashboard shows:
 
 - why the CEO needs help;
 - the exact HTTP(S) URL;
-- numbered steps;
+- click-level numbered steps that name the account, project, resource, permission,
+  or configuration screen involved;
 - evidence the stakeholder should return;
-- **Done** and **Can't complete** outcomes.
+- guided-cockpit and normal-browser paths;
+- completed and blocked outcomes with a required written result.
 
-The human opens the site in their normal browser, performs the checkpoint, and
-records the outcome. For sites that work in headless Chromium, the human can also
-use the dashboard cockpit's screenshot, click, type, and Enter controls. That
-outcome becomes canonical CEO context and wakes the
-worker. CAPTCHA must never be bypassed, outsourced to a solving service, or
-misrepresented as completed.
+The guided button opens the frozen handoff URL directly in the active company's
+isolated cockpit. The cockpit is not an operating-system browser window: the
+dashboard renders its live screenshot and sends click/type/Enter actions to the
+isolated Chromium runtime. Required product and identity-provider hostnames are
+part of the frozen handoff contract. The normal-browser link remains available
+for sites that reject headless Chromium.
+
+The returned result becomes canonical CEO context and wakes the worker. A
+cancelled handoff also requires the operator to explain the blocker so the CEO
+can choose a different route. CAPTCHA must never be bypassed, outsourced to a
+solving service, or misrepresented as completed.
+
+If the cockpit reports that the browser runtime is offline, start the complete
+stack with `./scripts/up.ps1 -Mode Existing -Build`, or run
+`digital-company-browser` in a separate terminal for a native developer setup.
 
 ## Outsourcing sequence
 

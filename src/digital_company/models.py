@@ -57,6 +57,9 @@ class TaskProposalDraft(BaseModel):
     required_capabilities: list[Annotated[str, Field(max_length=80)]] = Field(default_factory=list, max_length=5)
     execution_mode: Literal["reasoning", "api", "browser", "manual", "outsourced", "build"] = "reasoning"
     handoff_url: str | None = Field(default=None, max_length=500)
+    handoff_allowed_domains: list[Annotated[str, Field(max_length=120)]] = Field(
+        default_factory=list, max_length=10
+    )
     handoff_instructions: list[Annotated[str, Field(max_length=160)]] = Field(default_factory=list, max_length=5)
     resume_evidence: list[Annotated[str, Field(max_length=160)]] = Field(default_factory=list, max_length=5)
 
@@ -74,6 +77,11 @@ class TaskProposal(TaskProposalDraft):
             raise ValueError("Platform candidate must not exceed 80 characters")
         if self.handoff_url and len(self.handoff_url) > 500:
             raise ValueError("Handoff URL must not exceed 500 characters")
+        if any(
+            not value or "://" in value or "/" in value or "@" in value
+            for value in self.handoff_allowed_domains
+        ):
+            raise ValueError("Handoff allowed domains must contain hostnames only")
         if self.action == ActionType.REQUEST_PLATFORM_ACCESS:
             if not self.platform_candidate or not self.required_capabilities:
                 raise ValueError(

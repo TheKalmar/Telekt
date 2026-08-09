@@ -15,6 +15,8 @@ POC history, including:
 - durable polling worker, approvals, email approvals, and stakeholder chat;
 - build/buy/integrate/manual strategy and platform capability records;
 - isolated persistent Chromium runtime and manual browser cockpit;
+- guided operator handoffs that open the frozen URL in the cockpit, explain why
+  the CEO stopped, list exact steps/evidence, and require a completion or blocker result;
 - governed OpenAI Computer Use missions with live dashboard visibility;
 - automatic human takeover for login, CAPTCHA, 2FA, safety checks, and form submission.
 

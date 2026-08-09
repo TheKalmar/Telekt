@@ -384,6 +384,19 @@ class CompanyStore:
         query += " ORDER BY created_at DESC LIMIT 30"
         return [dict(row) for row in self.db.execute(query, params)]
 
+    def get_handoff(self, handoff_id: str, require_pending: bool = False) -> dict:
+        """Return one frozen handoff payload for an operator action."""
+        row = self.db.execute(
+            "SELECT * FROM human_handoffs WHERE id=?", (handoff_id,)
+        ).fetchone()
+        if not row:
+            raise RuntimeError("Handoff not found")
+        if require_pending and row["status"] != "pending":
+            raise RuntimeError("Pending handoff not found")
+        item = dict(row)
+        item["proposal"] = TaskProposal.model_validate_json(item["payload_json"])
+        return item
+
     def resolve_handoff(self, handoff_id: str, outcome: str, completed: bool) -> None:
         """Record human evidence and resume the CEO without pretending the agent did it."""
         if not outcome.strip():

@@ -134,6 +134,13 @@ resumes the company. The body is `{ "outcome": "..." }`.
 Records why the manual checkpoint could not be completed and resumes CEO
 reconsideration. Handoffs are single-use and distinct from permission approvals.
 
+### `POST /api/handoffs/{handoff_id}/browser`
+
+Opens the exact HTTPS URL and explicit hostname allowlist stored in a still-pending
+handoff inside the active company's isolated browser. Resolved, superseded, vague,
+or non-HTTPS handoffs are rejected. The operator cannot use this endpoint to
+replace the CEO's frozen handoff target.
+
 ## Browser cockpit
 
 - `GET /api/browser/health` checks the internal Chromium runtime.

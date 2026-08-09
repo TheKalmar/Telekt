@@ -169,13 +169,16 @@ class CompanyOrchestrator:
         hostname = urlparse(proposal.handoff_url).hostname
         if not hostname:
             raise RuntimeError("Browser mission has no valid starting hostname")
+        allowed_domains = list(dict.fromkeys([
+            hostname, *(proposal.handoff_allowed_domains or []),
+        ]))
         browser_runtime_request("PUT", f"/sessions/{self.company_id}", {
-            "url": proposal.handoff_url, "allowed_domains": [hostname],
+            "url": proposal.handoff_url, "allowed_domains": allowed_domains,
         })
         max_steps = max(1, min(30, int(__import__("os").getenv("COMPUTER_USE_MAX_STEPS", "12"))))
         self.store.audit("browser.mission_started", {
             "task_id": task_id, "objective": proposal.objective,
-            "allowed_domains": [hostname], "max_steps": max_steps,
+            "allowed_domains": allowed_domains, "max_steps": max_steps,
         })
         outcome = BrowserMissionRunner(
             reporter=lambda event, payload: self.store.audit(event, {"task_id": task_id, **payload}),
@@ -187,7 +190,10 @@ class CompanyOrchestrator:
         )
         if outcome.status in {"waiting_human", "blocked"}:
             handoff = proposal.model_copy(update={
-                "handoff_instructions": [outcome.summary, "Use the browser cockpit or normal browser to resolve it"],
+                "handoff_instructions": [
+                    outcome.summary,
+                    "Open the guided Telekt browser below and complete only the detected checkpoint",
+                ],
                 "resume_evidence": ["Describe exactly what was completed and what access is now available"],
             })
             handoff_id = self.store.create_handoff(task_id, handoff)
