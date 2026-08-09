@@ -105,6 +105,11 @@ returns the value to the browser or stores it in PostgreSQL. A key entered in th
 UI is stored in the shared runtime secret volume and is loaded by the worker
 before its next model activity.
 
+Cloud routing supports a provider registry. OpenAI models use `OPENAI_API_KEY`;
+Anthropic Claude models use `ANTHROPIC_API_KEY`. Select **Anthropic · Claude**
+and `claude-opus-5` in the same panel to use Opus. Local-only mode hides all
+cloud fields, while cloud-only mode hides Ollama fields; hybrid mode shows both.
+
 ## Option 5: hybrid routing
 
 Provide both a reachable Ollama server and `OPENAI_API_KEY`. Start either bundled

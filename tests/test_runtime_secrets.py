@@ -9,7 +9,7 @@ def test_runtime_secret_is_write_only_and_reloaded(tmp_path, monkeypatch):
     monkeypatch.setenv("COMPANY_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     runtime_secrets.save_secret("OPENAI_API_KEY", "sk-test-value")
-    assert runtime_secrets.secret_status() == {"OPENAI_API_KEY": True}
+    assert runtime_secrets.secret_status()["OPENAI_API_KEY"] is True
     assert "sk-test-value" not in repr(runtime_secrets.secret_status())
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     runtime_secrets.apply_runtime_secrets()

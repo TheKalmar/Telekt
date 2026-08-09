@@ -31,6 +31,7 @@ class CompanyOrchestrator:
         self.engine = engine or AgentEngine(
             settings["model_mode"], settings["local_model"],
             bool(settings["allow_cloud_fallback"]),
+            cloud_provider=settings["cloud_provider"], cloud_model_name=settings["cloud_model"],
             reporter=self._report,
             remaining_budget=lambda: self.store.snapshot().remaining_budget_eur,
         )

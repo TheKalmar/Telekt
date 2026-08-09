@@ -56,7 +56,8 @@ def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
     settings = store.get_settings()
     mode = settings["model_mode"]
     cache_key = str(store.path)
-    signature = (settings["updated_at"], bool(os.getenv("OPENAI_API_KEY")))
+    signature = (settings["updated_at"], bool(os.getenv("OPENAI_API_KEY")),
+                 bool(os.getenv("ANTHROPIC_API_KEY")))
     cached = _preflight_cache.get(cache_key)
     if not force and cached and cached[1] == signature and time.monotonic() - cached[0] < 5:
         return cached[2]
@@ -85,12 +86,14 @@ def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
         checks.append({"id": "local_model", "status": "skip", "detail": "Cloud mode does not require Ollama"})
 
     cloud_required = mode in {"cloud", "hybrid"}
-    cloud_present = bool(os.getenv("OPENAI_API_KEY"))
+    provider = settings.get("cloud_provider", "openai")
+    provider_key = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
+    cloud_present = bool(os.getenv(provider_key))
     checks.append({
-        "id": "openai", "status": "pass" if cloud_present else "block" if cloud_required else "warn",
-        "detail": "OpenAI key is configured" if cloud_present else
-                  "OPENAI_API_KEY is required for this routing mode" if cloud_required else
-                  "OpenAI key is absent; local work can run but Computer Use is unavailable",
+        "id": provider, "status": "pass" if cloud_present else "block" if cloud_required else "warn",
+        "detail": f"{provider.title()} key is configured" if cloud_present else
+                  f"{provider_key} is required for this routing mode" if cloud_required else
+                  f"{provider.title()} key is absent; local work can still run",
     })
 
     browser = browser_health()
@@ -123,6 +126,8 @@ class ModelSettingsIn(BaseModel):
     mode: str
     local_model: str = Field(min_length=1, max_length=200)
     allow_cloud_fallback: bool = False
+    cloud_provider: str = "openai"
+    cloud_model: str = Field(default="gpt-5.4-mini", min_length=1, max_length=200)
 
 
 class OpenAIKeyIn(BaseModel):
@@ -231,7 +236,8 @@ def dashboard():
     except RuntimeError:
         return {
             "control": {"state": "idle", "detail": "Create a company to begin"},
-            "settings": {"model_mode": "local", "local_model": "deepseek-company:8b", "allow_cloud_fallback": 0},
+            "settings": {"model_mode": "local", "local_model": "deepseek-company:8b", "allow_cloud_fallback": 0,
+                         "cloud_provider": "openai", "cloud_model": "gpt-5.4-mini"},
             "profile": None,
             "goal": "No company created yet",
             "initial_budget_eur": 0,
@@ -394,7 +400,8 @@ def model_settings(payload: ModelSettingsIn):
     if store.get_control()["state"] == "running":
         raise HTTPException(409, "Pause or stop the company before changing model settings")
     try:
-        store.set_model_settings(payload.mode, payload.local_model, payload.allow_cloud_fallback)
+        store.set_model_settings(payload.mode, payload.local_model, payload.allow_cloud_fallback,
+                                 payload.cloud_provider, payload.cloud_model)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return store.get_settings()
@@ -403,7 +410,14 @@ def model_settings(payload: ModelSettingsIn):
 @app.get("/api/settings/openai")
 def openai_settings_status():
     """Expose credential presence only, never the credential itself."""
-    return {"configured": secret_status()["OPENAI_API_KEY"]}
+    statuses = secret_status()
+    return {
+        "configured": statuses["OPENAI_API_KEY"],
+        "providers": {
+            "openai": {"configured": statuses["OPENAI_API_KEY"], "models": ["gpt-5.4-mini", "gpt-5.4"]},
+            "anthropic": {"configured": statuses["ANTHROPIC_API_KEY"], "models": ["claude-opus-5", "claude-sonnet-5"]},
+        },
+    }
 
 
 @app.put("/api/settings/openai")
@@ -418,6 +432,18 @@ def update_openai_key(payload: OpenAIKeyIn):
         raise HTTPException(400, str(exc)) from exc
     _preflight_cache.clear()
     get_store().audit("credentials.updated", {"provider": "openai"})
+    return {"configured": True}
+
+
+@app.put("/api/settings/anthropic")
+def update_anthropic_key(payload: OpenAIKeyIn):
+    """Persist a write-only Anthropic credential for Claude models."""
+    key = payload.api_key.strip()
+    if not key.startswith("sk-ant-"):
+        raise HTTPException(400, "Anthropic API key must start with sk-ant-")
+    save_secret("ANTHROPIC_API_KEY", key)
+    _preflight_cache.clear()
+    get_store().audit("credentials.updated", {"provider": "anthropic"})
     return {"configured": True}
 
 

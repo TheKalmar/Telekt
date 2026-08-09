@@ -53,6 +53,16 @@ def test_cloud_fallback_is_explicit_and_disabled_by_default(tmp_path: Path):
     assert store.get_settings()["allow_cloud_fallback"] == 1
 
 
+def test_cloud_provider_and_model_are_selected_per_company(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Build a product", 1000)
+    store.set_model_settings("cloud", "deepseek-company:8b", False,
+                             "anthropic", "claude-opus-5")
+    settings = store.get_settings()
+    assert settings["cloud_provider"] == "anthropic"
+    assert settings["cloud_model"] == "claude-opus-5"
+
+
 def test_operations_projects_live_browser_mission(tmp_path: Path):
     store = CompanyStore(tmp_path / "company.db")
     store.initialize("Research pricing", 1000)

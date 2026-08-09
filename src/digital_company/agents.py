@@ -17,6 +17,7 @@ from agents import (
     Agent, AsyncOpenAI, ModelBehaviorError, ModelRetrySettings, ModelSettings,
     OpenAIChatCompletionsModel, Runner, WebSearchTool, retry_policies, set_tracing_disabled,
 )
+from agents.extensions.models.litellm_model import LitellmModel
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from digital_company.models import (
@@ -101,9 +102,18 @@ class AgentEngine:
     """
     def __init__(self, mode: str = "cloud", local_model_name: str = "deepseek-company:8b",
                  allow_cloud_fallback: bool = False,
+                 cloud_provider: str = "openai", cloud_model_name: str = "gpt-5.4-mini",
                  reporter: Callable[[str, dict], None] | None = None,
                  remaining_budget: Callable[[], float] | None = None) -> None:
-        self.cloud_model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+        self.cloud_provider = cloud_provider
+        self.cloud_model_name = cloud_model_name
+        self.cloud_model = (
+            LitellmModel(model=f"anthropic/{cloud_model_name}", api_key=os.getenv("ANTHROPIC_API_KEY"))
+            if cloud_provider == "anthropic" else cloud_model_name
+        )
+        self.cloud_credential_present = bool(os.getenv(
+            "ANTHROPIC_API_KEY" if cloud_provider == "anthropic" else "OPENAI_API_KEY"
+        ))
         self.allow_cloud_fallback = allow_cloud_fallback
         self.reporter = reporter or (lambda _event, _payload: None)
         self.remaining_budget = remaining_budget
@@ -128,8 +138,7 @@ class AgentEngine:
                 retry_policies.http_status([408, 409, 429, 500, 502, 503, 504]),
             ),
         ))
-        if mode == "local":
-            set_tracing_disabled(True)
+        set_tracing_disabled(mode == "local" or cloud_provider != "openai")
         ceo_local = mode == "local"
         self.ceo = self._agent(
             "CEO", CEO_INSTRUCTIONS, TaskProposalDraft if ceo_local else TaskProposal,
@@ -142,7 +151,7 @@ class AgentEngine:
             # Hosted web search only works on OpenAI Responses models. Hybrid
             # therefore routes Research to cloud while routine roles stay local.
             use_local = mode == "local" or (mode == "hybrid" and name not in {"development", "research"})
-            tools = [WebSearchTool(search_context_size="medium")] if name == "research" and not use_local else []
+            tools = [WebSearchTool(search_context_size="medium")] if name == "research" and not use_local and cloud_provider == "openai" else []
             self.specialists[name] = self._agent(
                 name.title(), instructions, SpecialistResult, use_local, retry_settings, tools,
             )
@@ -150,7 +159,7 @@ class AgentEngine:
                 self._agent(
                     name.title() + " fallback", instructions, SpecialistResult, False,
                     retry_settings,
-                    [WebSearchTool(search_context_size="medium")] if name == "research" else [],
+                    [WebSearchTool(search_context_size="medium")] if name == "research" and cloud_provider == "openai" else [],
                 )
                 if use_local else None
             )
@@ -173,10 +182,10 @@ class AgentEngine:
         """Run with SDK transient retries, structured repair, audit, and opt-in fallback."""
         started = time.monotonic()
         run_id = str(uuid4())
-        provider = "local" if agent.model is self.local_model else "cloud"
+        provider = "local" if agent.model is self.local_model else self.cloud_provider
         reserve = float(os.getenv("CLOUD_CALL_RESERVE_EUR", "0.05"))
         budget_reader = getattr(self, "remaining_budget", None)
-        if provider == "cloud" and budget_reader and budget_reader() < reserve:
+        if provider != "local" and budget_reader and budget_reader() < reserve:
             self.reporter("budget.cloud_call_blocked", {"role": role, "required_reserve": reserve})
             raise RuntimeError(f"Cloud call blocked: less than {reserve:.2f} budget remains")
         self.reporter("model.started", {"run_id": run_id, "role": role, "provider": provider})
@@ -213,7 +222,9 @@ class AgentEngine:
                 })
                 break
         fallback_allowed = (
-            self.allow_cloud_fallback and fallback is not None and bool(os.getenv("OPENAI_API_KEY"))
+            self.allow_cloud_fallback and fallback is not None and getattr(
+                self, "cloud_credential_present", bool(os.getenv("OPENAI_API_KEY"))
+            )
         )
         if fallback_allowed and isinstance(last_error, (
             ModelBehaviorError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError,

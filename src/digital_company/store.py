@@ -123,6 +123,14 @@ class CompanyStore:
             self.db.execute(
                 "ALTER TABLE runtime_settings ADD COLUMN allow_cloud_fallback INTEGER NOT NULL DEFAULT 0"
             )
+        if "cloud_provider" not in settings_columns:
+            self.db.execute(
+                "ALTER TABLE runtime_settings ADD COLUMN cloud_provider TEXT NOT NULL DEFAULT 'openai'"
+            )
+        if "cloud_model" not in settings_columns:
+            self.db.execute(
+                "ALTER TABLE runtime_settings ADD COLUMN cloud_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini'"
+            )
         self.db.execute(
             "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) VALUES(1,'stopped','Ready',?)",
             (utc_now(),),
@@ -883,29 +891,37 @@ class CompanyStore:
     def get_settings(self) -> dict:
         """Return per-company model routing settings."""
         return dict(self.db.execute(
-            "SELECT model_mode,local_model,allow_cloud_fallback,updated_at FROM runtime_settings WHERE id=1"
+            "SELECT model_mode,local_model,allow_cloud_fallback,cloud_provider,cloud_model,updated_at FROM runtime_settings WHERE id=1"
         ).fetchone())
 
     def set_model_mode(self, mode: str) -> None:
         """Select local, hybrid, or cloud routing for future cycles."""
         current = self.get_settings()
-        self.set_model_settings(mode, current["local_model"], bool(current["allow_cloud_fallback"]))
+        self.set_model_settings(mode, current["local_model"], bool(current["allow_cloud_fallback"]),
+                                current["cloud_provider"], current["cloud_model"])
 
-    def set_model_settings(self, mode: str, local_model: str, allow_cloud_fallback: bool = False) -> None:
-        """Atomically select routing mode and the local model used by this company."""
+    def set_model_settings(self, mode: str, local_model: str, allow_cloud_fallback: bool = False,
+                           cloud_provider: str = "openai", cloud_model: str = "gpt-5.4-mini") -> None:
+        """Atomically select routing and the concrete local/cloud models."""
         if mode not in {"local", "hybrid", "cloud"}:
             raise ValueError("Invalid model mode")
         local_model = local_model.strip()
         if not local_model or len(local_model) > 200:
             raise ValueError("Local model name must contain 1 to 200 characters")
+        if cloud_provider not in {"openai", "anthropic"}:
+            raise ValueError("Invalid cloud provider")
+        cloud_model = cloud_model.strip()
+        if not cloud_model or len(cloud_model) > 200:
+            raise ValueError("Cloud model name must contain 1 to 200 characters")
         self.db.execute(
-            "UPDATE runtime_settings SET model_mode=?,local_model=?,allow_cloud_fallback=?,updated_at=? WHERE id=1",
-            (mode, local_model, int(allow_cloud_fallback), utc_now()),
+            "UPDATE runtime_settings SET model_mode=?,local_model=?,allow_cloud_fallback=?,cloud_provider=?,cloud_model=?,updated_at=? WHERE id=1",
+            (mode, local_model, int(allow_cloud_fallback), cloud_provider, cloud_model, utc_now()),
         )
         self.db.commit()
         self.audit("runtime.model_settings", {
             "mode": mode, "local_model": local_model,
             "allow_cloud_fallback": allow_cloud_fallback,
+            "cloud_provider": cloud_provider, "cloud_model": cloud_model,
         })
 
     def audit(self, event_type: str, payload: dict) -> None:

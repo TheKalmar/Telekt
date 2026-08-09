@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-ALLOWED_SECRETS = {"OPENAI_API_KEY"}
+ALLOWED_SECRETS = {"OPENAI_API_KEY", "ANTHROPIC_API_KEY"}
 
 
 def secret_file() -> Path:
