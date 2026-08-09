@@ -83,6 +83,32 @@ class IntegrationSettingsIn(BaseModel):
     required_secrets: list[str] = Field(default_factory=list, max_length=20)
 
 
+class IntegrationConnectionIn(BaseModel):
+    """Provider-neutral API/OAuth/webhook transport profile."""
+
+    id: str | None = None
+    name: str = Field(min_length=1, max_length=100)
+    adapter: str
+    provider: str = Field(min_length=1, max_length=100)
+    location: str = "cloud"
+    base_url: str = Field(min_length=1, max_length=2000)
+    capabilities: list[str] = Field(min_length=1, max_length=50)
+    config: dict = Field(default_factory=dict)
+    credentials: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class IntegrationOperationIn(BaseModel):
+    """Frozen connector operation prepared before governed dispatch."""
+
+    execution_key: str = Field(min_length=8, max_length=200)
+    connection_id: str = Field(min_length=1, max_length=100)
+    capability: str = Field(min_length=2, max_length=80)
+    method: str = Field(min_length=3, max_length=6)
+    path: str = Field(min_length=1, max_length=1000)
+    request: dict = Field(default_factory=dict)
+
+
 class CompanyCreateIn(BaseModel):
     """Validated company creation form with safe, editable defaults."""
 

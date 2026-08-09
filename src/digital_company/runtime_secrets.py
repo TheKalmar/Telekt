@@ -10,7 +10,11 @@ ALLOWED_SECRETS = {"OPENAI_API_KEY"}
 
 
 def _allowed(name: str) -> bool:
-    return name in ALLOWED_SECRETS or name.startswith("MODEL_CONNECTION_")
+    return (
+        name in ALLOWED_SECRETS
+        or name.startswith("MODEL_CONNECTION_")
+        or name.startswith("INTEGRATION_CONNECTION_")
+    )
 
 
 def secret_file() -> Path:

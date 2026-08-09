@@ -8,6 +8,7 @@ can preserve these interfaces while replacing SQLite with PostgreSQL.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,12 @@ from digital_company.operations_projection import decode_audit_events, project_o
 from digital_company.postgres_compat import PostgresCompat, company_schema
 from digital_company.skill_catalog import BUILTIN_SKILLS
 from digital_company.skill_selection import select_skills
+from digital_company.integration_connectors import (
+    ADAPTERS as INTEGRATION_ADAPTERS,
+    secret_name as integration_secret_name,
+    validate_connection,
+)
+from digital_company.runtime_secrets import get_secret
 
 
 def utc_now() -> str:
@@ -125,7 +132,7 @@ class CompanyStore:
             recent_failures=failures,
             stakeholder_messages=messages,
             profile=self.get_profile(),
-            capabilities=self.list_integrations(),
+            capabilities=self.capability_snapshot(),
             human_handoffs=self.list_handoffs(status="pending"),
             skills=self.list_skills(),
         )
@@ -228,6 +235,145 @@ class CompanyStore:
                 "updated_at": row["updated_at"],
             })
         return result
+
+    def upsert_integration_connection(self, payload: dict) -> dict:
+        """Persist one transport profile without accepting credential values."""
+        value = validate_connection(payload)
+        now = utc_now()
+        status = "configured" if value["enabled"] else "disabled"
+        self.db.execute(
+            "INSERT INTO integration_connections(id,name,adapter,provider,location,base_url,status,"
+            "capabilities_json,config_json,credential_fields_json,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "name=excluded.name,adapter=excluded.adapter,provider=excluded.provider,"
+            "location=excluded.location,base_url=excluded.base_url,status=excluded.status,"
+            "capabilities_json=excluded.capabilities_json,config_json=excluded.config_json,"
+            "credential_fields_json=excluded.credential_fields_json,updated_at=excluded.updated_at",
+            (
+                value["id"], value["name"], value["adapter"], value["provider"],
+                value["location"], value["base_url"], status,
+                json.dumps(value["capabilities"]), json.dumps(value["config"]),
+                json.dumps(value["credential_fields"]), now, now,
+            ),
+        )
+        self.db.commit()
+        self.audit("integration.connection_configured", {
+            "connection_id": value["id"], "adapter": value["adapter"],
+            "provider": value["provider"], "capabilities": value["capabilities"],
+        })
+        return self.get_integration_connection(value["id"])
+
+    def list_integration_connections(self) -> list[dict]:
+        """Return provider-neutral profiles with boolean-only credential state."""
+        values = []
+        for row in self.db.execute(
+            "SELECT * FROM integration_connections ORDER BY name,id"
+        ):
+            fields = json.loads(row["credential_fields_json"])
+            secret_status = {
+                field: bool(get_secret(integration_secret_name(row["id"], field)))
+                for field in fields
+            }
+            configured = row["status"] == "configured"
+            ready = configured and all(secret_status.values())
+            config = json.loads(row["config_json"])
+            authorization_required = (
+                row["adapter"] == "oauth2_authorization_code"
+                and not bool(config.get("authorized"))
+            )
+            effective = (
+                "disabled" if not configured
+                else "missing_credentials" if not ready
+                else "authorization_required" if authorization_required
+                else "ready"
+            )
+            values.append({
+                "id": row["id"], "name": row["name"], "adapter": row["adapter"],
+                "adapter_label": INTEGRATION_ADAPTERS[row["adapter"]]["label"],
+                "provider": row["provider"], "location": row["location"],
+                "base_url": row["base_url"], "status": effective,
+                "capabilities": json.loads(row["capabilities_json"]),
+                "config": config, "credential_fields": fields,
+                "secret_status": secret_status, "updated_at": row["updated_at"],
+            })
+        return values
+
+    def get_integration_connection(self, connection_id: str) -> dict:
+        item = next((
+            value for value in self.list_integration_connections()
+            if value["id"] == connection_id
+        ), None)
+        if not item:
+            raise KeyError(connection_id)
+        return item
+
+    def capability_snapshot(self) -> list[dict]:
+        """Expose legacy platform requests and ready transport profiles to the CEO."""
+        result = self.list_integrations()
+        result.extend({
+            "provider": item["provider"], "connection_id": item["id"],
+            "adapter": item["adapter"], "status": item["status"],
+            "config": {"capabilities": item["capabilities"], "base_url": item["base_url"]},
+            "required_secrets": item["credential_fields"],
+            "secret_status": item["secret_status"],
+        } for item in self.list_integration_connections())
+        return result
+
+    def prepare_integration_operation(
+        self, execution_key: str, connection_id: str, capability: str,
+        method: str, path: str, request: dict,
+    ) -> dict:
+        """Freeze one connector call and derive its provider idempotency key."""
+        connection = self.get_integration_connection(connection_id)
+        if connection["status"] != "ready":
+            raise RuntimeError(f"Integration connection is not ready: {connection['status']}")
+        if capability not in connection["capabilities"]:
+            raise ValueError("Connection does not grant the requested capability")
+        method = method.upper()
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            raise ValueError("Unsupported integration method")
+        if not path.startswith("/") or "://" in path or "\x00" in path or len(path) > 1000:
+            raise ValueError("Integration path must be a relative URL path")
+        if not execution_key or len(execution_key) > 200:
+            raise ValueError("A bounded execution key is required")
+        canonical_request = json.dumps(request, sort_keys=True, separators=(",", ":"))
+        if len(canonical_request) > 100_000:
+            raise ValueError("Integration request is too large")
+        provider_key = "telekt-" + hashlib.sha256(execution_key.encode()).hexdigest()[:40]
+        existing = self.db.execute(
+            "SELECT * FROM integration_operations WHERE execution_key=?", (execution_key,),
+        ).fetchone()
+        if existing:
+            same = (
+                existing["connection_id"] == connection_id
+                and existing["capability"] == capability
+                and existing["method"] == method
+                and existing["path"] == path
+                and existing["request_json"] == canonical_request
+            )
+            if not same:
+                raise RuntimeError("Execution key was already used for a different integration operation")
+            return {**dict(existing), "request": json.loads(existing["request_json"]), "cached": True}
+        now = utc_now()
+        self.db.execute(
+            "INSERT INTO integration_operations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                execution_key, connection_id, capability, method, path, canonical_request,
+                provider_key, "prepared", None, now, now,
+            ),
+        )
+        self.db.commit()
+        self.audit("integration.operation_prepared", {
+            "execution_key": execution_key, "connection_id": connection_id,
+            "capability": capability, "method": method, "path": path,
+            "provider_idempotency_key": provider_key,
+        })
+        return {
+            "execution_key": execution_key, "connection_id": connection_id,
+            "capability": capability, "method": method, "path": path,
+            "request": request, "provider_idempotency_key": provider_key,
+            "status": "prepared", "cached": False,
+        }
 
     def begin_activity(self, execution_key: str) -> dict | None:
         """Start/recover one Temporal activity or return its cached result."""
@@ -713,6 +859,7 @@ class CompanyStore:
         snapshot["profile"] = self.get_profile()
         snapshot["approvals"] = self.list_approvals()[:20]
         snapshot["human_handoffs"] = self.list_handoffs()
+        snapshot["integration_connections"] = self.list_integration_connections()
         snapshot["recent_tasks"] = [dict(row) for row in self.db.execute(
             "SELECT id,action,title,specialist,status,created_at,completed_at FROM tasks "
             "ORDER BY created_at DESC LIMIT 20"

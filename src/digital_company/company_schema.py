@@ -55,6 +55,20 @@ CREATE TABLE IF NOT EXISTS integrations (
   config_json TEXT NOT NULL, required_secrets_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS integration_connections (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, adapter TEXT NOT NULL,
+  provider TEXT NOT NULL, location TEXT NOT NULL, base_url TEXT NOT NULL,
+  status TEXT NOT NULL, capabilities_json TEXT NOT NULL,
+  config_json TEXT NOT NULL, credential_fields_json TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS integration_operations (
+  execution_key TEXT PRIMARY KEY, connection_id TEXT NOT NULL,
+  capability TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL,
+  request_json TEXT NOT NULL, provider_idempotency_key TEXT NOT NULL,
+  status TEXT NOT NULL, response_json TEXT, created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS human_handoffs (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, payload_json TEXT NOT NULL,
   status TEXT NOT NULL, outcome TEXT, created_at TEXT NOT NULL,

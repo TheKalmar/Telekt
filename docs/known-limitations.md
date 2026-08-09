@@ -73,10 +73,12 @@ control-plane origin.
 ## Platform integrations
 
 The CEO can evaluate build/buy/integrate/manual paths, request a platform, and
-reason over durable capability readiness. Shopify configuration currently stores
-only metadata and secret references. OAuth/client-credentials exchange, API
-health verification, catalog reads, draft creation, publication, webhooks, and
-supplier marketplace connectors are not implemented yet.
+reason over durable capability readiness. Provider-neutral HTTP, OAuth and
+webhook profiles now store capability grants, write-only credential references,
+and stable idempotency keys for prepared operations. Adapter dispatch,
+OAuth exchanges, API health verification, catalog reads, draft creation,
+publication, incoming webhooks, and supplier marketplace connectors are not
+implemented yet.
 
 ## Browser and outsourcing
 

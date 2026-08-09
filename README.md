@@ -30,6 +30,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
 - Internal network-isolated execution service with idempotent per-company Git checkpoints
 - Build/buy/integrate/manual strategy gate with durable platform capability tracking
+- Provider-neutral HTTP/OAuth/webhook connections with write-only credentials and idempotent operation preparation
 - Human takeover missions for login, CAPTCHA, 2FA, identity, terms, and other manual checkpoints
 - Isolated persistent Chromium cockpit with domain allowlists, screenshots, manual clicks, and direct typing
 - Local web control plane

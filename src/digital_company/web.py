@@ -10,6 +10,7 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import uvicorn
 from dotenv import load_dotenv
@@ -24,6 +25,8 @@ from digital_company.api_models import (
     EmailSettingsIn,
     HandoffDecisionIn,
     IntegrationSettingsIn,
+    IntegrationConnectionIn,
+    IntegrationOperationIn,
     MessageIn,
     ModelConnectionIn,
     ModelModeIn,
@@ -46,6 +49,10 @@ from digital_company.preflight import (
     evaluate_runtime_preflight,
 )
 from digital_company.execution_client import ExecutionRuntimeClient, ExecutionRuntimeError
+from digital_company.integration_connectors import (
+    ADAPTERS as INTEGRATION_ADAPTERS,
+    secret_name as integration_secret_name,
+)
 
 
 ROOT = Path.cwd()
@@ -614,6 +621,60 @@ def save_integration_settings(payload: IntegrationSettingsIn):
             {"store_domain": domain, "capabilities": capabilities},
             required,
         )
+
+
+@app.get("/api/integration-connections")
+def integration_connections():
+    """List transport technologies and configured profiles without secret values."""
+    with store_scope() as store:
+        return {
+            "adapters": [
+                {"id": key, **value} for key, value in INTEGRATION_ADAPTERS.items()
+            ],
+            "connections": store.list_integration_connections(),
+        }
+
+
+@app.post("/api/integration-connections")
+def save_integration_connection(payload: IntegrationConnectionIn):
+    """Persist profile metadata and write-only credentials through the local vault."""
+    connection_id = payload.id or str(uuid4())
+    adapter = INTEGRATION_ADAPTERS.get(payload.adapter)
+    if not adapter:
+        raise HTTPException(400, "Unsupported integration adapter")
+    credentials = {key: value.strip() for key, value in payload.credentials.items() if value.strip()}
+    unknown = set(credentials) - set(adapter["credential_fields"])
+    if unknown:
+        raise HTTPException(400, f"Unexpected credential fields: {', '.join(sorted(unknown))}")
+    if any(len(value) > 500 for value in credentials.values()):
+        raise HTTPException(400, "Credential values must not exceed 500 characters")
+    try:
+        with store_scope() as store:
+            item = store.upsert_integration_connection({
+                **payload.model_dump(exclude={"credentials"}),
+                "id": connection_id,
+            })
+        for field, value in credentials.items():
+            save_secret(integration_secret_name(connection_id, field), value)
+        with store_scope() as store:
+            return store.get_integration_connection(connection_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/integration-operations/prepare")
+def prepare_integration_operation(payload: IntegrationOperationIn):
+    """Freeze and idempotently identify a call; this endpoint never sends it."""
+    try:
+        with store_scope() as store:
+            return store.prepare_integration_operation(
+                payload.execution_key, payload.connection_id, payload.capability,
+                payload.method, payload.path, payload.request,
+            )
+    except KeyError as exc:
+        raise HTTPException(404, "Integration connection not found") from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.get("/api/local-model/health")

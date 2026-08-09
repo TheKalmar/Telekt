@@ -173,6 +173,29 @@ Rejects one exact pending payload.
 
 ## Platform capabilities
 
+### `GET /api/integration-connections`
+
+Lists provider-neutral adapter technologies and the active company's connection
+profiles. Credential values are never returned; every expected field is exposed
+only as present/missing.
+
+### `POST /api/integration-connections`
+
+Creates or updates an arbitrary HTTP, OAuth, or webhook connection with a
+provider label, endpoint, explicit capability set, non-secret adapter config and
+write-only `credentials` object. Omitting credentials while editing preserves
+their existing vault values.
+
+### `POST /api/integration-operations/prepare`
+
+Freezes a future connector call and derives a stable provider idempotency key.
+The connection must be ready and grant the requested capability. Reusing an
+execution key with changed connection, capability, method, path, or body returns
+`409`. This endpoint does not transmit the operation.
+
+The older `/api/settings/integrations` routes remain for legacy platform
+capability metadata.
+
 ### `GET /api/settings/integrations`
 
 Returns configured and requested integrations, capabilities, non-secret config,
