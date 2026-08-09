@@ -10,7 +10,7 @@ class BriefMailer(Protocol):
 
     def send_daily_brief(
         self, company_id: str, summary: dict, approvals: list[dict], settings: dict
-    ) -> list[str]: ...
+    ) -> int: ...
 
 
 def apply_orchestration_result(store, result: dict) -> None:
@@ -47,7 +47,7 @@ class StakeholderBriefService:
 
         try:
             snapshot = snapshot or store.snapshot()
-            sent = self.mailer.send_daily_brief(
+            sent_count = self.mailer.send_daily_brief(
                 company_id,
                 {
                     "control": store.get_control()["state"],
@@ -58,13 +58,15 @@ class StakeholderBriefService:
                 approvals,
                 settings,
             )
-            if sent:
+            if not isinstance(sent_count, int) or isinstance(sent_count, bool):
+                raise TypeError("Daily brief mailer must return an integer recipient count")
+            if sent_count:
                 store.audit("stakeholder.notification_sent", {
-                    "channel": "daily_ceo_brief", "recipients": sent,
+                    "channel": "daily_ceo_brief", "recipients": sent_count,
                 })
             return {
-                "status": "sent" if sent else "not_configured",
-                "recipients": len(sent),
+                "status": "sent" if sent_count else "not_configured",
+                "recipients": sent_count,
             }
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"

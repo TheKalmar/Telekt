@@ -37,8 +37,8 @@ class FakeStore:
 
 
 class FakeMailer:
-    def __init__(self, recipients=None):
-        self.recipients = recipients or []
+    def __init__(self, recipients=0):
+        self.recipients = recipients
         self.calls = []
 
     def send_daily_brief(self, company_id, summary, approvals, settings):
@@ -48,17 +48,20 @@ class FakeMailer:
 
 def test_brief_service_batches_and_audits_one_delivery():
     store = FakeStore(approvals=[{"id": "approval-1"}])
-    mailer = FakeMailer(["owner@example.com"])
+    mailer = FakeMailer(1)
 
     result = StakeholderBriefService(mailer).send_if_due("company-1", store)
 
     assert result == {"status": "sent", "recipients": 1}
     assert mailer.calls[0][1]["remaining"] == 88
-    assert store.events[0][0] == "stakeholder.notification_sent"
+    assert store.events == [(
+        "stakeholder.notification_sent",
+        {"channel": "daily_ceo_brief", "recipients": 1},
+    )]
 
 
 def test_brief_service_skips_disabled_and_rate_limited_delivery():
-    mailer = FakeMailer(["owner@example.com"])
+    mailer = FakeMailer(1)
     assert StakeholderBriefService(mailer).send_if_due(
         "company-1", FakeStore(enabled=False)
     )["status"] == "not_needed"
@@ -66,6 +69,17 @@ def test_brief_service_skips_disabled_and_rate_limited_delivery():
         "company-1", FakeStore(approvals=[{"id": "a"}], due=False)
     )["status"] == "rate_limited"
     assert mailer.calls == []
+
+
+def test_brief_service_rejects_a_mailer_contract_mismatch():
+    store = FakeStore(approvals=[{"id": "approval-1"}])
+    mailer = FakeMailer(["owner@example.com"])
+
+    result = StakeholderBriefService(mailer).send_if_due("company-1", store)
+
+    assert result["status"] == "failed"
+    assert "integer recipient count" in result["error"]
+    assert [event for event, _ in store.events] == ["stakeholder.notification_failed"]
 
 
 def test_orchestration_result_has_one_shared_runtime_projection():
