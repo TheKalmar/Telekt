@@ -19,6 +19,8 @@ POC history, including:
   the CEO stopped, list exact steps/evidence, and require a completion or blocker result;
 - governed OpenAI Computer Use missions with live dashboard visibility;
 - automatic human takeover for login, CAPTCHA, 2FA, safety checks, and form submission.
+- internal network-isolated execution runtime with idempotent per-company Git checkpoints;
+- deterministic autonomy reliability scenarios and operator recovery from committed state.
 
 This is a POC, not production software. The durable overlay now uses PostgreSQL
 for company and portfolio state plus recovery-safe Temporal V3 workflows. The
@@ -140,8 +142,19 @@ Invoke-RestMethod http://127.0.0.1:8421/api/local-model/models
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Expected POC services are `app`, `worker`, and `browser-runtime`; bundled mode
-also runs `ollama` and the one-shot `ollama-init`. The current suite has 83 tests.
+Expected core services are `app`, `worker`, `browser-runtime`, and
+`execution-runtime`; bundled mode also runs `ollama` and the one-shot
+`ollama-init`. PostgreSQL/Temporal overlays add their infrastructure services.
+The current suite has 115 tests.
+
+The execution runtime has no published host port. Verify it through:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8421/api/execution/health
+```
+
+General generated-code commands intentionally fail closed; read
+`docs/execution-runtime.md` before changing that boundary.
 
 If the virtual environment does not exist:
 
@@ -178,6 +191,8 @@ Pause/Stop are cooperative and take effect between model calls/browser actions.
 | `src/digital_company/agents.py` | CEO and specialist prompts, Agents SDK, model routing |
 | `src/digital_company/models.py` | Typed contracts at the probabilistic/deterministic boundary |
 | `src/digital_company/policy.py` | Deterministic authorization Governor |
+| `src/digital_company/execution_runtime.py` | Internal Git checkpoint and structured-command boundary |
+| `src/digital_company/execution_client.py` | Worker-to-runtime fixed-host client |
 | `src/digital_company/orchestrator.py` | Observe-decide-authorize-execute-record loop |
 | `src/digital_company/store.py` | Canonical per-company SQLite state and audit projections |
 | `src/digital_company/worker.py` | Background polling and company leases |

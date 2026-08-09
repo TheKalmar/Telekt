@@ -12,6 +12,11 @@ Temporal attempts. The lightweight stack still ships the legacy SQLite polling
 worker as a development fallback. External connectors still require their own
 provider-level idempotency contracts.
 
+Structured specialist failures are stored separately from completed work and
+are included in the CEO's next canonical snapshot. The recovery control resumes
+from committed state rather than blindly replaying the failed action. This still
+does not prove exactly-once behavior for future external provider adapters.
+
 ## Persistence
 
 PostgreSQL is canonical for company business and portfolio state in the
@@ -58,9 +63,12 @@ The ledger records model-estimated task cost, not actual API, advertising, infra
 
 Development output now passes through a confined per-company file workspace with
 atomic writes, a small extension allowlist, size limits, hashes, and deterministic
-HTML checks. This is not yet a process/container sandbox: specialists still lack
-a general shell, browser, GitHub, deployment, or payment tool runtime. Generated
-HTML is downloadable rather than executed in the trusted control-plane origin.
+HTML checks. The internal execution service also creates idempotent per-company
+Git checkpoints on a separate, network-isolated volume. General subprocess
+commands remain fail-closed because the service is not yet a per-job
+container/VM sandbox. GitHub push, deployment, and payment tool runtimes are not
+implemented. Generated HTML is downloadable rather than executed in the trusted
+control-plane origin.
 
 ## Platform integrations
 

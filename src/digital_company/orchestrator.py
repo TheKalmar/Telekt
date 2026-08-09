@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,6 +14,7 @@ from digital_company.policy import Governor
 from digital_company.store import CompanyStore
 from digital_company.workspace import WorkspaceRuntime
 from digital_company.model_connections import ModelConnectionRegistry
+from digital_company.execution_client import ExecutionRuntimeClient
 
 
 class CompanyOrchestrator:
@@ -34,6 +36,7 @@ class CompanyOrchestrator:
         governor: Governor | None = None,
         workspace: WorkspaceRuntime | None = None,
         model_connections: ModelConnectionRegistry | None = None,
+        execution_runtime: ExecutionRuntimeClient | None = None,
     ):
         self.store = store
         self.workspace = workspace or WorkspaceRuntime(artifacts_dir)
@@ -53,6 +56,9 @@ class CompanyOrchestrator:
         )
         self.governor = governor or Governor()
         self.company_id = company_id
+        self.execution_runtime = execution_runtime
+        if self.execution_runtime is None and company_id and os.getenv("EXECUTION_RUNTIME_URL"):
+            self.execution_runtime = ExecutionRuntimeClient()
         # ``mailer`` remains accepted for constructor compatibility. Stakeholder
         # notifications now belong to StakeholderBriefService, not orchestration.
         self.execution_key = execution_key
@@ -219,6 +225,9 @@ class CompanyOrchestrator:
 
     def _persist_result(self, task_id: str, proposal, result) -> None:
         """Persist a specialist result and confine any model-provided artifact path."""
+        if result.status == "failed":
+            self.store.fail_task(task_id, result.summary, result)
+            return
         if result.artifact_path and result.artifact_content:
             try:
                 metadata = self.workspace.write_text(result.artifact_path, result.artifact_content)
@@ -233,6 +242,22 @@ class CompanyOrchestrator:
                 f"Workspace validation {'passed' if metadata['checks']['passed'] else 'failed'}; "
                 f"sha256={metadata['sha256'][:12]}, bytes={metadata['size_bytes']}"
             )
+            if self.execution_runtime and self.company_id:
+                checkpoint = self.execution_runtime.checkpoint(
+                    self.company_id, task_id, result.artifact_path, result.artifact_content,
+                    f"{self.execution_key or task_id}:artifact:{result.artifact_path}",
+                )
+                self.store.audit("execution.repository_checkpointed", {
+                    "task_id": task_id,
+                    "branch": checkpoint["branch"],
+                    "commit": checkpoint.get("commit"),
+                    "status": checkpoint["status"],
+                    "cached": checkpoint.get("cached", False),
+                })
+                result.evidence.append(
+                    f"Isolated Git checkpoint {checkpoint.get('commit') or 'unborn'} "
+                    f"on {checkpoint['branch']}"
+                )
         self.store.complete_task(task_id, result, proposal.estimated_cost_eur)
 
     def _artifact_context(self, specialist: str) -> dict | None:

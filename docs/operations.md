@@ -73,11 +73,28 @@ path exists.
 
 The **Runtime readiness** panel checks that the worker is online, the exact
 selected local model exists when local inference is required, the selected remote credential is
-present for cloud/hybrid routing, and the browser runtime is reachable. Dashboard
+present for cloud/hybrid routing, the browser runtime is reachable, and the
+internal execution runtime is healthy when configured. Dashboard
 checks are cached briefly to avoid polling dependent services every two seconds;
 pressing Start always performs a fresh check and fails closed on blockers.
 
 ## Failure recovery
+
+When a Temporal activity exhausts its retries, Operations shows an actionable
+**Execution needs recovery** card. **Retry from safe checkpoint** does not replay
+an ambiguous external side effect. It closes orphaned model telemetry, starts a
+new company cycle from committed PostgreSQL state, and gives the failed task to
+the CEO as canonical evidence so it can diagnose, adapt, or safely retry.
+
+The deterministic reliability suite exercises the real orchestrator without
+calling a model:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_autonomy_reliability.py -q
+```
+
+It covers the goal-to-MVP-to-approval path, transient activity recovery without
+duplicate tasks or ledger charges, and structured specialist failures.
 
 ### Ollama offline
 
@@ -122,16 +139,17 @@ Large prompts can still exceed context. Keep snapshots compact and load artifact
 - Add provider timeouts, retries, circuit breakers, and fallback policy.
 - Reconcile estimated usage costs with provider billing exports.
 - Add schema migrations and database backups.
-- Add end-to-end tests and agent evals.
+- Run the existing end-to-end reliability tests and live CEO evals in CI.
 # Container operations
 
-The bundled-local Compose stack contains five services:
+The bundled-local Compose stack contains these core services:
 
 - `app`: FastAPI control plane and autonomous loop.
 - `worker`: autonomous loop execution and restart recovery.
 - `ollama`: persistent local inference server.
 - `ollama-init`: idempotent one-shot model bootstrapper.
 - `browser-runtime`: isolated persistent headless Chromium controlled through the app proxy.
+- `execution-runtime`: internal-only per-company Git checkpoint service on a separate volume.
 
 Company databases and artifacts live in the `company_data` named volume. Ollama
 models live in `ollama_models`. Rebuilding or replacing containers therefore

@@ -103,6 +103,14 @@ Requests a cooperative pause after the current atomic operation.
 
 Requests a cooperative stop after the current atomic operation.
 
+### `POST /api/recovery/retry`
+
+Available only while the selected company is in `error`. It reruns preflight,
+closes orphaned model telemetry, and signals Temporal to start a new execution
+from the last committed PostgreSQL checkpoint. It does not directly replay an
+ambiguous external action. Returns `409` when there is no recoverable error or
+when runtime readiness still has blockers.
+
 ## Stakeholder messages
 
 ### `POST /api/messages`

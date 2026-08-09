@@ -128,6 +128,7 @@ class CompanySnapshot(BaseModel):
     completed_tasks: list[dict]
     pending_approvals: list[dict]
     recent_evidence: list[dict]
+    recent_failures: list[dict] = Field(default_factory=list)
     stakeholder_messages: list[dict] = Field(default_factory=list)
     profile: dict = Field(default_factory=dict)
     capabilities: list[dict] = Field(default_factory=list)

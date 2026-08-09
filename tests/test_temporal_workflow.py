@@ -80,3 +80,38 @@ def test_web_control_persists_then_signals_temporal(monkeypatch):
 
     assert store.control == ("running", "Queued for autonomous worker")
     assert calls == [("company-1", "start", "operator_start")]
+
+
+class RecoveryStore(FakeStore):
+    def __init__(self):
+        super().__init__()
+        self.control = ("error", "provider timeout")
+        self.events = []
+        self.closed_model_runs = []
+
+    def close_orphaned_model_runs(self, reason):
+        self.closed_model_runs.append(reason)
+
+    def audit(self, event, payload):
+        self.events.append((event, payload))
+
+
+def test_web_recovery_resumes_from_committed_state(monkeypatch):
+    store = RecoveryStore()
+    calls = []
+    monkeypatch.setattr(web.registry, "active_id", lambda: "company-1")
+    monkeypatch.setattr(web, "get_store", lambda company_id=None: store)
+    monkeypatch.setattr(web, "runtime_preflight", lambda value, force=False: {
+        "ready": True, "blockers": [],
+    })
+    monkeypatch.setattr(web, "signal_temporal", lambda *args: calls.append(args) or True)
+
+    result = web.retry_from_checkpoint()
+
+    assert result == {"status": "running", "strategy": "resume_from_committed_state"}
+    assert store.control == ("running", "Recovery queued from last committed checkpoint")
+    assert calls == [("company-1", "start", "operator_recovery_retry")]
+    assert store.events == [(
+        "recovery.operator_retry_requested",
+        {"strategy": "resume_from_committed_state"},
+    )]

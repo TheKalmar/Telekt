@@ -47,6 +47,7 @@ def evaluate_runtime_preflight(
     connections: list[dict],
     browser: dict,
     connection_check: Callable[[dict | None, bool], tuple[bool, str]],
+    execution: dict | None = None,
 ) -> dict:
     """Build readiness checks from explicit runtime observations."""
     mode = settings["model_mode"]
@@ -93,6 +94,19 @@ def evaluate_runtime_preflight(
         "detail": (
             "Isolated browser runtime is online" if browser_ready
             else "Browser runtime is offline; reasoning work can run but Browser Missions cannot"
+        ),
+    })
+    execution = execution or {"status": "disabled"}
+    execution_ready = execution.get("status") == "ok"
+    execution_configured = execution.get("status") != "disabled"
+    checks.append({
+        "id": "execution_runtime",
+        "status": "pass" if execution_ready else "block" if execution_configured else "warn",
+        "detail": (
+            "Isolated build and Git runtime is online" if execution_ready
+            else "Execution runtime is configured but unavailable; code tasks cannot run safely"
+            if execution_configured
+            else "Execution runtime is not configured; reasoning can run but code is artifact-only"
         ),
     })
     blockers = [check for check in checks if check["status"] == "block"]

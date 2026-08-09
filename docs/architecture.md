@@ -150,6 +150,13 @@ and runs deterministic HTML preflight checks. Every successful write becomes an
 `artifact.written` audit event. It deliberately provides no general shell or
 host-filesystem access.
 
+`execution_runtime.py` is a separate internal-only container with its own volume.
+It receives no company database, browser profile, model, SMTP, or platform
+credentials. Development artifacts are idempotently copied into a per-company
+Git repository and committed on a task branch. General subprocess execution is
+fail-closed until a true per-job container/VM backend can mount only one company
+workspace and remove all network access. See `docs/execution-runtime.md`.
+
 ## Stakeholder intervention
 
 Stakeholder messages have two modes:
@@ -203,7 +210,7 @@ The intended production evolution is:
 |---|---|
 | SQLite `registry.db` portfolio metadata | Completed in the infrastructure stack; retained only as fallback/import source |
 | Lightweight polling-worker fallback | Temporal-only production execution |
-| Local artifact directories | GitHub plus object storage |
+| Local artifacts plus isolated Git checkpoints | Governed GitHub connector plus object storage |
 | Static Governor rules | Versioned policy engine |
 | Direct local execution | Isolated local/cloud runtime |
 | No authentication | Identity, RBAC, audit export |

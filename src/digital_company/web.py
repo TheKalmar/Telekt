@@ -45,6 +45,7 @@ from digital_company.preflight import (
     connection_ready as check_model_connection,
     evaluate_runtime_preflight,
 )
+from digital_company.execution_client import ExecutionRuntimeClient, ExecutionRuntimeError
 
 
 ROOT = Path.cwd()
@@ -114,15 +115,27 @@ def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
     connection_registry = ModelConnectionRegistry()
     connections = connection_registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
     browser = browser_health()
+    execution = execution_health()
     result = evaluate_runtime_preflight(
         settings,
         worker=worker,
         connections=connections,
         browser=browser,
+        execution=execution,
         connection_check=lambda connection, verify: connection_ready(connection, verify),
     )
     _preflight_cache[cache_key] = (time.monotonic(), signature, result)
     return result
+
+
+def execution_health() -> dict:
+    """Check the fixed internal build runtime without accepting a caller-supplied host."""
+    if not os.getenv("EXECUTION_RUNTIME_URL"):
+        return {"status": "disabled"}
+    try:
+        return ExecutionRuntimeClient().health()
+    except (ExecutionRuntimeError, ValueError) as exc:
+        return {"status": "offline", "detail": str(exc)}
 
 
 @app.get("/")
@@ -193,6 +206,11 @@ def preflight():
         return runtime_preflight(store, force=True)
 
 
+@app.get("/api/execution/health")
+def isolated_execution_health():
+    return execution_health()
+
+
 @app.get("/api/operations")
 def operations():
     """Return operational telemetry for the selected company and worker."""
@@ -209,6 +227,29 @@ def operations():
         }
     data["worker"] = registry.worker_status()
     return data
+
+
+@app.post("/api/recovery/retry")
+def retry_from_checkpoint():
+    """Resume after a terminal activity error from the last committed company state."""
+    company_id = registry.active_id()
+    with store_scope(company_id) as store:
+        control_state = store.get_control()["state"]
+        if control_state != "error":
+            raise HTTPException(409, "The company has no recoverable runtime error")
+        readiness = runtime_preflight(store, force=True)
+        if not readiness["ready"]:
+            raise HTTPException(409, {
+                "message": "Runtime preflight failed",
+                "blockers": readiness["blockers"],
+            })
+        store.close_orphaned_model_runs("operator requested recovery from checkpoint")
+        store.set_control("running", "Recovery queued from last committed checkpoint")
+        store.audit("recovery.operator_retry_requested", {
+            "strategy": "resume_from_committed_state",
+        })
+    signal_temporal(company_id, "start", "operator_recovery_retry")
+    return {"status": "running", "strategy": "resume_from_committed_state"}
 
 
 @app.get("/api/companies")

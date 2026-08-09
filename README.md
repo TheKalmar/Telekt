@@ -28,6 +28,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Operations dashboard with active agent, model latency, failures, fallbacks, task states, and audit events
 - Runtime readiness gate for worker, selected model connections, credentials, and browser service
 - Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
+- Internal network-isolated execution service with idempotent per-company Git checkpoints
 - Build/buy/integrate/manual strategy gate with durable platform capability tracking
 - Human takeover missions for login, CAPTCHA, 2FA, identity, terms, and other manual checkpoints
 - Isolated persistent Chromium cockpit with domain allowlists, screenshots, manual clicks, and direct typing
@@ -71,8 +72,9 @@ The local model configuration is in [config/Modelfile.deepseek-company](config/M
 
 ### Docker (recommended)
 
-Docker Compose runs the control plane, browser runtime, Ollama, the customized local model, and
-persistent volumes for company state and model files. No OpenAI key is required
+Docker Compose runs the control plane, browser runtime, internal Git execution runtime,
+Ollama, the customized local model, and persistent volumes for company state,
+execution workspaces, and model files. No OpenAI key is required
 when a company uses Local mode.
 
 Bundled Ollama with the default DeepSeek-R1 8B model on CPU:
@@ -193,7 +195,7 @@ CEO behavior has a separate real-agent eval harness. Fixture validation is free:
 .\.venv\Scripts\python evals\run_local.py --validate-only
 ```
 
-An intentional live run uses five model calls and writes the detailed result to
+An intentional live run uses one model call per eval case and writes the detailed result to
 `evals/results/latest.json`; see `evals/README.md`.
 
 ## Repository map
@@ -248,6 +250,7 @@ Read these in order:
 9. [Model reliability](docs/model-reliability.md)
 10. [Platform strategy and Shopify](docs/platform-integrations.md)
 11. [Browser missions and human takeover](docs/browser-handoffs.md)
+12. [Isolated execution runtime](docs/execution-runtime.md)
 
 ## Security warning
 

@@ -23,6 +23,7 @@ digital-company = "digital_company.cli:main"
 digital-company-web = "digital_company.web:main"
 digital-company-worker = "digital_company.worker:main"
 digital-company-browser = "digital_company.browser_runtime:main"
+digital-company-execution-runtime = "digital_company.execution_runtime:main"
 digital-company-temporal-worker = "digital_company.temporal_worker:main"
 
 [build-system]

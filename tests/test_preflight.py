@@ -25,6 +25,7 @@ def stub_services(monkeypatch, models=None):
         return ok, "ready" if ok else "credential missing"
     monkeypatch.setattr(web, "connection_ready", ready)
     monkeypatch.setattr(web, "browser_health", lambda: {"status": "ok", "browser": "chromium"})
+    monkeypatch.setattr(web, "execution_health", lambda: {"status": "ok"})
 
 
 def test_local_preflight_requires_exact_installed_model(tmp_path, monkeypatch):

@@ -44,3 +44,19 @@ def test_operations_hides_stale_unfinished_model_run(tmp_path: Path, monkeypatch
     store.db.commit()
     monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "240")
     assert store.operations_data()["active_model_run"] is None
+
+
+def test_operations_exposes_actionable_terminal_recovery(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Build a company", 1000)
+    store.set_control("error", "TimeoutError: provider timed out")
+    store.audit("temporal.activity_failed", {
+        "execution_key": "company:execution:7",
+        "error": "TimeoutError: provider timed out",
+    })
+
+    recovery = store.operations_data()["recovery"]
+
+    assert recovery["required"] is True
+    assert recovery["action"] == "retry_from_checkpoint"
+    assert recovery["incident"]["event_type"] in {"runtime.error", "temporal.activity_failed"}

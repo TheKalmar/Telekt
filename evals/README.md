@@ -7,7 +7,7 @@ behavior rather than exact wording. Validate fixtures without spending tokens:
 .\.venv\Scripts\python evals\run_local.py --validate-only
 ```
 
-Run the live cloud suite only when intentional (five CEO calls):
+Run the live cloud suite only when intentional (one CEO call per listed case):
 
 ```powershell
 .\.venv\Scripts\python evals\run_local.py --mode cloud

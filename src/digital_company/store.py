@@ -100,6 +100,13 @@ class CompanyStore:
                 if result.get("artifact_content"):
                     result["artifact_content"] = "[stored artifact omitted from decision context]"
                 task["result"] = result
+        failures = [dict(row) for row in self.db.execute(
+            "SELECT id,action,title,specialist,status,result_json,completed_at FROM tasks "
+            "WHERE status='failed' ORDER BY completed_at DESC LIMIT 8"
+        )]
+        for failure in failures:
+            if failure["result_json"]:
+                failure["result"] = json.loads(failure.pop("result_json"))
         approvals = [dict(row) for row in self.db.execute(
             "SELECT id,task_id,status,reason FROM approvals WHERE status='pending' ORDER BY created_at"
         )]
@@ -115,6 +122,7 @@ class CompanyStore:
             goal=company["goal"], initial_budget_eur=company["initial_budget_eur"],
             spent_eur=spent, remaining_budget_eur=company["initial_budget_eur"] - spent,
             completed_tasks=tasks, pending_approvals=approvals, recent_evidence=evidence[-12:],
+            recent_failures=failures,
             stakeholder_messages=messages,
             profile=self.get_profile(),
             capabilities=self.list_integrations(),
@@ -462,15 +470,17 @@ class CompanyStore:
         self.db.commit()
         self.audit("task.completed", {"task_id": task_id, "result": result.model_dump(mode="json")})
 
-    def fail_task(self, task_id: str, reason: str) -> None:
-        """Finalize a claimed task as failed so it cannot execute twice."""
+    def fail_task(
+        self, task_id: str, reason: str, result: SpecialistResult | None = None,
+    ) -> None:
+        """Finalize an attempted task as failed so it cannot execute twice."""
         now = utc_now()
-        result = SpecialistResult(
+        result = result or SpecialistResult(
             status="failed", summary=reason, evidence=[], recommendation="Human review required",
         )
         self.db.execute(
             "UPDATE tasks SET status='failed',result_json=?,completed_at=? "
-            "WHERE id=? AND status='executing'",
+            "WHERE id=? AND status IN ('proposed','executing')",
             (result.model_dump_json(), now, task_id),
         )
         self.db.execute(
@@ -739,6 +749,7 @@ class CompanyStore:
             stale_after_seconds=max(
                 60, int(float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))) + 60
             ),
+            control=self.get_control(),
         )
 
     def record_model_usage(self, payload: dict) -> None:

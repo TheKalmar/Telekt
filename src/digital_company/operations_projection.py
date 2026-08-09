@@ -43,6 +43,7 @@ def project_operations(
     usage: Mapping,
     *,
     stale_after_seconds: int,
+    control: Mapping | None = None,
     now: datetime | None = None,
 ) -> dict:
     """Build the stable operations API contract from query results."""
@@ -94,6 +95,7 @@ def project_operations(
         "estimated_spend_eur": authorized_spend + api_spend,
         "recent_events": events[:40],
         "browser_mission": _project_browser_mission(events),
+        "recovery": _project_recovery(events, control or {}),
     }
 
 
@@ -158,4 +160,22 @@ def _project_browser_mission(events: list[dict]) -> dict | None:
         "last_action": last_action["payload"] if last_action else None,
         "detail": last_stop["payload"].get("summary") if last_stop else None,
         "started_at": latest_start["created_at"],
+    }
+
+
+def _project_recovery(events: list[dict], control: Mapping) -> dict:
+    """Expose one actionable incident instead of making operators read raw audit JSON."""
+    failure_types = {
+        "temporal.activity_failed", "runtime.error", "task.failed",
+        "model.failed", "model.fallback_failed",
+    }
+    incident = next((event for event in events if event["event_type"] in failure_types), None)
+    state = str(control.get("state", "unknown"))
+    required = state == "error"
+    return {
+        "required": required,
+        "state": state,
+        "detail": control.get("detail"),
+        "incident": incident,
+        "action": "retry_from_checkpoint" if required else None,
     }

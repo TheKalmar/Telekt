@@ -26,6 +26,7 @@
       "action.start":"▶ Start / Resume","action.pause":"Ⅱ Pause","action.stop":"■ Stop","action.modelSettings":"Model settings","action.enable":"Enable","action.missingAccess":"Missing access","action.disable":"Disable","action.send":"Send","action.close":"Close","action.cancel":"Cancel","action.save":"Save settings",
       "chat.placeholder":"Change a priority, ask a question or challenge the CEO's decision...","chat.directive":"Directive — interrupts the current plan","chat.question":"Question — does not interrupt the plan",
       "runtime.available":"Ollama status: available","runtime.unavailable":"Ollama status: unavailable",
+      "recovery.title":"Execution needs recovery","recovery.body":"The autonomous loop stopped after exhausting safe retries. Resume from the last committed company state; the CEO will receive the failure as evidence and choose the next action.","recovery.retry":"Retry from safe checkpoint","recovery.retrying":"Queuing recovery…",
       "footer":"Local control plane · durable PostgreSQL state · deterministic permission governor"
     },
     sr: {
@@ -52,6 +53,7 @@
       "action.start":"▶ Pokreni / Nastavi","action.pause":"Ⅱ Pauziraj","action.stop":"■ Zaustavi","action.modelSettings":"Postavke modela","action.enable":"Omogući","action.missingAccess":"Nedostaje pristup","action.disable":"Onemogući","action.send":"Pošalji","action.close":"Zatvori","action.cancel":"Otkaži","action.save":"Sačuvaj postavke",
       "chat.placeholder":"Promijeni prioritet, postavi pitanje ili ospori odluku CEO-a...","chat.directive":"Direktiva — prekida trenutni plan","chat.question":"Pitanje — ne prekida plan",
       "runtime.available":"Ollama status: dostupna","runtime.unavailable":"Ollama status: nedostupna",
+      "recovery.title":"Izvršenju je potreban recovery","recovery.body":"Autonomni loop je stao nakon što su sigurni retry pokušaji iscrpljeni. Nastavi od posljednjeg potvrđenog stanja kompanije; CEO će dobiti grešku kao dokaz i izabrati sljedeću akciju.","recovery.retry":"Nastavi od sigurnog checkpointa","recovery.retrying":"Zakazujem recovery…",
       "footer":"Lokalni kontrolni centar · trajno PostgreSQL stanje · deterministička kontrola dozvola"
     }
   };

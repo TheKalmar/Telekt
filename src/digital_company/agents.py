@@ -61,6 +61,10 @@ Prefer internal reversible work. Never hide costs. After a credible validation a
 so the Governor can request a human decision. Stop only when the goal is impossible or no useful action remains.
 Do not repeat a completed action unless you explicitly identify the evidence gap it will close."""
 CEO_INSTRUCTIONS += """
+Recent failures are canonical execution evidence, not completed work. Read recent_failures before choosing the next
+task. Diagnose or choose a cheaper alternative after a failure; never blindly repeat the same action. A retry is
+appropriate only when the proposal explains what changed or why the failure was transient and safely repeatable."""
+CEO_INSTRUCTIONS += """
 Stakeholder messages come from the capital owner. Consider every pending message before other work.
 Try hard to honor directives, but never violate the company goal, budget, evidence standards, or Governor policy.
 For every message considered, include its id in stakeholder_message_ids_considered and provide a direct

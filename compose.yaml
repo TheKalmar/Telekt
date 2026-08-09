@@ -26,12 +26,20 @@ services:
       SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
       SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
       BROWSER_RUNTIME_URL: http://browser-runtime:8430
+      EXECUTION_RUNTIME_URL: http://execution-runtime:8440
+      EXECUTION_RUNTIME_TOKEN: ${EXECUTION_RUNTIME_TOKEN:-telekt-local-runtime-only}
     volumes:
       - company_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - browser-runtime
+      browser-runtime:
+        condition: service_healthy
+      execution-runtime:
+        condition: service_healthy
+    networks:
+      - default
+      - execution
     restart: unless-stopped
 
   browser-runtime:
@@ -45,6 +53,32 @@ services:
     volumes:
       - browser_data:/browser-data
     shm_size: "1gb"
+    restart: unless-stopped
+
+  execution-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.execution
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8440
+      EXECUTION_DATA_DIR: /workspaces
+      EXECUTION_RUNTIME_TOKEN: ${EXECUTION_RUNTIME_TOKEN:-telekt-local-runtime-only}
+      EXECUTION_COMMANDS_ENABLED: "false"
+    volumes:
+      - execution_data:/workspaces
+    networks:
+      - execution
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.5
     restart: unless-stopped
 
   worker:
@@ -78,12 +112,20 @@ services:
       BROWSER_RUNTIME_URL: http://browser-runtime:8430
       COMPUTER_USE_MODEL: ${COMPUTER_USE_MODEL:-gpt-5.6}
       COMPUTER_USE_MAX_STEPS: ${COMPUTER_USE_MAX_STEPS:-12}
+      EXECUTION_RUNTIME_URL: http://execution-runtime:8440
+      EXECUTION_RUNTIME_TOKEN: ${EXECUTION_RUNTIME_TOKEN:-telekt-local-runtime-only}
     volumes:
       - company_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - browser-runtime
+      browser-runtime:
+        condition: service_healthy
+      execution-runtime:
+        condition: service_healthy
+    networks:
+      - default
+      - execution
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
       interval: 10s
@@ -95,3 +137,8 @@ services:
 volumes:
   company_data:
   browser_data:
+  execution_data:
+
+networks:
+  execution:
+    internal: true
