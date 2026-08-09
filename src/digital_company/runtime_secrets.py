@@ -6,7 +6,11 @@ import json
 import os
 from pathlib import Path
 
-ALLOWED_SECRETS = {"OPENAI_API_KEY", "ANTHROPIC_API_KEY"}
+ALLOWED_SECRETS = {"OPENAI_API_KEY"}
+
+
+def _allowed(name: str) -> bool:
+    return name in ALLOWED_SECRETS or name.startswith("MODEL_CONNECTION_")
 
 
 def secret_file() -> Path:
@@ -23,7 +27,7 @@ def _read() -> dict[str, str]:
     except (OSError, json.JSONDecodeError):
         return {}
     return {key: value for key, value in values.items()
-            if key in ALLOWED_SECRETS and isinstance(value, str) and value}
+            if _allowed(key) and isinstance(value, str) and value}
 
 
 def apply_runtime_secrets() -> None:
@@ -39,7 +43,7 @@ def secret_status() -> dict[str, bool]:
 
 def save_secret(name: str, value: str) -> None:
     """Atomically replace an allow-listed secret without returning its value."""
-    if name not in ALLOWED_SECRETS:
+    if not _allowed(name):
         raise ValueError("Unsupported secret")
     value = value.strip()
     if not value or len(value) > 500:
@@ -56,3 +60,10 @@ def save_secret(name: str, value: str) -> None:
         pass
     temporary.replace(path)
     os.environ[name] = value
+
+
+def get_secret(name: str) -> str | None:
+    """Read one allow-listed secret without exposing it through an API."""
+    if not _allowed(name):
+        return None
+    return _read().get(name) or os.getenv(name)

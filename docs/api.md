@@ -180,14 +180,21 @@ Configures non-secret platform metadata. Shopify accepts a permanent
 
 Allowed values: `local`, `hybrid`, and `cloud`. Mode changes are rejected while the active company is running.
 
-### `GET /api/settings/openai`
+### `GET /api/model-connections`
 
-Returns only `{ "configured": true|false }`; secret material is never returned.
+Lists transport adapters and configured model connections. Credentials are never
+returned; each connection exposes only `credential_configured` and `ready`.
 
-### `PUT /api/settings/openai`
+### `POST /api/model-connections`
 
-Accepts `{ "api_key": "..." }` and replaces the key in the shared runtime secret
-volume. Its response also contains credential presence only.
+Creates or updates a connection using an adapter, location, arbitrary model ID,
+optional base URL, and write-only `api_key`. The key is stored separately from
+the connection metadata and PostgreSQL.
+
+### `DELETE /api/model-connections/{connection_id}`
+
+Deletes an unused connection. Connections assigned to the active company cannot
+be deleted until routing is changed.
 
 ## Error behavior
 

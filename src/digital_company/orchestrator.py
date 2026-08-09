@@ -12,6 +12,7 @@ from digital_company.models import ActionType, SpecialistResult
 from digital_company.policy import Governor
 from digital_company.store import CompanyStore
 from digital_company.workspace import WorkspaceRuntime
+from digital_company.model_connections import ModelConnectionRegistry
 
 
 class CompanyOrchestrator:
@@ -28,10 +29,16 @@ class CompanyOrchestrator:
         self.artifacts_dir = artifacts_dir
         self.workspace = WorkspaceRuntime(artifacts_dir)
         settings = store.get_settings()
+        connections = ModelConnectionRegistry().ensure_defaults(
+            settings["local_model"], settings["cloud_model"]
+        )
+        by_id = {item["id"]: item for item in connections}
         self.engine = engine or AgentEngine(
             settings["model_mode"], settings["local_model"],
             bool(settings["allow_cloud_fallback"]),
             cloud_provider=settings["cloud_provider"], cloud_model_name=settings["cloud_model"],
+            local_connection=by_id.get(settings["local_connection_id"]),
+            cloud_connection=by_id.get(settings["cloud_connection_id"]),
             reporter=self._report,
             remaining_budget=lambda: self.store.snapshot().remaining_budget_eur,
         )

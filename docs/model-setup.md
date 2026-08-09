@@ -105,10 +105,16 @@ returns the value to the browser or stores it in PostgreSQL. A key entered in th
 UI is stored in the shared runtime secret volume and is loaded by the worker
 before its next model activity.
 
-Cloud routing supports a provider registry. OpenAI models use `OPENAI_API_KEY`;
-Anthropic Claude models use `ANTHROPIC_API_KEY`. Select **Anthropic · Claude**
-and `claude-opus-5` in the same panel to use Opus. Local-only mode hides all
-cloud fields, while cloud-only mode hides Ollama fields; hybrid mode shows both.
+Model routing uses a connection registry rather than a vendor catalog. Create a
+connection with a transport adapter, arbitrary model ID, optional base URL,
+location, and write-only credential. Supported adapter technologies are the
+Responses API, OpenAI-compatible Chat Completions, and LiteLLM. This allows new
+hosted models, gateways, Ollama, LM Studio, vLLM, and other compatible runtimes
+to be configured without adding model names to the application source.
+
+Only enabled and credential-ready connections appear in company routing. Local
+routing shows local connections, remote routing shows remote connections, and
+split routing exposes both.
 
 ## Option 5: hybrid routing
 

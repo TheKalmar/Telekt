@@ -131,6 +131,10 @@ class CompanyStore:
             self.db.execute(
                 "ALTER TABLE runtime_settings ADD COLUMN cloud_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini'"
             )
+        if "local_connection_id" not in settings_columns:
+            self.db.execute("ALTER TABLE runtime_settings ADD COLUMN local_connection_id TEXT NOT NULL DEFAULT 'local-default'")
+        if "cloud_connection_id" not in settings_columns:
+            self.db.execute("ALTER TABLE runtime_settings ADD COLUMN cloud_connection_id TEXT NOT NULL DEFAULT 'cloud-default'")
         self.db.execute(
             "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) VALUES(1,'stopped','Ready',?)",
             (utc_now(),),
@@ -891,7 +895,7 @@ class CompanyStore:
     def get_settings(self) -> dict:
         """Return per-company model routing settings."""
         return dict(self.db.execute(
-            "SELECT model_mode,local_model,allow_cloud_fallback,cloud_provider,cloud_model,updated_at FROM runtime_settings WHERE id=1"
+            "SELECT model_mode,local_model,allow_cloud_fallback,cloud_provider,cloud_model,local_connection_id,cloud_connection_id,updated_at FROM runtime_settings WHERE id=1"
         ).fetchone())
 
     def set_model_mode(self, mode: str) -> None:
@@ -901,7 +905,9 @@ class CompanyStore:
                                 current["cloud_provider"], current["cloud_model"])
 
     def set_model_settings(self, mode: str, local_model: str, allow_cloud_fallback: bool = False,
-                           cloud_provider: str = "openai", cloud_model: str = "gpt-5.4-mini") -> None:
+                           cloud_provider: str = "openai", cloud_model: str = "gpt-5.4-mini",
+                           local_connection_id: str = "local-default",
+                           cloud_connection_id: str = "cloud-default") -> None:
         """Atomically select routing and the concrete local/cloud models."""
         if mode not in {"local", "hybrid", "cloud"}:
             raise ValueError("Invalid model mode")
@@ -914,14 +920,16 @@ class CompanyStore:
         if not cloud_model or len(cloud_model) > 200:
             raise ValueError("Cloud model name must contain 1 to 200 characters")
         self.db.execute(
-            "UPDATE runtime_settings SET model_mode=?,local_model=?,allow_cloud_fallback=?,cloud_provider=?,cloud_model=?,updated_at=? WHERE id=1",
-            (mode, local_model, int(allow_cloud_fallback), cloud_provider, cloud_model, utc_now()),
+            "UPDATE runtime_settings SET model_mode=?,local_model=?,allow_cloud_fallback=?,cloud_provider=?,cloud_model=?,local_connection_id=?,cloud_connection_id=?,updated_at=? WHERE id=1",
+            (mode, local_model, int(allow_cloud_fallback), cloud_provider, cloud_model,
+             local_connection_id, cloud_connection_id, utc_now()),
         )
         self.db.commit()
         self.audit("runtime.model_settings", {
             "mode": mode, "local_model": local_model,
             "allow_cloud_fallback": allow_cloud_fallback,
             "cloud_provider": cloud_provider, "cloud_model": cloud_model,
+            "local_connection_id": local_connection_id, "cloud_connection_id": cloud_connection_id,
         })
 
     def audit(self, event_type: str, payload: dict) -> None:

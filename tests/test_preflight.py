@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import os
 
 from digital_company.store import CompanyStore
 from digital_company import web
@@ -16,9 +17,13 @@ def stub_services(monkeypatch, models=None):
     monkeypatch.setattr(web, "registry", SimpleNamespace(
         worker_status=lambda: {"status": "online"}
     ))
-    monkeypatch.setattr(web, "local_models", lambda: {
-        "status": "online", "models": models or [],
-    })
+    def ready(connection, verify_model=False):
+        if connection and connection["location"] == "local":
+            ok = connection["model"] in (models or [])
+            return ok, "installed" if ok else "model is not installed"
+        ok = bool(os.getenv("OPENAI_API_KEY"))
+        return ok, "ready" if ok else "credential missing"
+    monkeypatch.setattr(web, "connection_ready", ready)
     monkeypatch.setattr(web, "browser_health", lambda: {"status": "ok", "browser": "chromium"})
 
 
@@ -37,7 +42,7 @@ def test_local_preflight_allows_no_cloud_key(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     result = web.runtime_preflight(store)
     assert result["ready"] is True
-    assert next(x for x in result["checks"] if x["id"] == "openai")["status"] == "warn"
+    assert next(x for x in result["checks"] if x["id"] == "cloud_connection")["status"] == "warn"
 
 
 def test_cloud_preflight_requires_key_but_not_ollama(tmp_path, monkeypatch):

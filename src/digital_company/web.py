@@ -20,7 +20,9 @@ from digital_company.store import CompanyStore
 from digital_company.email_service import verify_approval_token
 from digital_company.temporal_gateway import TemporalCommandError, signal_company
 from digital_company.workspace import WorkspaceRuntime
-from digital_company.runtime_secrets import apply_runtime_secrets, save_secret, secret_status
+from digital_company.runtime_secrets import apply_runtime_secrets, save_secret
+from digital_company.runtime_secrets import get_secret
+from digital_company.model_connections import ADAPTERS, ModelConnectionRegistry
 
 
 ROOT = Path.cwd()
@@ -37,6 +39,32 @@ _preflight_cache: dict[str, tuple[float, tuple, dict]] = {}
 def get_store(company_id: str | None = None) -> CompanyStore:
     """Open state for an explicit company or the currently selected company."""
     return registry.store_for(company_id)
+
+
+def connection_ready(connection: dict | None, verify_model: bool = False) -> tuple[bool, str]:
+    """Validate a transport profile without making a billable generation call."""
+    if not connection or not connection.get("enabled"):
+        return False, "Model connection is missing or disabled"
+    secret = get_secret(f"MODEL_CONNECTION_{connection['id']}")
+    if connection.get("requires_api_key", True) and not (
+        secret or (connection["adapter"] == "openai_responses" and os.getenv("OPENAI_API_KEY"))
+    ):
+        return False, f"Credential is missing for {connection['name']}"
+    if verify_model and connection["adapter"] == "openai_compatible":
+        import json
+        import urllib.request
+        request = urllib.request.Request(connection["base_url"].rstrip("/") + "/models")
+        if secret:
+            request.add_header("Authorization", f"Bearer {secret}")
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                payload = json.loads(response.read())
+            models = [item.get("id") for item in payload.get("data", [])]
+            if connection["model"] not in models:
+                return False, f"{connection['model']} was not reported by {connection['name']}"
+        except Exception as exc:
+            return False, f"{connection['name']} is unreachable ({type(exc).__name__})"
+    return True, f"{connection['name']} · {connection['model']} is ready"
 
 
 def signal_temporal(company_id: str, signal_name: str, reason: str) -> bool:
@@ -70,30 +98,25 @@ def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
                   else "Background worker is offline; restart the worker container",
     })
 
-    installed: list[str] = []
-    ollama_online = False
+    connection_registry = ModelConnectionRegistry()
+    connections = connection_registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
+    by_id = {item["id"]: item for item in connections}
     if mode in {"local", "hybrid"}:
-        model_inventory = local_models()
-        installed = model_inventory["models"]
-        ollama_online = model_inventory["status"] == "online"
-        local_ready = ollama_online and settings["local_model"] in installed
-        detail = (f"Local model {settings['local_model']} is installed" if local_ready else
-                  "Ollama is offline; start Ollama and refresh model settings" if not ollama_online else
-                  f"Local model {settings['local_model']} is not installed; select one of: "
-                  + (", ".join(installed) or "none"))
-        checks.append({"id": "local_model", "status": "pass" if local_ready else "block", "detail": detail})
+        local_ready, detail = connection_ready(
+            by_id.get(settings["local_connection_id"]), verify_model=True
+        )
+        checks.append({"id": "local_connection", "status": "pass" if local_ready else "block", "detail": detail})
     else:
-        checks.append({"id": "local_model", "status": "skip", "detail": "Cloud mode does not require Ollama"})
+        checks.append({"id": "local_connection", "status": "skip", "detail": "Remote-only routing does not require a local connection"})
 
     cloud_required = mode in {"cloud", "hybrid"}
-    provider = settings.get("cloud_provider", "openai")
-    provider_key = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
-    cloud_present = bool(os.getenv(provider_key))
+    connection = by_id.get(settings.get("cloud_connection_id", "cloud-default"))
+    provider = connection["name"] if connection else "Cloud connection"
+    cloud_present, cloud_detail = connection_ready(connection)
     checks.append({
-        "id": provider, "status": "pass" if cloud_present else "block" if cloud_required else "warn",
-        "detail": f"{provider.title()} key is configured" if cloud_present else
-                  f"{provider_key} is required for this routing mode" if cloud_required else
-                  f"{provider.title()} key is absent; local work can still run",
+        "id": "cloud_connection", "status": "pass" if cloud_present else "block" if cloud_required else "warn",
+        "detail": cloud_detail if cloud_present or cloud_required else
+                  f"{provider} is not ready; local work can still run",
     })
 
     browser = browser_health()
@@ -128,11 +151,20 @@ class ModelSettingsIn(BaseModel):
     allow_cloud_fallback: bool = False
     cloud_provider: str = "openai"
     cloud_model: str = Field(default="gpt-5.4-mini", min_length=1, max_length=200)
+    local_connection_id: str = "local-default"
+    cloud_connection_id: str = "cloud-default"
 
 
-class OpenAIKeyIn(BaseModel):
-    """Write-only OpenAI credential; this value is never returned by the API."""
-    api_key: str = Field(min_length=1, max_length=500)
+class ModelConnectionIn(BaseModel):
+    id: str | None = None
+    name: str = Field(min_length=1, max_length=100)
+    adapter: str
+    location: str
+    base_url: str = Field(default="", max_length=2000)
+    model: str = Field(min_length=1, max_length=200)
+    api_key: str = Field(default="", max_length=500)
+    enabled: bool = True
+    requires_api_key: bool = True
 
 
 class ApprovalDecisionIn(BaseModel):
@@ -400,51 +432,69 @@ def model_settings(payload: ModelSettingsIn):
     if store.get_control()["state"] == "running":
         raise HTTPException(409, "Pause or stop the company before changing model settings")
     try:
-        store.set_model_settings(payload.mode, payload.local_model, payload.allow_cloud_fallback,
-                                 payload.cloud_provider, payload.cloud_model)
+        connections = ModelConnectionRegistry().ensure_defaults(payload.local_model, payload.cloud_model)
+        by_id = {item["id"]: item for item in connections}
+        local = by_id.get(payload.local_connection_id)
+        cloud = by_id.get(payload.cloud_connection_id)
+        if payload.mode in {"local", "hybrid"} and (not local or local["location"] != "local"):
+            raise ValueError("Select a valid local model connection")
+        if payload.mode in {"cloud", "hybrid"} and (not cloud or cloud["location"] != "cloud"):
+            raise ValueError("Select a valid cloud model connection")
+        store.set_model_settings(
+            payload.mode, (local or {}).get("model", payload.local_model), payload.allow_cloud_fallback,
+            (cloud or {}).get("adapter", "connection"), (cloud or {}).get("model", payload.cloud_model),
+            payload.local_connection_id, payload.cloud_connection_id,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return store.get_settings()
 
 
-@app.get("/api/settings/openai")
-def openai_settings_status():
-    """Expose credential presence only, never the credential itself."""
-    statuses = secret_status()
+@app.get("/api/model-connections")
+def model_connections():
+    settings = get_store().get_settings()
+    registry = ModelConnectionRegistry()
+    connections = registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
+    def project(item: dict) -> dict:
+        credential = bool(
+            get_secret(f"MODEL_CONNECTION_{item['id']}") or
+            (item["adapter"] == "openai_responses" and os.getenv("OPENAI_API_KEY"))
+        )
+        ready = bool(item["enabled"] and (credential or not item.get("requires_api_key", True)))
+        return {**item, "credential_configured": credential, "ready": ready}
     return {
-        "configured": statuses["OPENAI_API_KEY"],
-        "providers": {
-            "openai": {"configured": statuses["OPENAI_API_KEY"], "models": ["gpt-5.4-mini", "gpt-5.4"]},
-            "anthropic": {"configured": statuses["ANTHROPIC_API_KEY"], "models": ["claude-opus-5", "claude-sonnet-5"]},
-        },
+        "adapters": [{"id": key, **value} for key, value in ADAPTERS.items()],
+        "connections": [project(item) for item in connections],
     }
 
 
-@app.put("/api/settings/openai")
-def update_openai_key(payload: OpenAIKeyIn):
-    """Persist a replacement key in the shared runtime secret volume."""
-    key = payload.api_key.strip()
-    if not key.startswith("sk-"):
-        raise HTTPException(400, "OpenAI API key must start with sk-")
+@app.post("/api/model-connections")
+def save_model_connection(payload: ModelConnectionIn):
+    registry = ModelConnectionRegistry()
     try:
-        save_secret("OPENAI_API_KEY", key)
+        item = registry.save(payload.model_dump(exclude={"api_key"}))
+        if payload.api_key.strip():
+            save_secret(f"MODEL_CONNECTION_{item['id']}", payload.api_key)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    get_store().audit("model_connection.saved", {
+        "connection_id": item["id"], "adapter": item["adapter"], "location": item["location"],
+    })
     _preflight_cache.clear()
-    get_store().audit("credentials.updated", {"provider": "openai"})
-    return {"configured": True}
+    credential = bool(payload.api_key.strip() or get_secret(f"MODEL_CONNECTION_{item['id']}"))
+    return {**item, "credential_configured": credential,
+            "ready": bool(item["enabled"] and (credential or not item["requires_api_key"]))}
 
 
-@app.put("/api/settings/anthropic")
-def update_anthropic_key(payload: OpenAIKeyIn):
-    """Persist a write-only Anthropic credential for Claude models."""
-    key = payload.api_key.strip()
-    if not key.startswith("sk-ant-"):
-        raise HTTPException(400, "Anthropic API key must start with sk-ant-")
-    save_secret("ANTHROPIC_API_KEY", key)
+@app.delete("/api/model-connections/{connection_id}")
+def delete_model_connection(connection_id: str):
+    settings = get_store().get_settings()
+    if connection_id in {settings["local_connection_id"], settings["cloud_connection_id"]}:
+        raise HTTPException(409, "Connection is currently assigned to the selected company")
+    if not ModelConnectionRegistry().delete(connection_id):
+        raise HTTPException(404, "Model connection not found")
     _preflight_cache.clear()
-    get_store().audit("credentials.updated", {"provider": "anthropic"})
-    return {"configured": True}
+    return {"deleted": True}
 
 
 def ollama_api_url(path: str) -> str:
