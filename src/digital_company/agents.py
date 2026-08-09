@@ -215,7 +215,7 @@ class AgentEngine:
             try:
                 run_result = Runner.run_sync(agent, prompt, max_turns=self.max_turns)
                 usage = usage_payload(run_result, run_id=run_id, provider=provider,
-                                      model=str(getattr(agent, "model", "unknown")))
+                                      model=self._model_id(agent))
                 if usage:
                     self.reporter("model.usage", usage)
                 result = run_result.final_output
@@ -260,7 +260,7 @@ class AgentEngine:
             try:
                 run_result = Runner.run_sync(fallback, prompt, max_turns=self.max_turns)
                 usage = usage_payload(run_result, run_id=run_id + ":fallback", provider="cloud_fallback",
-                                      model=str(getattr(fallback, "model", "unknown")))
+                                      model=self._model_id(fallback))
                 if usage:
                     self.reporter("model.usage", usage)
                 output = run_result.final_output
@@ -282,6 +282,12 @@ class AgentEngine:
             "latency_ms": round((time.monotonic() - started) * 1000),
         })
         raise last_error
+
+    @staticmethod
+    def _model_id(agent) -> str:
+        """Return the configured model ID instead of an adapter object repr."""
+        model = getattr(agent, "model", "unknown")
+        return str(getattr(model, "model", model))
 
     def decide(self, snapshot: CompanySnapshot) -> TaskProposal:
         """Ask the CEO to select exactly one next task from canonical state."""

@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from digital_company.store import CompanyStore
 
@@ -30,3 +31,16 @@ def test_operations_projection_shows_unfinished_model_run(tmp_path: Path):
     store.audit("model.started", {"run_id": "run-active", "role": "ceo", "provider": "local"})
     active = store.operations_data()["active_model_run"]
     assert active["payload"]["role"] == "ceo"
+
+
+def test_operations_hides_stale_unfinished_model_run(tmp_path: Path, monkeypatch):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Build a company", 1000)
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    store.db.execute(
+        "INSERT INTO audit_events VALUES(?,?,?,?)",
+        ("old-event", "model.started", '{"run_id":"orphan","role":"ceo","provider":"local"}', old),
+    )
+    store.db.commit()
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "240")
+    assert store.operations_data()["active_model_run"] is None

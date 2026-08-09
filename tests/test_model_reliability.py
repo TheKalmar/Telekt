@@ -94,3 +94,9 @@ def test_ceo_context_uses_compact_skill_routing_metadata(monkeypatch):
 
     assert "very long instructions" not in captured["prompt"]
     assert '"id":"market"' in captured["prompt"]
+
+
+def test_adapter_model_id_is_used_for_usage_accounting():
+    adapter = SimpleNamespace(model="configured-model-id")
+    agent = SimpleNamespace(model=adapter)
+    assert AgentEngine._model_id(agent) == "configured-model-id"

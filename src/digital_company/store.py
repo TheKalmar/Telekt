@@ -226,21 +226,47 @@ class CompanyStore:
             result.append(item)
         return result
 
-    def resolve_skills(self, skill_ids: list[str], specialist: str, action: str) -> list[dict]:
+    def resolve_skills(self, skill_ids: list[str], specialist: str, action: str,
+                       strict: bool = True) -> list[dict]:
         catalog = {item["id"]: item for item in self.list_skills()}
+        eligible = [item for item in catalog.values()
+                    if item["status"] == "available" and specialist in item["roles"]
+                    and action in item["actions"]]
         if not skill_ids:
-            skill_ids = [item["id"] for item in catalog.values()
-                         if item["status"] == "available" and specialist in item["roles"]
-                         and action in item["actions"]][:3]
+            skill_ids = [item["id"] for item in eligible[:3]]
         resolved = []
+        rejected = []
         for skill_id in skill_ids:
             skill = catalog.get(skill_id)
             if not skill or skill["status"] != "available":
-                raise ValueError(f"Skill is unavailable: {skill_id}")
+                if strict:
+                    raise ValueError(f"Skill is unavailable: {skill_id}")
+                rejected.append(skill_id)
+                continue
             if specialist not in skill["roles"] or action not in skill["actions"]:
-                raise ValueError(f"Skill {skill_id} is not valid for {specialist}/{action}")
+                if strict:
+                    raise ValueError(f"Skill {skill_id} is not valid for {specialist}/{action}")
+                rejected.append(skill_id)
+                continue
             resolved.append(skill)
+        if not strict and not resolved:
+            resolved = eligible[:3]
+        if rejected:
+            self.audit("skills.selection_adjusted", {
+                "specialist": specialist, "action": action, "rejected": rejected,
+                "assigned": [item["id"] for item in resolved],
+            })
         return resolved
+
+    def close_orphaned_model_runs(self, reason: str) -> list[str]:
+        """Append terminal events for model calls left open by process failure."""
+        operations = self.operations_data()
+        active = operations.get("active_model_run")
+        if not active or not active.get("payload", {}).get("run_id"):
+            return []
+        run_id = active["payload"]["run_id"]
+        self.audit("model.abandoned", {"run_id": run_id, "reason": reason})
+        return [run_id]
 
     def set_skill_status(self, skill_id: str, status: str) -> None:
         if status not in {"available", "disabled", "missing_access"}:
@@ -796,12 +822,15 @@ class CompanyStore:
         model_events = [event for event in events if event["event_type"].startswith("model.")]
         completed_run_ids = {
             event["payload"].get("run_id") for event in model_events
-            if event["event_type"] in {"model.succeeded", "model.failed", "model.fallback_failed"}
+            if event["event_type"] in {"model.succeeded", "model.failed", "model.fallback_failed", "model.abandoned"}
         }
+        stale_after = max(60, int(float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))) + 60)
+        now = datetime.now(timezone.utc)
         active = next((
             event for event in model_events
             if event["event_type"] == "model.started"
             and event["payload"].get("run_id") not in completed_run_ids
+            and (now - datetime.fromisoformat(event["created_at"])).total_seconds() <= stale_after
         ), None)
         successes = [event for event in model_events if event["event_type"] == "model.succeeded"]
         latencies = sorted(

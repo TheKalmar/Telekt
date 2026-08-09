@@ -72,7 +72,7 @@ class CompanyOrchestrator:
                 if status == "executing":
                     return self._execute_claimed(task_id, proposal, cycle)
                 snapshot = self.store.snapshot()
-                skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value)
+                skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False)
                 result = self.engine.execute(
                     proposal, snapshot, self._artifact_context(proposal.specialist), skills,
                 )
@@ -125,7 +125,7 @@ class CompanyOrchestrator:
                 self.store.set_task_status(task_id, "stopped")
                 return {"status": "stopped", "cycles": cycle, "reason": proposal.rationale}
 
-            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value)
+            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False)
             self.store.audit("skills.assigned", {"task_id": task_id, "skill_ids": [s["id"] for s in skills]})
             result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist), skills)
             self._persist_result(task_id, proposal, result)
@@ -142,7 +142,7 @@ class CompanyOrchestrator:
         try:
             if proposal.action == ActionType.BROWSER_OPERATE:
                 return self._execute_browser_mission(task_id, proposal, cycle)
-            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value)
+            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False)
             self.store.audit("skills.assigned", {"task_id": task_id, "skill_ids": [s["id"] for s in skills]})
             result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist), skills)
             self._persist_result(task_id, proposal, result)

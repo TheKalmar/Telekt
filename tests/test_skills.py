@@ -28,3 +28,12 @@ def test_legacy_task_without_skill_ids_gets_safe_default(tmp_path: Path):
     store.initialize("Build a company", 1000)
     resolved = store.resolve_skills([], "qa", "qa_mvp")
     assert [skill["id"] for skill in resolved] == ["quality-gate"]
+
+
+def test_agent_skill_mismatch_is_replaced_with_safe_matching_default(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Build a company", 1000)
+    resolved = store.resolve_skills(
+        ["market-evidence"], "product", "define_product", strict=False,
+    )
+    assert [skill["id"] for skill in resolved] == ["lean-product"]

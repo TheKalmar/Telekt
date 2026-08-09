@@ -56,6 +56,7 @@ def _finalize_activity_failure(company_id: str, execution_key: str, exc: Excepti
     portfolio = registry()
     store = portfolio.store_for(company_id)
     detail = f"{type(exc).__name__}: {exc}"
+    store.close_orphaned_model_runs("temporal activity failed after retries")
     result = store.fail_activity(execution_key, detail)
     store.set_control("error", detail)
     store.audit("temporal.activity_failed", {
