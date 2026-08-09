@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from digital_company.company_schema import migrate_company_database
 from digital_company.models import CompanySnapshot, SpecialistResult, TaskProposal
+from digital_company.operations_projection import decode_audit_events, project_operations
 from digital_company.postgres_compat import PostgresCompat, company_schema
 from digital_company.skill_catalog import BUILTIN_SKILLS
+from digital_company.skill_selection import select_skills
 
 
 def utc_now() -> str:
@@ -41,109 +45,19 @@ class CompanyStore:
             self.db.execute("PRAGMA busy_timeout=30000")
         self._migrate()
 
+    def close(self) -> None:
+        """Release the owned database connection."""
+        self.db.close()
+
+    def __enter__(self) -> CompanyStore:
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
     def _migrate(self) -> None:
         """Create additive POC tables and idempotent singleton defaults."""
-        self.db.executescript("""
-        CREATE TABLE IF NOT EXISTS company (
-          id INTEGER PRIMARY KEY CHECK (id = 1), goal TEXT NOT NULL,
-          initial_budget_eur REAL NOT NULL, created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS tasks (
-          id TEXT PRIMARY KEY, action TEXT NOT NULL, title TEXT NOT NULL,
-          specialist TEXT NOT NULL, objective TEXT NOT NULL, rationale TEXT NOT NULL,
-          estimated_cost_eur REAL NOT NULL, status TEXT NOT NULL,
-          result_json TEXT, created_at TEXT NOT NULL, completed_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS approvals (
-          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, payload_json TEXT NOT NULL,
-          status TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
-          resolved_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS ledger (
-          id TEXT PRIMARY KEY, task_id TEXT, amount_eur REAL NOT NULL,
-          description TEXT NOT NULL, created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS model_usage (
-          run_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
-          requests INTEGER NOT NULL, input_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL,
-          output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
-          estimated_usd REAL, estimated_budget_cost REAL, pricing_status TEXT NOT NULL, created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS audit_events (
-          id TEXT PRIMARY KEY, event_type TEXT NOT NULL, payload_json TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS runtime_control (
-          id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL,
-          detail TEXT, updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS stakeholder_messages (
-          id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
-          status TEXT NOT NULL, response TEXT, created_at TEXT NOT NULL,
-          addressed_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS runtime_settings (
-          id INTEGER PRIMARY KEY CHECK (id = 1), model_mode TEXT NOT NULL,
-          local_model TEXT NOT NULL, updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS company_profile (
-          id INTEGER PRIMARY KEY CHECK (id = 1), profile_json TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS integrations (
-          provider TEXT PRIMARY KEY, status TEXT NOT NULL,
-          config_json TEXT NOT NULL, required_secrets_json TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS human_handoffs (
-          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, payload_json TEXT NOT NULL,
-          status TEXT NOT NULL, outcome TEXT, created_at TEXT NOT NULL,
-          resolved_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS agent_skills (
-          id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL,
-          definition_json TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS activity_executions (
-          execution_key TEXT PRIMARY KEY, status TEXT NOT NULL,
-          task_id TEXT, result_json TEXT, attempt_count INTEGER NOT NULL,
-          started_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        );
-        """)
-        task_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(tasks)")}
-        if "proposal_json" not in task_columns:
-            self.db.execute("ALTER TABLE tasks ADD COLUMN proposal_json TEXT")
-        approval_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(approvals)")}
-        if "decision_comment" not in approval_columns:
-            self.db.execute("ALTER TABLE approvals ADD COLUMN decision_comment TEXT")
-        if "decided_by" not in approval_columns:
-            self.db.execute("ALTER TABLE approvals ADD COLUMN decided_by TEXT")
-        settings_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(runtime_settings)")}
-        if "allow_cloud_fallback" not in settings_columns:
-            self.db.execute(
-                "ALTER TABLE runtime_settings ADD COLUMN allow_cloud_fallback INTEGER NOT NULL DEFAULT 0"
-            )
-        if "cloud_provider" not in settings_columns:
-            self.db.execute(
-                "ALTER TABLE runtime_settings ADD COLUMN cloud_provider TEXT NOT NULL DEFAULT 'openai'"
-            )
-        if "cloud_model" not in settings_columns:
-            self.db.execute(
-                "ALTER TABLE runtime_settings ADD COLUMN cloud_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini'"
-            )
-        if "local_connection_id" not in settings_columns:
-            self.db.execute("ALTER TABLE runtime_settings ADD COLUMN local_connection_id TEXT NOT NULL DEFAULT 'local-default'")
-        if "cloud_connection_id" not in settings_columns:
-            self.db.execute("ALTER TABLE runtime_settings ADD COLUMN cloud_connection_id TEXT NOT NULL DEFAULT 'cloud-default'")
-        self.db.execute(
-            "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) VALUES(1,'stopped','Ready',?)",
-            (utc_now(),),
-        )
-        self.db.execute(
-            "INSERT OR IGNORE INTO runtime_settings(id,model_mode,local_model,updated_at) "
-            "VALUES(1,'local','deepseek-company:8b',?)", (utc_now(),)
-        )
-        self.db.commit()
+        migrate_company_database(self.db, utc_now())
         self._sync_builtin_skills()
 
     def initialize(self, goal: str, budget: float, profile: dict | None = None) -> None:
@@ -228,35 +142,16 @@ class CompanyStore:
 
     def resolve_skills(self, skill_ids: list[str], specialist: str, action: str,
                        strict: bool = True) -> list[dict]:
-        catalog = {item["id"]: item for item in self.list_skills()}
-        eligible = [item for item in catalog.values()
-                    if item["status"] == "available" and specialist in item["roles"]
-                    and action in item["actions"]]
-        if not skill_ids:
-            skill_ids = [item["id"] for item in eligible[:3]]
-        resolved = []
-        rejected = []
-        for skill_id in skill_ids:
-            skill = catalog.get(skill_id)
-            if not skill or skill["status"] != "available":
-                if strict:
-                    raise ValueError(f"Skill is unavailable: {skill_id}")
-                rejected.append(skill_id)
-                continue
-            if specialist not in skill["roles"] or action not in skill["actions"]:
-                if strict:
-                    raise ValueError(f"Skill {skill_id} is not valid for {specialist}/{action}")
-                rejected.append(skill_id)
-                continue
-            resolved.append(skill)
-        if not strict and not resolved:
-            resolved = eligible[:3]
-        if rejected:
+        selection = select_skills(
+            self.list_skills(), skill_ids, specialist, action, strict=strict,
+        )
+        if selection.rejected_ids:
             self.audit("skills.selection_adjusted", {
-                "specialist": specialist, "action": action, "rejected": rejected,
-                "assigned": [item["id"] for item in resolved],
+                "specialist": specialist, "action": action,
+                "rejected": selection.rejected_ids,
+                "assigned": [item["id"] for item in selection.assigned],
             })
-        return resolved
+        return selection.assigned
 
     def close_orphaned_model_runs(self, reason: str) -> list[str]:
         """Append terminal events for model calls left open by process failure."""
@@ -811,36 +706,6 @@ class CompanyStore:
             "SELECT event_type,payload_json,created_at FROM audit_events "
             "ORDER BY created_at DESC LIMIT 250"
         )]
-        events = []
-        for row in rows:
-            try:
-                payload = json.loads(row["payload_json"])
-            except (TypeError, json.JSONDecodeError):
-                payload = {}
-            events.append({"event_type": row["event_type"], "created_at": row["created_at"], "payload": payload})
-
-        model_events = [event for event in events if event["event_type"].startswith("model.")]
-        completed_run_ids = {
-            event["payload"].get("run_id") for event in model_events
-            if event["event_type"] in {"model.succeeded", "model.failed", "model.fallback_failed", "model.abandoned"}
-        }
-        stale_after = max(60, int(float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))) + 60)
-        now = datetime.now(timezone.utc)
-        active = next((
-            event for event in model_events
-            if event["event_type"] == "model.started"
-            and event["payload"].get("run_id") not in completed_run_ids
-            and (now - datetime.fromisoformat(event["created_at"])).total_seconds() <= stale_after
-        ), None)
-        successes = [event for event in model_events if event["event_type"] == "model.succeeded"]
-        latencies = sorted(
-            event["payload"]["latency_ms"] for event in successes
-            if isinstance(event["payload"].get("latency_ms"), (int, float))
-        )
-        provider_counts: dict[str, int] = {}
-        for event in successes:
-            provider = event["payload"].get("provider", "unknown")
-            provider_counts[provider] = provider_counts.get(provider, 0) + 1
         task_counts = {
             row["status"]: row["count"] for row in self.db.execute(
                 "SELECT status,COUNT(*) AS count FROM tasks GROUP BY status"
@@ -856,59 +721,12 @@ class CompanyStore:
             "COALESCE(SUM(estimated_usd),0) estimated_usd,COALESCE(SUM(estimated_budget_cost),0) estimated_budget_cost,"
             "SUM(CASE WHEN pricing_status='unknown_model' THEN 1 ELSE 0 END) unpriced_calls FROM model_usage"
         ).fetchone())
-        # Browser mission state is a read model rebuilt from append-only audit
-        # events. The runner therefore needs no second mutable status record that
-        # could drift from the task/approval lifecycle after a crash.
-        browser_events = [event for event in events if event["event_type"].startswith("browser.mission_")]
-        latest_start = next((event for event in browser_events
-                             if event["event_type"] == "browser.mission_started"), None)
-        mission = None
-        if latest_start:
-            task_id = latest_start["payload"].get("task_id")
-            related = [event for event in browser_events if event["payload"].get("task_id") == task_id]
-            terminal = next((event for event in related if event["event_type"] in {
-                "browser.mission_completed", "browser.mission_handoff"
-            } or (event["event_type"] == "browser.mission_stopped"
-                  and event["payload"].get("status") != "step_limit")), None)
-            last_action = next((event for event in related
-                                if event["event_type"] == "browser.mission_action"), None)
-            last_stop = next((event for event in related
-                              if event["event_type"] == "browser.mission_stopped"), None)
-            mission = {
-                "task_id": task_id,
-                "status": (last_stop["payload"].get("status") if last_stop else
-                           "completed" if terminal and terminal["event_type"] == "browser.mission_completed" else
-                           "waiting_human" if terminal and terminal["event_type"] == "browser.mission_handoff" else
-                           "running"),
-                "objective": latest_start["payload"].get("objective"),
-                "allowed_domains": latest_start["payload"].get("allowed_domains", []),
-                "max_steps": latest_start["payload"].get("max_steps"),
-                "step": (last_action or last_stop or {"payload": {}})["payload"].get("step",
-                         (last_stop or {"payload": {}})["payload"].get("steps", 0)),
-                "last_action": last_action["payload"] if last_action else None,
-                "detail": last_stop["payload"].get("summary") if last_stop else None,
-                "started_at": latest_start["created_at"],
-            }
-        return {
-            "active_model_run": active,
-            "model": {
-                "successful_calls": len(successes),
-                "structured_errors": sum(e["event_type"] == "model.structured_output_error" for e in model_events),
-                "provider_errors": sum(e["event_type"] == "model.provider_error" for e in model_events),
-                "failed_calls": sum(e["event_type"] in {"model.failed", "model.fallback_failed"} for e in model_events),
-                "fallbacks": sum(e["event_type"] == "model.cloud_fallback" for e in model_events),
-                "average_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
-                "p95_latency_ms": latencies[max(0, int(len(latencies) * .95) - 1)] if latencies else None,
-                "provider_counts": provider_counts,
-                "token_usage": usage,
-            },
-            "tasks_by_status": task_counts,
-            "authorized_spend_eur": authorized_spend,
-            "api_spend_eur": usage["estimated_budget_cost"],
-            "estimated_spend_eur": authorized_spend + usage["estimated_budget_cost"],
-            "recent_events": events[:40],
-            "browser_mission": mission,
-        }
+        return project_operations(
+            decode_audit_events(rows), task_counts, authorized_spend, usage,
+            stale_after_seconds=max(
+                60, int(float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))) + 60
+            ),
+        )
 
     def record_model_usage(self, payload: dict) -> None:
         """Persist one idempotent usage record without prompts or secrets."""
@@ -943,8 +761,10 @@ class CompanyStore:
         local_model = local_model.strip()
         if not local_model or len(local_model) > 200:
             raise ValueError("Local model name must contain 1 to 200 characters")
-        if cloud_provider not in {"openai", "anthropic"}:
-            raise ValueError("Invalid cloud provider")
+        # The persisted name is retained for compatibility. Its value now
+        # identifies transport technology, not a hard-coded vendor catalog.
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,99}", cloud_provider):
+            raise ValueError("Invalid cloud transport identifier")
         cloud_model = cloud_model.strip()
         if not cloud_model or len(cloud_model) > 200:
             raise ValueError("Cloud model name must contain 1 to 200 characters")

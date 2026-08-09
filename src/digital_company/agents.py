@@ -14,17 +14,16 @@ from collections.abc import Callable
 from uuid import uuid4
 
 from agents import (
-    Agent, AsyncOpenAI, ModelBehaviorError, ModelRetrySettings, ModelSettings,
-    OpenAIChatCompletionsModel, OpenAIResponsesModel, Runner, WebSearchTool, retry_policies, set_tracing_disabled,
+    Agent, ModelBehaviorError, ModelRetrySettings, ModelSettings,
+    Runner, WebSearchTool, retry_policies, set_tracing_disabled,
 )
-from agents.extensions.models.litellm_model import LitellmModel
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
+from digital_company.model_adapters import ModelAdapterFactory
 from digital_company.models import (
     ActionType, CompanySnapshot, SpecialistResult, TaskProposal, TaskProposalDraft,
 )
 from digital_company.pricing import usage_payload
-from digital_company.runtime_secrets import get_secret
 
 
 CEO_INSTRUCTIONS = """You are the CEO of a constrained autonomous digital company.
@@ -103,23 +102,29 @@ class AgentEngine:
     """
     def __init__(self, mode: str = "cloud", local_model_name: str = "deepseek-company:8b",
                  allow_cloud_fallback: bool = False,
-                 cloud_provider: str = "openai", cloud_model_name: str = "gpt-5.4-mini",
-                 local_connection: dict | None = None, cloud_connection: dict | None = None,
-                 reporter: Callable[[str, dict], None] | None = None,
-                 remaining_budget: Callable[[], float] | None = None) -> None:
+                  cloud_provider: str = "openai", cloud_model_name: str = "gpt-5.4-mini",
+                  local_connection: dict | None = None, cloud_connection: dict | None = None,
+                  reporter: Callable[[str, dict], None] | None = None,
+                  remaining_budget: Callable[[], float] | None = None,
+                  adapter_factory: ModelAdapterFactory | None = None) -> None:
+        adapter_factory = adapter_factory or ModelAdapterFactory()
         self.cloud_provider = (cloud_connection or {}).get("name", cloud_provider)
         self.cloud_model_name = (cloud_connection or {}).get("model", cloud_model_name)
-        self.cloud_model, self.cloud_credential_present, cloud_hosted_tools = self._connection_model(
+        cloud_binding = adapter_factory.build(
             cloud_connection, default_model=cloud_model_name, default_cloud=True,
         )
+        self.cloud_model = cloud_binding.model
+        self.cloud_credential_present = cloud_binding.ready
+        cloud_hosted_tools = cloud_binding.supports_hosted_tools
         self.allow_cloud_fallback = allow_cloud_fallback
         self.reporter = reporter or (lambda _event, _payload: None)
         self.remaining_budget = remaining_budget
         self.max_turns = int(os.getenv("AGENT_MAX_TURNS", "8"))
         self.structured_retries = int(os.getenv("STRUCTURED_OUTPUT_RETRIES", "1"))
-        self.local_model, _, _ = self._connection_model(
+        local_binding = adapter_factory.build(
             local_connection, default_model=local_model_name, default_cloud=False,
         )
+        self.local_model = local_binding.model
         retry_settings = ModelSettings(retry=ModelRetrySettings(
             max_retries=int(os.getenv("MODEL_TRANSIENT_RETRIES", "2")),
             backoff={"initial_delay": 0.5, "max_delay": 5.0, "multiplier": 2.0, "jitter": True},
@@ -154,36 +159,6 @@ class AgentEngine:
                 )
                 if use_local else None
             )
-
-    def _connection_model(self, connection: dict | None, default_model: str,
-                          default_cloud: bool) -> tuple[object, bool, bool]:
-        """Build an SDK model from a transport profile, independent of vendor."""
-        timeout = float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))
-        if not connection:
-            if default_cloud:
-                return default_model, bool(os.getenv("OPENAI_API_KEY")), True
-            connection = {"id": "local-default", "adapter": "openai_compatible",
-                          "base_url": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
-                          "model": default_model}
-        secret = get_secret(f"MODEL_CONNECTION_{connection['id']}")
-        adapter, model = connection["adapter"], connection["model"]
-        if adapter == "openai_responses":
-            api_key = secret or os.getenv("OPENAI_API_KEY")
-            ready = bool(api_key) or not connection.get("requires_api_key", True)
-            return OpenAIResponsesModel(
-                model=model, openai_client=AsyncOpenAI(api_key=api_key, timeout=timeout, max_retries=0)
-            ), ready, True
-        if adapter == "litellm":
-            return LitellmModel(model=model, base_url=connection.get("base_url") or None,
-                                api_key=secret), bool(secret) or not connection.get("requires_api_key", True), False
-        api_key = secret or ("local-runtime" if connection.get("location") == "local" else None)
-        ready = bool(api_key) or not connection.get("requires_api_key", True)
-        return OpenAIChatCompletionsModel(
-            model=model,
-            openai_client=AsyncOpenAI(base_url=connection["base_url"], api_key=api_key,
-                                      timeout=timeout, max_retries=0),
-            strict_feature_validation=False, buffer_streamed_tool_calls=True,
-        ), ready, False
 
     def _agent(self, name, instructions, output_type, local: bool, settings: ModelSettings,
                tools: list | None = None):

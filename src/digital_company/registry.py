@@ -64,6 +64,10 @@ class CompanyRegistry:
             self.db.commit()
             self._adopt_legacy_company()
 
+    def close(self) -> None:
+        """Release the process-owned portfolio database connection."""
+        self.db.close()
+
     def _initialize_postgres(self) -> None:
         """Create portfolio control tables for existing and fresh installations."""
         self.db.execute("CREATE SCHEMA IF NOT EXISTS telekt")
@@ -234,35 +238,35 @@ class CompanyRegistry:
         legacy_db = self.state_dir / "company.db"
         if count or not legacy_db.exists():
             return
-        store = CompanyStore(legacy_db)
-        if not store.is_initialized():
-            return
-        company_id = "invoice-chase-ventures"
-        now = utc_now()
-        self.db.execute(
-            "INSERT INTO companies VALUES(?,?,?,?,?,?,?,?)",
-            (company_id, "Invoice Chase Ventures", "SaaS",
-             "B2B invoice tracking and collections software", str(legacy_db),
-             str(self.state_dir / "artifacts"), now, now),
-        )
-        self.db.execute("UPDATE registry_settings SET active_company_id=? WHERE id=1", (company_id,))
-        if not store.get_profile():
-            snapshot = store.snapshot()
-            store.db.execute(
-                "INSERT OR REPLACE INTO company_profile VALUES(1,?,?)",
-                (json.dumps({
-                    "name": "Invoice Chase Ventures", "company_type": "SaaS",
-                    "concept": "B2B invoice tracking and collections software",
-                    "description": "Original autonomous company POC",
-                    "target_market": "Small B2B service companies", "customer_type": "B2B",
-                    "currency": "EUR", "time_horizon_days": 30,
-                    "risk_tolerance": "medium", "autonomy_level": "balanced",
-                    "constraints": ["Approval before external outreach", "Approval before spending"],
-                    "success_criteria": ["Validated problem", "Functional MVP", "Pilot interest"],
-                    "goal": snapshot.goal,
-                }), now),
+        with CompanyStore(legacy_db) as store:
+            if not store.is_initialized():
+                return
+            company_id = "invoice-chase-ventures"
+            now = utc_now()
+            self.db.execute(
+                "INSERT INTO companies VALUES(?,?,?,?,?,?,?,?)",
+                (company_id, "Invoice Chase Ventures", "SaaS",
+                 "B2B invoice tracking and collections software", str(legacy_db),
+                 str(self.state_dir / "artifacts"), now, now),
             )
-            store.db.commit()
+            self.db.execute("UPDATE registry_settings SET active_company_id=? WHERE id=1", (company_id,))
+            if not store.get_profile():
+                snapshot = store.snapshot()
+                store.db.execute(
+                    "INSERT OR REPLACE INTO company_profile VALUES(1,?,?)",
+                    (json.dumps({
+                        "name": "Invoice Chase Ventures", "company_type": "SaaS",
+                        "concept": "B2B invoice tracking and collections software",
+                        "description": "Original autonomous company POC",
+                        "target_market": "Small B2B service companies", "customer_type": "B2B",
+                        "currency": "EUR", "time_horizon_days": 30,
+                        "risk_tolerance": "medium", "autonomy_level": "balanced",
+                        "constraints": ["Approval before external outreach", "Approval before spending"],
+                        "success_criteria": ["Validated problem", "Functional MVP", "Pilot interest"],
+                        "goal": snapshot.goal,
+                    }), now),
+                )
+                store.db.commit()
         self.db.commit()
 
     def create(self, profile: dict) -> dict:
@@ -274,9 +278,11 @@ class CompanyRegistry:
         database_url = os.getenv("DATABASE_URL")
         if self.is_postgres and not database_url:
             raise RuntimeError("DATABASE_URL is required when DATABASE_BACKEND=postgres")
-        store = CompanyStore(db_path, database_url if self.is_postgres else None,
-                             company_id if self.is_postgres else None)
-        store.initialize(profile["goal"], float(profile["budget"]), profile)
+        with CompanyStore(
+            db_path, database_url if self.is_postgres else None,
+            company_id if self.is_postgres else None,
+        ) as store:
+            store.initialize(profile["goal"], float(profile["budget"]), profile)
         now = utc_now()
         if self.is_postgres:
             self.db.execute(
@@ -312,8 +318,8 @@ class CompanyRegistry:
             item = dict(row)
             item["created_at"] = str(item["created_at"])
             item["updated_at"] = str(item["updated_at"])
-            store = self.store_for(item["id"])
-            item["runtime"] = store.get_control()["state"]
+            with self.store_for(item["id"]) as store:
+                item["runtime"] = store.get_control()["state"]
             item["active"] = item["id"] == active
             result.append(item)
         return result

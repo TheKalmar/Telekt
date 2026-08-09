@@ -16,9 +16,9 @@ provider-level idempotency contracts.
 
 PostgreSQL is canonical for company business and portfolio state in the
 infrastructure overlay and has schema versioning. `registry.db` remains only as
-a lightweight-mode fallback and idempotent import source. Production connection
-pooling, backup/restore automation, and encryption-at-rest configuration remain
-open.
+a lightweight-mode fallback and idempotent import source. Database connections
+now have explicit request/activity lifetimes. Production connection pooling,
+backup/restore automation, and encryption-at-rest configuration remain open.
 
 ## Security
 

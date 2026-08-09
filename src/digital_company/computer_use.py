@@ -5,24 +5,13 @@ from __future__ import annotations
 import base64
 import json
 import os
-import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from digital_company.browser_client import browser_runtime_request
+
 
 BLOCKED_KEYS = {"ENTER", "RETURN"}
-
-
-def browser_runtime_request(method: str, path: str, payload: dict | None = None) -> tuple[bytes, str]:
-    """Call the fixed internal browser service; callers cannot select its host."""
-    base = os.getenv("BROWSER_RUNTIME_URL", "http://127.0.0.1:8430").rstrip("/")
-    body = json.dumps(payload).encode() if payload is not None else None
-    request = urllib.request.Request(
-        base + path, data=body, method=method,
-        headers={"Content-Type": "application/json"} if body else {},
-    )
-    with urllib.request.urlopen(request, timeout=40) as response:
-        return response.read(), response.headers.get_content_type()
 
 
 @dataclass

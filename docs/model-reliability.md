@@ -23,8 +23,8 @@ AGENT_MAX_TURNS=8
 ## Cloud fallback
 
 Cloud fallback is disabled for every company by default. Local mode therefore
-cannot silently consume OpenAI tokens. To permit fallback, pause the company,
-open **Model settings**, and explicitly select **Use OpenAI after local failure**.
+cannot silently consume remote tokens. To permit fallback, pause the company,
+open **Model settings**, and explicitly enable remote fallback after local failure.
 Fallback additionally requires `OPENAI_API_KEY`; without both conditions the
 original local error is raised.
 
@@ -41,7 +41,7 @@ URLs; otherwise the result fails the deterministic evidence gate.
 - `model.succeeded`: role, provider, repair attempt, and latency.
 - `model.structured_output_error`: schema/behavior failure and attempt.
 - `model.provider_error`: exhausted provider/network failure.
-- `model.cloud_fallback`: explicit transition from local to OpenAI.
+- `model.cloud_fallback`: explicit transition from local to the selected remote connection.
 
 Error messages are truncated before persistence. API keys are never included.
 

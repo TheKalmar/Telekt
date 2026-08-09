@@ -63,6 +63,16 @@ def test_cloud_provider_and_model_are_selected_per_company(tmp_path: Path):
     assert settings["cloud_model"] == "claude-opus-5"
 
 
+def test_cloud_transport_is_not_limited_to_hard_coded_vendors(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Use a configured model gateway", 1000)
+    store.set_model_settings(
+        "cloud", "local-model", cloud_provider="litellm",
+        cloud_model="gateway/custom-model",
+    )
+    assert store.get_settings()["cloud_provider"] == "litellm"
+
+
 def test_operations_projects_live_browser_mission(tmp_path: Path):
     store = CompanyStore(tmp_path / "company.db")
     store.initialize("Research pricing", 1000)

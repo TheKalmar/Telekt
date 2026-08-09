@@ -29,7 +29,7 @@ invented price.
 ### `GET /api/runtime/preflight`
 
 Runs fresh readiness checks for the selected company. It returns pass, warning,
-skip, or blocking results for the worker, selected local model, OpenAI credential
+skip, or blocking results for the worker, selected model connections, credentials
 presence, and isolated browser runtime. Secret values are never returned.
 
 `POST /api/control/start` runs the same checks without cache and returns `409`

@@ -78,7 +78,7 @@ For Ollama on another machine, set `OLLAMA_BASE_URL` to its reachable private
 network address. Do not expose an unauthenticated Ollama port to the public
 internet.
 
-## Option 4: OpenAI cloud only
+## Option 4: remote-only routing
 
 Create `.env.local` and supply the key locally:
 
@@ -95,9 +95,9 @@ Start without Ollama:
 .\scripts\up.ps1 -Mode Cloud -Build
 ```
 
-In **Model settings**, choose **Cloud only**. No local model is contacted and no
-model is downloaded. The API key is runtime configuration and is not copied into
-the Docker image.
+In **Model settings**, create or select any ready remote connection and choose
+**Cloud only**. No local model is contacted and no model is downloaded. A
+connection credential is runtime configuration and is not copied into the image.
 
 The key can also be added or replaced from **Configuration → Models → Configure
 models**. The control plane reports only whether it is configured; it never
@@ -118,11 +118,12 @@ split routing exposes both.
 
 ## Option 5: hybrid routing
 
-Provide both a reachable Ollama server and `OPENAI_API_KEY`. Start either bundled
-or existing-local mode, then choose **Hybrid** in **Model settings**. The current
-router uses OpenAI for CEO, Development, and Research. Research also receives the
-hosted web-search tool. The selected local model handles Product, Platform,
-Operations, QA, Growth, and supporting analysis.
+Provide both a ready local connection and a ready remote connection. Start either
+bundled or existing-local mode, then choose **Hybrid** in **Model settings**. The
+current router uses the remote connection for CEO, Development, and Research.
+Research receives hosted web search only when that adapter supports hosted
+tools. The selected local connection handles Product, Platform, Operations, QA,
+Growth, and supporting analysis.
 
 ## Working with another developer
 

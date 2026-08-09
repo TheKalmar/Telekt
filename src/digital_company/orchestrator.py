@@ -6,8 +6,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from digital_company.agents import AgentEngine
-from digital_company.computer_use import BrowserMissionRunner, browser_runtime_request
-from digital_company.email_service import ApprovalMailer
+from digital_company.browser_client import browser_runtime_request
+from digital_company.computer_use import BrowserMissionRunner
 from digital_company.models import ActionType, SpecialistResult
 from digital_company.policy import Governor
 from digital_company.store import CompanyStore
@@ -22,14 +22,23 @@ class CompanyOrchestrator:
     work. This distinction prevents model output from bypassing policy, budget,
     approval, persistence, or artifact path checks.
     """
-    def __init__(self, store: CompanyStore, artifacts_dir: Path, engine: AgentEngine | None = None,
-                 company_id: str | None = None, mailer: ApprovalMailer | None = None,
-                 execution_key: str | None = None):
+    def __init__(
+        self,
+        store: CompanyStore,
+        artifacts_dir: Path,
+        engine: AgentEngine | None = None,
+        company_id: str | None = None,
+        mailer: object | None = None,
+        execution_key: str | None = None,
+        *,
+        governor: Governor | None = None,
+        workspace: WorkspaceRuntime | None = None,
+        model_connections: ModelConnectionRegistry | None = None,
+    ):
         self.store = store
-        self.artifacts_dir = artifacts_dir
-        self.workspace = WorkspaceRuntime(artifacts_dir)
+        self.workspace = workspace or WorkspaceRuntime(artifacts_dir)
         settings = store.get_settings()
-        connections = ModelConnectionRegistry().ensure_defaults(
+        connections = (model_connections or ModelConnectionRegistry()).ensure_defaults(
             settings["local_model"], settings["cloud_model"]
         )
         by_id = {item["id"]: item for item in connections}
@@ -42,9 +51,10 @@ class CompanyOrchestrator:
             reporter=self._report,
             remaining_budget=lambda: self.store.snapshot().remaining_budget_eur,
         )
-        self.governor = Governor()
+        self.governor = governor or Governor()
         self.company_id = company_id
-        self.mailer = mailer or ApprovalMailer()
+        # ``mailer`` remains accepted for constructor compatibility. Stakeholder
+        # notifications now belong to StakeholderBriefService, not orchestration.
         self.execution_key = execution_key
 
     def _report(self, event: str, payload: dict) -> None:
@@ -71,12 +81,7 @@ class CompanyOrchestrator:
                 })
                 if status == "executing":
                     return self._execute_claimed(task_id, proposal, cycle)
-                snapshot = self.store.snapshot()
-                skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False)
-                result = self.engine.execute(
-                    proposal, snapshot, self._artifact_context(proposal.specialist), skills,
-                )
-                self._persist_result(task_id, proposal, result)
+                self._execute_specialist(task_id, proposal)
                 return {"status": "recovered_task_completed", "cycles": cycle, "task_id": task_id}
 
             approved = self.store.claim_approved_task()
@@ -125,10 +130,7 @@ class CompanyOrchestrator:
                 self.store.set_task_status(task_id, "stopped")
                 return {"status": "stopped", "cycles": cycle, "reason": proposal.rationale}
 
-            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False)
-            self.store.audit("skills.assigned", {"task_id": task_id, "skill_ids": [s["id"] for s in skills]})
-            result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist), skills)
-            self._persist_result(task_id, proposal, result)
+            self._execute_specialist(task_id, proposal, snapshot)
 
         return {"status": "cycle_limit_reached", "cycles": max_cycles}
 
@@ -142,14 +144,25 @@ class CompanyOrchestrator:
         try:
             if proposal.action == ActionType.BROWSER_OPERATE:
                 return self._execute_browser_mission(task_id, proposal, cycle)
-            skills = self.store.resolve_skills(proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False)
-            self.store.audit("skills.assigned", {"task_id": task_id, "skill_ids": [s["id"] for s in skills]})
-            result = self.engine.execute(proposal, snapshot, self._artifact_context(proposal.specialist), skills)
-            self._persist_result(task_id, proposal, result)
+            self._execute_specialist(task_id, proposal, snapshot)
         except Exception as exc:
             self.store.fail_task(task_id, f"{type(exc).__name__}: {exc}")
             raise
         return {"status": "approved_task_completed", "cycles": cycle, "task_id": task_id}
+
+    def _execute_specialist(self, task_id: str, proposal, snapshot=None) -> None:
+        """Resolve capabilities and run the one shared specialist execution path."""
+        snapshot = snapshot or self.store.snapshot()
+        skills = self.store.resolve_skills(
+            proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False,
+        )
+        self.store.audit("skills.assigned", {
+            "task_id": task_id, "skill_ids": [skill["id"] for skill in skills],
+        })
+        result = self.engine.execute(
+            proposal, snapshot, self._artifact_context(proposal.specialist), skills,
+        )
+        self._persist_result(task_id, proposal, result)
 
     def _execute_browser_mission(self, task_id: str, proposal, cycle: int) -> dict:
         """Run an approved mission, but create a fresh handoff for any human checkpoint."""

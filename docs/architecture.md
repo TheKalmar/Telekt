@@ -73,7 +73,9 @@ Business data never lives in the registry. This prevents normal queries from mix
 
 ### Company store
 
-`store.py` is the canonical persistence boundary for one company. It stores:
+`store.py` is the canonical persistence facade for one company. Schema bootstrap
+lives in `company_schema.py`, while `operations_projection.py` turns queried
+facts and audit events into the operations read model. The store persists:
 
 - company goal and profile;
 - tasks and specialist results;
@@ -90,15 +92,23 @@ Business data never lives in the registry. This prevents normal queries from mix
 
 ### Agent engine
 
-`agents.py` defines one CEO and five specialist roles using OpenAI Agents SDK structured outputs.
+`agents.py` defines one CEO and role-specific specialists using OpenAI Agents SDK
+structured outputs. `model_adapters.py` owns construction of SDK model adapters
+from transport-oriented connection profiles.
 
 The CEO returns `TaskProposal`. Specialists return `SpecialistResult`. Pydantic validation is the boundary between model text and application logic.
 
-Model routing is currently static:
+Role routing is currently static, while concrete model IDs and transports are
+data-driven:
 
-- local: all roles use Ollama;
-- hybrid: CEO, Development, and evidence-backed Research use OpenAI; other specialists use Ollama;
-- cloud: all roles use OpenAI.
+- local: all roles use the selected local connection;
+- hybrid: CEO, Development, and Research use the selected remote connection;
+  other specialists use the selected local connection;
+- cloud: all roles use the selected remote connection.
+
+Connection profiles select Responses API, OpenAI-compatible Chat Completions, or
+LiteLLM technology. Hosted web search is enabled only when the chosen adapter
+supports hosted tools.
 
 ### Governor
 
@@ -122,7 +132,16 @@ Production policy should become data-driven and company-specific, but it must re
 
 ### Orchestrator
 
-`orchestrator.py` performs the bounded control loop. It checks cooperative stop state, blocks on existing approvals, obtains one CEO proposal, records stakeholder handling, evaluates policy, executes allowed specialist work, confines artifact paths, and records the result.
+`orchestrator.py` performs the bounded control loop. It checks cooperative stop
+state, blocks on existing approvals, obtains one CEO proposal, records
+stakeholder handling, evaluates policy, executes allowed specialist work,
+confines artifact paths, and records the result. Its governor, workspace, model
+connection registry, and agent engine are replaceable constructor boundaries.
+
+`company_runtime.py` owns behavior shared by Temporal and the lightweight
+worker: orchestration-result state projection and consolidated daily stakeholder
+briefs. This prevents the two execution modes from implementing different
+business transitions.
 
 `workspace.py` is the first narrow execution-runtime boundary. It rejects
 absolute, traversal, backslash, unsupported, and oversized artifact paths;

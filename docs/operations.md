@@ -72,7 +72,7 @@ checkpoints can still enter `waiting_human` immediately when no safe automation
 path exists.
 
 The **Runtime readiness** panel checks that the worker is online, the exact
-per-company Ollama tag exists when local inference is required, the OpenAI key is
+selected local model exists when local inference is required, the selected remote credential is
 present for cloud/hybrid routing, and the browser runtime is reachable. Dashboard
 checks are cached briefly to avoid polling dependent services every two seconds;
 pressing Start always performs a fresh check and fails closed on blockers.
@@ -83,9 +83,12 @@ pressing Start always performs a fresh check and fails closed on blockers.
 
 Pause the company, start Ollama, verify the configured model exists, then resume. There is currently no automatic local-to-cloud fallback.
 
-### OpenAI unavailable
+### Remote model connection unavailable
 
-The legacy CLI converts common authentication/quota errors into JSON. The web background runner records other provider exceptions by setting company state to `error`. Inspect `runtime_control.detail`, correct the provider problem, and resume.
+The legacy CLI converts common authentication/quota errors into JSON. The web
+background runner records other transport/provider exceptions by setting company
+state to `error`. Inspect `runtime_control.detail`, correct the connection or
+credential problem, and resume.
 
 ### Server restart
 

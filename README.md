@@ -26,7 +26,7 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Stakeholder directives that supersede stale approvals
 - Cooperative start, pause, and stop controls
 - Operations dashboard with active agent, model latency, failures, fallbacks, task states, and audit events
-- Runtime readiness gate for worker, selected Ollama model, OpenAI key, and browser service
+- Runtime readiness gate for worker, selected model connections, credentials, and browser service
 - Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
 - Build/buy/integrate/manual strategy gate with durable platform capability tracking
 - Human takeover missions for login, CAPTCHA, 2FA, identity, terms, and other manual checkpoints
@@ -62,7 +62,7 @@ See [Architecture](docs/architecture.md) for the full system description.
 
 - Windows, Linux, or macOS
 - Python 3.11+
-- An OpenAI API key for cloud or hybrid mode
+- A credential for the selected remote connection when that transport requires one
 - Ollama plus `deepseek-company:8b` for local or hybrid mode
 
 The local model configuration is in [config/Modelfile.deepseek-company](config/Modelfile.deepseek-company).
@@ -163,9 +163,9 @@ Open [http://127.0.0.1:8421](http://127.0.0.1:8421). The readiness endpoint is `
 
 | Mode | CEO | Development | Research | Product / QA / Growth | Intended use |
 |---|---|---|---|---|---|
-| Local | Ollama | Ollama | Ollama (offline only) | Ollama | Free workflow testing and simple work |
-| Hybrid | OpenAI | OpenAI | OpenAI + web search | Ollama | Evidence-backed strategy with controlled cloud cost |
-| Cloud | OpenAI | OpenAI | OpenAI + web search | OpenAI | Highest quality |
+| Local | Selected local connection | Selected local connection | Offline only | Selected local connection | Free workflow testing and simple work |
+| Hybrid | Selected remote connection | Selected remote connection | Remote; hosted search when supported | Selected local connection | Evidence-backed strategy with controlled remote cost |
+| Cloud | Selected remote connection | Selected remote connection | Remote; hosted search when supported | Selected remote connection | Highest quality |
 
 Mode changes apply to future cycles and are rejected while a company is running. Local mode disables OpenAI trace export.
 
@@ -200,15 +200,22 @@ An intentional live run uses five model calls and writes the detailed result to
 
 ```text
 src/digital_company/
-  agents.py          Agents SDK definitions and model routing
+  agents.py          Agent routing, execution, retries, and evidence gates
+  model_adapters.py  Connection-profile to Agents SDK adapter factory
+  api_models.py      Validated HTTP request contracts
+  company_runtime.py Shared worker state and stakeholder-brief services
+  company_schema.py  Additive company schema bootstrap
+  operations_projection.py Pure operational dashboard read model
+  preflight.py       Runtime readiness rules and connection checks
   models.py          Typed agent/application contracts
   orchestrator.py    Autonomous control loop
   workspace.py       Confined artifact writes and deterministic validation
   browser_runtime.py Isolated Playwright/Chromium session service
+  browser_client.py  Shared internal browser-runtime HTTP boundary
   browser_policy.py  URL allowlist and human-checkpoint rules
   computer_use.py    Bounded OpenAI Computer Use mission controller
   policy.py          Deterministic Governor
-  store.py           PostgreSQL/SQLite-compatible company repository
+  store.py           PostgreSQL/SQLite-compatible persistence facade
   registry.py        Multi-company portfolio registry
   web.py             FastAPI control plane
   worker.py          Restart-safe autonomous cycle worker

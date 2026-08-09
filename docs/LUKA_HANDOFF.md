@@ -11,7 +11,7 @@ POC history, including:
 
 - multi-company portfolio and per-company goals, budgets, settings, and state;
 - autonomous CEO/specialist decision loop with deterministic policy checks;
-- local, hybrid, and OpenAI cloud model routing;
+- local, hybrid, and remote model-connection routing;
 - durable polling worker, approvals, email approvals, and stakeholder chat;
 - build/buy/integrate/manual strategy and platform capability records;
 - isolated persistent Chromium runtime and manual browser cockpit;
@@ -122,9 +122,9 @@ it is not copied into an image or stored in company state.
 
 ### D. Hybrid
 
-Configure both a reachable Ollama server and `OPENAI_API_KEY`, start with
+Configure both a ready local model connection and a remote connection, start with
 `-Mode Existing` or `-Mode Bundled`, then choose **Hybrid**. CEO, Development,
-and evidence-backed Research use OpenAI; Platform, Operations, Product, QA, and
+and evidence-backed Research use the remote connection; Platform, Operations, Product, QA, and
 Growth use the chosen local model. Research receives hosted web search and must
 return direct sources. Computer Use is always a cloud capability and requires its own
 approved `browser_operate` task.

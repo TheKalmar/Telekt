@@ -7,14 +7,31 @@ import os
 import html
 import re
 import time
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
-from pydantic import BaseModel, Field
 
+from digital_company.api_models import (
+    ApprovalDecisionIn,
+    BrowserActionIn,
+    BrowserSessionIn,
+    CompanyCreateIn,
+    EmailSettingsIn,
+    HandoffDecisionIn,
+    IntegrationSettingsIn,
+    MessageIn,
+    ModelConnectionIn,
+    ModelModeIn,
+    ModelSettingsIn,
+)
+from digital_company.browser_client import (
+    BrowserRuntimeError,
+    browser_runtime_request as request_browser_runtime,
+)
 from digital_company.registry import CompanyRegistry
 from digital_company.store import CompanyStore
 from digital_company.email_service import verify_approval_token
@@ -23,15 +40,28 @@ from digital_company.workspace import WorkspaceRuntime
 from digital_company.runtime_secrets import apply_runtime_secrets, save_secret
 from digital_company.runtime_secrets import get_secret
 from digital_company.model_connections import ADAPTERS, ModelConnectionRegistry
+from digital_company.preflight import (
+    connection_ready as check_model_connection,
+    evaluate_runtime_preflight,
+)
 
 
 ROOT = Path.cwd()
-STATE_DIR = Path(os.getenv("COMPANY_DATA_DIR", str(ROOT / ".company"))).expanduser().resolve()
 STATIC_DIR = Path(__file__).parent / "static"
 load_dotenv(ROOT / ".env.local")
 apply_runtime_secrets()
+STATE_DIR = Path(os.getenv("COMPANY_DATA_DIR", str(ROOT / ".company"))).expanduser().resolve()
 
-app = FastAPI(title="Digital Company Control Plane")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Own process-wide control-plane resources."""
+    yield
+    close = getattr(registry, "close", None)
+    if close:
+        close()
+
+
+app = FastAPI(title="Digital Company Control Plane", lifespan=lifespan)
 registry = CompanyRegistry(STATE_DIR)
 _preflight_cache: dict[str, tuple[float, tuple, dict]] = {}
 
@@ -41,30 +71,21 @@ def get_store(company_id: str | None = None) -> CompanyStore:
     return registry.store_for(company_id)
 
 
+@contextmanager
+def store_scope(company_id: str | None = None):
+    """Own one request-scoped company connection and always release it."""
+    store = get_store(company_id)
+    try:
+        yield store
+    finally:
+        close = getattr(store, "close", None)
+        if close:
+            close()
+
+
 def connection_ready(connection: dict | None, verify_model: bool = False) -> tuple[bool, str]:
-    """Validate a transport profile without making a billable generation call."""
-    if not connection or not connection.get("enabled"):
-        return False, "Model connection is missing or disabled"
-    secret = get_secret(f"MODEL_CONNECTION_{connection['id']}")
-    if connection.get("requires_api_key", True) and not (
-        secret or (connection["adapter"] == "openai_responses" and os.getenv("OPENAI_API_KEY"))
-    ):
-        return False, f"Credential is missing for {connection['name']}"
-    if verify_model and connection["adapter"] == "openai_compatible":
-        import json
-        import urllib.request
-        request = urllib.request.Request(connection["base_url"].rstrip("/") + "/models")
-        if secret:
-            request.add_header("Authorization", f"Bearer {secret}")
-        try:
-            with urllib.request.urlopen(request, timeout=3) as response:
-                payload = json.loads(response.read())
-            models = [item.get("id") for item in payload.get("data", [])]
-            if connection["model"] not in models:
-                return False, f"{connection['model']} was not reported by {connection['name']}"
-        except Exception as exc:
-            return False, f"{connection['name']} is unreachable ({type(exc).__name__})"
-    return True, f"{connection['name']} · {connection['model']} is ready"
+    """Compatibility wrapper around the transport readiness service."""
+    return check_model_connection(connection, verify_model)
 
 
 def signal_temporal(company_id: str, signal_name: str, reason: str) -> bool:
@@ -72,165 +93,35 @@ def signal_temporal(company_id: str, signal_name: str, reason: str) -> bool:
     try:
         return signal_company(company_id, signal_name, reason)
     except TemporalCommandError as exc:
-        store = get_store(company_id)
-        store.audit("temporal.signal_failed", {
-            "signal": signal_name, "reason": reason, "error": str(exc),
-        })
+        with store_scope(company_id) as store:
+            store.audit("temporal.signal_failed", {
+                "signal": signal_name, "reason": reason, "error": str(exc),
+            })
         raise HTTPException(503, str(exc)) from exc
 
 
 def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
     """Evaluate whether the selected company can safely start its configured loop."""
     settings = store.get_settings()
-    mode = settings["model_mode"]
     cache_key = str(store.path)
     signature = (settings["updated_at"], bool(os.getenv("OPENAI_API_KEY")),
                  bool(os.getenv("ANTHROPIC_API_KEY")))
     cached = _preflight_cache.get(cache_key)
     if not force and cached and cached[1] == signature and time.monotonic() - cached[0] < 5:
         return cached[2]
-    checks: list[dict] = []
-
     worker = registry.worker_status()
-    checks.append({
-        "id": "worker", "status": "pass" if worker["status"] == "online" else "block",
-        "detail": "Background worker is online" if worker["status"] == "online"
-                  else "Background worker is offline; restart the worker container",
-    })
-
     connection_registry = ModelConnectionRegistry()
     connections = connection_registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
-    by_id = {item["id"]: item for item in connections}
-    if mode in {"local", "hybrid"}:
-        local_ready, detail = connection_ready(
-            by_id.get(settings["local_connection_id"]), verify_model=True
-        )
-        checks.append({"id": "local_connection", "status": "pass" if local_ready else "block", "detail": detail})
-    else:
-        checks.append({"id": "local_connection", "status": "skip", "detail": "Remote-only routing does not require a local connection"})
-
-    cloud_required = mode in {"cloud", "hybrid"}
-    connection = by_id.get(settings.get("cloud_connection_id", "cloud-default"))
-    provider = connection["name"] if connection else "Cloud connection"
-    cloud_present, cloud_detail = connection_ready(connection)
-    checks.append({
-        "id": "cloud_connection", "status": "pass" if cloud_present else "block" if cloud_required else "warn",
-        "detail": cloud_detail if cloud_present or cloud_required else
-                  f"{provider} is not ready; local work can still run",
-    })
-
     browser = browser_health()
-    browser_ready = browser["status"] == "ok"
-    checks.append({
-        "id": "browser", "status": "pass" if browser_ready else "warn",
-        "detail": "Isolated browser runtime is online" if browser_ready
-                  else "Browser runtime is offline; reasoning work can run but Browser Missions cannot",
-    })
-    blockers = [check for check in checks if check["status"] == "block"]
-    result = {"ready": not blockers, "mode": mode, "checks": checks,
-              "blockers": [check["detail"] for check in blockers]}
+    result = evaluate_runtime_preflight(
+        settings,
+        worker=worker,
+        connections=connections,
+        browser=browser,
+        connection_check=lambda connection, verify: connection_ready(connection, verify),
+    )
     _preflight_cache[cache_key] = (time.monotonic(), signature, result)
     return result
-
-
-class MessageIn(BaseModel):
-    """Stakeholder chat payload."""
-    content: str = Field(min_length=1, max_length=4000)
-    kind: str = "directive"
-
-
-class ModelModeIn(BaseModel):
-    """Per-company model router selection."""
-    mode: str
-
-
-class ModelSettingsIn(BaseModel):
-    """Per-company routing mode and local Ollama model selection."""
-    mode: str
-    local_model: str = Field(min_length=1, max_length=200)
-    allow_cloud_fallback: bool = False
-    cloud_provider: str = "openai"
-    cloud_model: str = Field(default="gpt-5.4-mini", min_length=1, max_length=200)
-    local_connection_id: str = "local-default"
-    cloud_connection_id: str = "cloud-default"
-
-
-class ModelConnectionIn(BaseModel):
-    id: str | None = None
-    name: str = Field(min_length=1, max_length=100)
-    adapter: str
-    location: str
-    base_url: str = Field(default="", max_length=2000)
-    model: str = Field(min_length=1, max_length=200)
-    api_key: str = Field(default="", max_length=500)
-    enabled: bool = True
-    requires_api_key: bool = True
-
-
-class ApprovalDecisionIn(BaseModel):
-    """Dashboard approval decision with human context."""
-    comment: str = Field(default="", max_length=4000)
-
-
-class HandoffDecisionIn(BaseModel):
-    """Stakeholder evidence returned after a manual browser/account step."""
-    outcome: str = Field(min_length=1, max_length=4000)
-
-
-class BrowserSessionIn(BaseModel):
-    url: str = Field(max_length=2000)
-    allowed_domains: list[str] = Field(min_length=1, max_length=30)
-
-
-class BrowserActionIn(BaseModel):
-    kind: str
-    x: float | None = None
-    y: float | None = None
-    text: str | None = Field(default=None, max_length=4000)
-    key: str | None = Field(default=None, max_length=40)
-    url: str | None = Field(default=None, max_length=2000)
-
-
-class EmailSettingsIn(BaseModel):
-    """Non-secret per-company approval notification settings."""
-    enabled: bool = False
-    approvers: list[str] = Field(default_factory=list, max_length=50)
-    sender_name: str = Field(default="Digital Company", min_length=1, max_length=100)
-
-
-class IntegrationSettingsIn(BaseModel):
-    """Non-secret platform configuration; credentials stay in environment variables."""
-    provider: str = Field(pattern=r"^[a-z0-9_-]{2,40}$")
-    store_domain: str = Field(default="", max_length=255)
-    capabilities: list[str] = Field(default_factory=list, max_length=30)
-    required_secrets: list[str] = Field(default_factory=list, max_length=20)
-
-
-class CompanyCreateIn(BaseModel):
-    """Validated company creation form with safe, editable defaults."""
-    name: str = Field(min_length=2, max_length=100)
-    company_type: str = Field(default="SaaS", max_length=60)
-    concept: str = Field(min_length=3, max_length=1000)
-    description: str = Field(default="", max_length=2000)
-    goal: str = Field(default="Validate the concept, build an MVP, and find a path to profitability", max_length=2000)
-    budget: float = Field(default=1000, gt=0)
-    currency: str = Field(default="EUR", min_length=3, max_length=3)
-    target_market: str = Field(default="Small and medium businesses", max_length=500)
-    customer_type: str = Field(default="B2B", max_length=30)
-    time_horizon_days: int = Field(default=30, ge=1, le=3650)
-    risk_tolerance: str = "medium"
-    autonomy_level: str = "balanced"
-    constraints: list[str] = Field(default_factory=lambda: [
-        "Approval before external communication",
-        "Approval before spending money",
-        "Approval before production deployment",
-        "Never sign contracts",
-    ])
-    success_criteria: list[str] = Field(default_factory=lambda: [
-        "Evidence-backed problem selection",
-        "Functional MVP",
-        "Clear human decision point",
-    ])
 
 
 @app.get("/")
@@ -285,25 +176,28 @@ def dashboard():
             "stakeholder_messages": [],
             "portfolio": {"active_company_id": None, "companies": []},
         }
-    data = get_store(company_id).dashboard_data()
+    with store_scope(company_id) as store:
+        data = store.dashboard_data()
+        data["preflight"] = runtime_preflight(store)
     data["portfolio"] = {"active_company_id": company_id, "companies": registry.list()}
     data["operations"]["worker"] = registry.worker_status()
     data["artifacts"] = WorkspaceRuntime(registry.artifacts_for(company_id)).inventory()
-    data["preflight"] = runtime_preflight(get_store(company_id))
     return data
 
 
 @app.get("/api/runtime/preflight")
 def preflight():
     """Return actionable readiness checks without exposing secret values."""
-    return runtime_preflight(get_store(), force=True)
+    with store_scope() as store:
+        return runtime_preflight(store, force=True)
 
 
 @app.get("/api/operations")
 def operations():
     """Return operational telemetry for the selected company and worker."""
     try:
-        data = get_store().operations_data()
+        with store_scope() as store:
+            data = store.operations_data()
     except RuntimeError:
         data = {
             "active_model_run": None,
@@ -323,13 +217,15 @@ def companies():
 
 @app.get("/api/skills")
 def skills():
-    return {"skills": get_store().list_skills()}
+    with store_scope() as store:
+        return {"skills": store.list_skills()}
 
 
 @app.put("/api/skills/{skill_id}/{status}")
 def set_skill_status(skill_id: str, status: str):
     try:
-        get_store().set_skill_status(skill_id, status)
+        with store_scope() as store:
+            store.set_skill_status(skill_id, status)
     except KeyError as exc:
         raise HTTPException(404, "Skill not found") from exc
     except ValueError as exc:
@@ -381,78 +277,79 @@ def select_company(company_id: str):
 def control(action: str):
     """Start, pause, or stop the selected company's cooperative loop."""
     company_id = registry.active_id()
-    store = get_store(company_id)
-    if action == "start":
-        readiness = runtime_preflight(store, force=True)
-        if not readiness["ready"]:
-            raise HTTPException(409, {"message": "Runtime preflight failed", "blockers": readiness["blockers"]})
-        store.set_control("running", "Queued for autonomous worker")
-        signal_temporal(company_id, "start", "operator_start")
-    elif action in {"pause", "stop"}:
-        store.set_control("paused" if action == "pause" else "stopped",
-                          "Will halt after current atomic action")
-        signal_temporal(company_id, action, f"operator_{action}")
-    else:
-        raise HTTPException(400, "Unknown control action")
-    return store.get_control()
+    with store_scope(company_id) as store:
+        if action == "start":
+            readiness = runtime_preflight(store, force=True)
+            if not readiness["ready"]:
+                raise HTTPException(409, {"message": "Runtime preflight failed", "blockers": readiness["blockers"]})
+            store.set_control("running", "Queued for autonomous worker")
+            signal_temporal(company_id, "start", "operator_start")
+        elif action in {"pause", "stop"}:
+            store.set_control("paused" if action == "pause" else "stopped",
+                              "Will halt after current atomic action")
+            signal_temporal(company_id, action, f"operator_{action}")
+        else:
+            raise HTTPException(400, "Unknown control action")
+        return store.get_control()
 
 
 @app.post("/api/messages")
 def message(payload: MessageIn):
     """Persist stakeholder input and wake a paused company for directives."""
     company_id = registry.active_id()
-    store = get_store(company_id)
-    try:
-        message_id = store.add_stakeholder_message(payload.content.strip(), payload.kind)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    if store.get_control()["state"] in {"waiting_approval", "waiting_human", "paused"} and payload.kind == "directive":
-        store.set_control("running", "Stakeholder directive queued for worker")
-        signal_temporal(company_id, "wake", "stakeholder_directive")
-    return {"id": message_id, "status": "pending"}
+    with store_scope(company_id) as store:
+        try:
+            message_id = store.add_stakeholder_message(payload.content.strip(), payload.kind)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if store.get_control()["state"] in {"waiting_approval", "waiting_human", "paused"} and payload.kind == "directive":
+            store.set_control("running", "Stakeholder directive queued for worker")
+            signal_temporal(company_id, "wake", "stakeholder_directive")
+        return {"id": message_id, "status": "pending"}
 
 
 @app.post("/api/settings/model-mode")
 def model_mode(payload: ModelModeIn):
     """Change routing only while no model call is actively running."""
-    store = get_store()
-    if store.get_control()["state"] == "running":
-        raise HTTPException(409, "Pause or stop the company before switching model mode")
-    try:
-        store.set_model_mode(payload.mode)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return store.get_settings()
+    with store_scope() as store:
+        if store.get_control()["state"] == "running":
+            raise HTTPException(409, "Pause or stop the company before switching model mode")
+        try:
+            store.set_model_mode(payload.mode)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return store.get_settings()
 
 
 @app.post("/api/settings/models")
 def model_settings(payload: ModelSettingsIn):
     """Update model routing for the active company while its loop is stopped."""
-    store = get_store()
-    if store.get_control()["state"] == "running":
-        raise HTTPException(409, "Pause or stop the company before changing model settings")
-    try:
-        connections = ModelConnectionRegistry().ensure_defaults(payload.local_model, payload.cloud_model)
-        by_id = {item["id"]: item for item in connections}
-        local = by_id.get(payload.local_connection_id)
-        cloud = by_id.get(payload.cloud_connection_id)
-        if payload.mode in {"local", "hybrid"} and (not local or local["location"] != "local"):
-            raise ValueError("Select a valid local model connection")
-        if payload.mode in {"cloud", "hybrid"} and (not cloud or cloud["location"] != "cloud"):
-            raise ValueError("Select a valid cloud model connection")
-        store.set_model_settings(
-            payload.mode, (local or {}).get("model", payload.local_model), payload.allow_cloud_fallback,
-            (cloud or {}).get("adapter", "connection"), (cloud or {}).get("model", payload.cloud_model),
-            payload.local_connection_id, payload.cloud_connection_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return store.get_settings()
+    with store_scope() as store:
+        if store.get_control()["state"] == "running":
+            raise HTTPException(409, "Pause or stop the company before changing model settings")
+        try:
+            connections = ModelConnectionRegistry().ensure_defaults(payload.local_model, payload.cloud_model)
+            by_id = {item["id"]: item for item in connections}
+            local = by_id.get(payload.local_connection_id)
+            cloud = by_id.get(payload.cloud_connection_id)
+            if payload.mode in {"local", "hybrid"} and (not local or local["location"] != "local"):
+                raise ValueError("Select a valid local model connection")
+            if payload.mode in {"cloud", "hybrid"} and (not cloud or cloud["location"] != "cloud"):
+                raise ValueError("Select a valid cloud model connection")
+            store.set_model_settings(
+                payload.mode, (local or {}).get("model", payload.local_model), payload.allow_cloud_fallback,
+                (cloud or {}).get("adapter", "connection"), (cloud or {}).get("model", payload.cloud_model),
+                payload.local_connection_id, payload.cloud_connection_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return store.get_settings()
 
 
 @app.get("/api/model-connections")
 def model_connections():
-    settings = get_store().get_settings()
+    with store_scope() as store:
+        settings = store.get_settings()
     registry = ModelConnectionRegistry()
     connections = registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
     def project(item: dict) -> dict:
@@ -477,9 +374,10 @@ def save_model_connection(payload: ModelConnectionIn):
             save_secret(f"MODEL_CONNECTION_{item['id']}", payload.api_key)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    get_store().audit("model_connection.saved", {
-        "connection_id": item["id"], "adapter": item["adapter"], "location": item["location"],
-    })
+    with store_scope() as store:
+        store.audit("model_connection.saved", {
+            "connection_id": item["id"], "adapter": item["adapter"], "location": item["location"],
+        })
     _preflight_cache.clear()
     credential = bool(payload.api_key.strip() or get_secret(f"MODEL_CONNECTION_{item['id']}"))
     return {**item, "credential_configured": credential,
@@ -488,7 +386,8 @@ def save_model_connection(payload: ModelConnectionIn):
 
 @app.delete("/api/model-connections/{connection_id}")
 def delete_model_connection(connection_id: str):
-    settings = get_store().get_settings()
+    with store_scope() as store:
+        settings = store.get_settings()
     if connection_id in {settings["local_connection_id"], settings["cloud_connection_id"]}:
         raise HTTPException(409, "Connection is currently assigned to the selected company")
     if not ModelConnectionRegistry().delete(connection_id):
@@ -505,24 +404,11 @@ def ollama_api_url(path: str) -> str:
 
 def browser_runtime_request(method: str, path: str, payload: dict | None = None,
                             timeout: float = 40) -> tuple[bytes, str]:
-    """Call only the configured internal browser service; user input never selects the host."""
-    import json
-    import urllib.error
-    import urllib.request
-    base = os.getenv("BROWSER_RUNTIME_URL", "http://127.0.0.1:8430").rstrip("/")
-    body = json.dumps(payload).encode() if payload is not None else None
-    request = urllib.request.Request(
-        base + path, data=body, method=method,
-        headers={"Content-Type": "application/json"} if body else {},
-    )
+    """Map the transport-neutral browser client failure to an HTTP response."""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read(), response.headers.get_content_type()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise HTTPException(exc.code, detail) from exc
-    except Exception as exc:
-        raise HTTPException(503, f"Browser runtime unavailable: {type(exc).__name__}") from exc
+        return request_browser_runtime(method, path, payload, timeout)
+    except BrowserRuntimeError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 @app.get("/api/browser/health")
@@ -540,9 +426,10 @@ def open_browser_session(payload: BrowserSessionIn):
     body, _ = browser_runtime_request(
         "PUT", f"/sessions/{company_id}", payload.model_dump(mode="json")
     )
-    get_store(company_id).audit("browser.session_opened", {
-        "url": payload.url, "allowed_domains": payload.allowed_domains, "actor": "human",
-    })
+    with store_scope(company_id) as store:
+        store.audit("browser.session_opened", {
+            "url": payload.url, "allowed_domains": payload.allowed_domains, "actor": "human",
+        })
     return __import__("json").loads(body)
 
 
@@ -566,10 +453,11 @@ def browser_action(payload: BrowserActionIn):
     body, _ = browser_runtime_request(
         "POST", f"/sessions/{company_id}/actions", payload.model_dump(mode="json")
     )
-    get_store(company_id).audit("browser.human_action", {
-        "kind": payload.kind, "url": payload.url,
-        "coordinates": [payload.x, payload.y] if payload.kind == "click" else None,
-    })
+    with store_scope(company_id) as store:
+        store.audit("browser.human_action", {
+            "kind": payload.kind, "url": payload.url,
+            "coordinates": [payload.x, payload.y] if payload.kind == "click" else None,
+        })
     return __import__("json").loads(body)
 
 
@@ -577,7 +465,8 @@ def browser_action(payload: BrowserActionIn):
 def close_browser_session():
     company_id = registry.active_id()
     body, _ = browser_runtime_request("DELETE", f"/sessions/{company_id}")
-    get_store(company_id).audit("browser.session_closed", {"actor": "human"})
+    with store_scope(company_id) as store:
+        store.audit("browser.session_closed", {"actor": "human"})
     return __import__("json").loads(body)
 
 
@@ -599,12 +488,12 @@ def local_models():
 
 @app.get("/api/settings/email")
 def email_settings():
-    return get_store().get_email_settings()
+    with store_scope() as store:
+        return store.get_email_settings()
 
 
 @app.post("/api/settings/email")
 def save_email_settings(payload: EmailSettingsIn):
-    store = get_store()
     emails = []
     for value in payload.approvers:
         email = value.strip().lower()
@@ -614,12 +503,14 @@ def save_email_settings(payload: EmailSettingsIn):
             emails.append(email)
     if payload.enabled and not emails:
         raise HTTPException(400, "At least one approver email is required")
-    return store.set_email_settings(payload.enabled, emails, payload.sender_name)
+    with store_scope() as store:
+        return store.set_email_settings(payload.enabled, emails, payload.sender_name)
 
 
 @app.get("/api/settings/integrations")
 def integration_settings():
-    return {"integrations": get_store().list_integrations()}
+    with store_scope() as store:
+        return {"integrations": store.list_integrations()}
 
 
 @app.post("/api/settings/integrations")
@@ -637,11 +528,12 @@ def save_integration_settings(payload: IntegrationSettingsIn):
         if any(not re.fullmatch(r"[A-Z][A-Z0-9_]{2,80}", name) for name in required):
             raise HTTPException(400, "Secret references must be uppercase environment variable names")
         capabilities = payload.capabilities
-    return get_store().upsert_integration(
-        provider, "configured",
-        {"store_domain": domain, "capabilities": capabilities},
-        required,
-    )
+    with store_scope() as store:
+        return store.upsert_integration(
+            provider, "configured",
+            {"store_domain": domain, "capabilities": capabilities},
+            required,
+        )
 
 
 @app.get("/api/local-model/health")
@@ -658,16 +550,16 @@ def local_model_health():
 @app.post("/api/approvals/{approval_id}/{decision}")
 def approval(approval_id: str, decision: str, payload: ApprovalDecisionIn):
     """Resolve an exact frozen approval payload for the selected company."""
-    store = get_store()
-    try:
-        if decision == "approve":
-            store.approve(approval_id, payload.comment)
-        elif decision == "reject":
-            store.reject(approval_id, payload.comment)
-        else:
-            raise HTTPException(400, "Unknown decision")
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(404, str(exc)) from exc
+    with store_scope() as store:
+        try:
+            if decision == "approve":
+                store.approve(approval_id, payload.comment)
+            elif decision == "reject":
+                store.reject(approval_id, payload.comment)
+            else:
+                raise HTTPException(400, "Unknown decision")
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(404, str(exc)) from exc
     signal_temporal(registry.active_id(), "wake", f"approval_{decision}")
     return {"status": decision}
 
@@ -678,7 +570,8 @@ def handoff(handoff_id: str, decision: str, payload: HandoffDecisionIn):
     if decision not in {"complete", "cancel"}:
         raise HTTPException(400, "Unknown handoff decision")
     try:
-        get_store().resolve_handoff(handoff_id, payload.outcome, decision == "complete")
+        with store_scope() as store:
+            store.resolve_handoff(handoff_id, payload.outcome, decision == "complete")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
@@ -692,7 +585,8 @@ def approval_page(company_id: str, approval_id: str, email: str, expires: int, t
     if not verify_approval_token(company_id, approval_id, email, expires, token):
         raise HTTPException(403, "Invalid approval link")
     try:
-        approval = next(a for a in registry.store_for(company_id).list_approvals() if a["id"] == approval_id)
+        with store_scope(company_id) as store:
+            approval = next(a for a in store.list_approvals() if a["id"] == approval_id)
     except (KeyError, StopIteration) as exc:
         raise HTTPException(404, "Approval not found") from exc
     proposal = __import__("json").loads(approval["payload_json"])
@@ -721,16 +615,16 @@ async def email_approval_decision(company_id: str, approval_id: str, request: Re
     comment = str(form.get("comment", "")).strip()
     if not verify_approval_token(company_id, approval_id, email, expires, token):
         raise HTTPException(403, "Invalid approval link")
-    store = registry.store_for(company_id)
     try:
-        if decision == "approve":
-            store.approve(approval_id, comment, email)
-            message = "Approved. The exact frozen task has been queued for execution."
-        elif decision == "reject":
-            store.reject(approval_id, comment, email)
-            message = "Declined. The CEO will reconsider using your reason."
-        else:
-            raise ValueError("Choose Approve or Decline")
+        with store_scope(company_id) as store:
+            if decision == "approve":
+                store.approve(approval_id, comment, email)
+                message = "Approved. The exact frozen task has been queued for execution."
+            elif decision == "reject":
+                store.reject(approval_id, comment, email)
+                message = "Declined. The CEO will reconsider using your reason."
+            else:
+                raise ValueError("Choose Approve or Decline")
     except (RuntimeError, ValueError) as exc:
         return HTMLResponse(approval_page(company_id, approval_id, email, expires, token, str(exc)), status_code=400)
     await asyncio.to_thread(signal_temporal, company_id, "wake", f"email_approval_{decision}")
