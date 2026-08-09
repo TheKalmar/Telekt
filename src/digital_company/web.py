@@ -20,12 +20,14 @@ from digital_company.store import CompanyStore
 from digital_company.email_service import verify_approval_token
 from digital_company.temporal_gateway import TemporalCommandError, signal_company
 from digital_company.workspace import WorkspaceRuntime
+from digital_company.runtime_secrets import apply_runtime_secrets, save_secret, secret_status
 
 
 ROOT = Path.cwd()
 STATE_DIR = Path(os.getenv("COMPANY_DATA_DIR", str(ROOT / ".company"))).expanduser().resolve()
 STATIC_DIR = Path(__file__).parent / "static"
 load_dotenv(ROOT / ".env.local")
+apply_runtime_secrets()
 
 app = FastAPI(title="Digital Company Control Plane")
 registry = CompanyRegistry(STATE_DIR)
@@ -121,6 +123,11 @@ class ModelSettingsIn(BaseModel):
     mode: str
     local_model: str = Field(min_length=1, max_length=200)
     allow_cloud_fallback: bool = False
+
+
+class OpenAIKeyIn(BaseModel):
+    """Write-only OpenAI credential; this value is never returned by the API."""
+    api_key: str = Field(min_length=1, max_length=500)
 
 
 class ApprovalDecisionIn(BaseModel):
@@ -391,6 +398,27 @@ def model_settings(payload: ModelSettingsIn):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return store.get_settings()
+
+
+@app.get("/api/settings/openai")
+def openai_settings_status():
+    """Expose credential presence only, never the credential itself."""
+    return {"configured": secret_status()["OPENAI_API_KEY"]}
+
+
+@app.put("/api/settings/openai")
+def update_openai_key(payload: OpenAIKeyIn):
+    """Persist a replacement key in the shared runtime secret volume."""
+    key = payload.api_key.strip()
+    if not key.startswith("sk-"):
+        raise HTTPException(400, "OpenAI API key must start with sk-")
+    try:
+        save_secret("OPENAI_API_KEY", key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _preflight_cache.clear()
+    get_store().audit("credentials.updated", {"provider": "openai"})
+    return {"configured": True}
 
 
 def ollama_api_url(path: str) -> str:

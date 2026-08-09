@@ -15,6 +15,7 @@ from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.registry import CompanyRegistry
 from digital_company.temporal_gateway import ensure_workflow
 from digital_company.temporal_workflow import CompanyLoopWorkflow, TASK_QUEUE
+from digital_company.runtime_secrets import apply_runtime_secrets
 
 
 def registry() -> CompanyRegistry:
@@ -65,6 +66,7 @@ def _finalize_activity_failure(company_id: str, execution_key: str, exc: Excepti
 
 
 def _advance_company_sync(company_id: str, execution_key: str | None = None) -> dict:
+    apply_runtime_secrets()
     portfolio = registry()
     store = portfolio.store_for(company_id)
     execution_key = execution_key or f"manual:{company_id}"

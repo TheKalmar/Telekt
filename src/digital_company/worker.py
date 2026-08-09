@@ -16,10 +16,12 @@ from dotenv import load_dotenv
 from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.email_service import ApprovalMailer
 from digital_company.registry import CompanyRegistry
+from digital_company.runtime_secrets import apply_runtime_secrets
 
 
 def run_once(registry: CompanyRegistry, owner: str) -> int:
     """Advance every runnable company by at most one atomic agent cycle."""
+    apply_runtime_secrets()
     advanced = 0
     for company in registry.list():
         company_id = company["id"]

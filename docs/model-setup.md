@@ -99,6 +99,12 @@ In **Model settings**, choose **Cloud only**. No local model is contacted and no
 model is downloaded. The API key is runtime configuration and is not copied into
 the Docker image.
 
+The key can also be added or replaced from **Configuration → Models → Configure
+models**. The control plane reports only whether it is configured; it never
+returns the value to the browser or stores it in PostgreSQL. A key entered in the
+UI is stored in the shared runtime secret volume and is loaded by the worker
+before its next model activity.
+
 ## Option 5: hybrid routing
 
 Provide both a reachable Ollama server and `OPENAI_API_KEY`. Start either bundled

@@ -180,6 +180,15 @@ Configures non-secret platform metadata. Shopify accepts a permanent
 
 Allowed values: `local`, `hybrid`, and `cloud`. Mode changes are rejected while the active company is running.
 
+### `GET /api/settings/openai`
+
+Returns only `{ "configured": true|false }`; secret material is never returned.
+
+### `PUT /api/settings/openai`
+
+Accepts `{ "api_key": "..." }` and replaces the key in the shared runtime secret
+volume. Its response also contains credential presence only.
+
 ## Error behavior
 
 - `400`: invalid action, decision, mode, or payload.
