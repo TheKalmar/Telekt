@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+from digital_company.models import PolicyDocument
+
 
 class MessageIn(BaseModel):
     """Stakeholder chat payload."""
@@ -44,6 +46,10 @@ class ApprovalDecisionIn(BaseModel):
     """Dashboard approval decision with human context."""
 
     comment: str = Field(default="", max_length=4000)
+
+
+class PolicyUpdateIn(PolicyDocument):
+    """A complete replacement document persisted as a new immutable version."""
 
 
 class HandoffDecisionIn(BaseModel):

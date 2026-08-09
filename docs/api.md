@@ -126,9 +126,21 @@ when runtime readiness still has blockers.
 
 ## Approvals
 
-Approving a pending item queues its exact frozen proposal for worker execution.
-Rejecting it permanently closes that task and lets the CEO reconsider. Repeating
-either decision on a resolved approval returns an error; an approval is single-use.
+Approving a pending item records one distinct vote. Reaching the policy quorum
+queues its exact frozen proposal for worker execution. Rejecting it permanently
+closes that task and lets the CEO reconsider. Duplicate votes and decisions on
+resolved or expired approvals return an error.
+
+## Company policy
+
+### `GET /api/policy`
+
+Returns the active immutable version, validated document, and supported action IDs.
+
+### `POST /api/policy`
+
+Creates a new version containing action rules, autonomous spend limit, approval
+quorum, and approval TTL. The contract-signing prohibition cannot be removed.
 
 ## Human takeover
 
@@ -165,7 +177,8 @@ plane routes are the only supported access path.
 
 ### `POST /api/approvals/{approval_id}/approve`
 
-Approves one exact pending payload.
+Records one vote for the exact pending payload and returns `approval_count`,
+`required_approvals`, and either `pending` or `approved` status.
 
 ### `POST /api/approvals/{approval_id}/reject`
 

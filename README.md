@@ -252,6 +252,7 @@ Read these in order:
 10. [Platform strategy and Shopify](docs/platform-integrations.md)
 11. [Browser missions and human takeover](docs/browser-handoffs.md)
 12. [Isolated execution runtime](docs/execution-runtime.md)
+13. [Company policy and approval quorum](docs/company-policy.md)
 
 ## Security warning
 

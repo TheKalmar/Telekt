@@ -14,9 +14,10 @@ optional comment. Comments and the verified recipient address are stored with
 the approval and added to canonical stakeholder context for the CEO and
 specialists.
 
-The current group policy is first-response-wins. Once one recipient decides, all
-other links show the resolved state. Quorum and role-weighted approval are not
-implemented yet.
+The company policy selects a quorum from 1 to 20 distinct approver identities.
+Approve records one recipient vote; the frozen task is released only after the
+quorum is reached. A rejection closes the proposal immediately. Role-weighted
+approval is not implemented.
 
 ## Local testing with Mailpit
 
@@ -57,7 +58,10 @@ database or returned by the API.
 ## Security properties and limits
 
 - Links are HMAC signed, bound to company, approval, recipient, and expiry.
-- Each approval is single-use at the database level.
+- Each recipient can vote once; the approval becomes executable once its policy
+  quorum is reached.
+- Approval authority expires at the policy deadline even if a signed email link
+  has a later cryptographic expiry.
 - GET requests never mutate state.
 - Decline comments are mandatory and bounded to 4,000 characters.
 - Email delivery failure is audited and does not remove the dashboard approval.

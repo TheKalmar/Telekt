@@ -112,7 +112,8 @@ supports hosted tools.
 
 ### Governor
 
-`policy.py` is deliberately small and deterministic. It currently applies these rules:
+`policy.py` is deliberately small and deterministic. Its rules are loaded from
+the active immutable company policy version:
 
 | Action | Result |
 |---|---|
@@ -123,12 +124,14 @@ supports hosted tools.
 | Authenticated browser operation, vendor negotiation, or hiring | Require approval |
 | CAPTCHA, login, 2FA, identity verification, terms, or payment entry | Human takeover |
 | External outreach | Require approval |
-| Spend money | Require approval |
+| Spend money | Allow under the configured autonomous limit; otherwise require approval |
 | Production deployment | Require approval |
 | Sign a contract | Deny |
 | Estimated cost above remaining budget | Deny |
 
-Production policy should become data-driven and company-specific, but it must remain outside the LLM.
+Approval quorum and expiry are also policy-controlled. Distinct votes are
+durable rows rather than LLM memory. Contract signing and spending beyond the
+remaining budget are non-configurable denials. See [Company policy](company-policy.md).
 
 ### Orchestrator
 

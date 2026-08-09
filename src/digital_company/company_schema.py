@@ -19,6 +19,15 @@ CREATE TABLE IF NOT EXISTS approvals (
   status TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
   resolved_at TEXT
 );
+CREATE TABLE IF NOT EXISTS approval_votes (
+  approval_id TEXT NOT NULL, voter TEXT NOT NULL, decision TEXT NOT NULL,
+  comment TEXT, created_at TEXT NOT NULL,
+  PRIMARY KEY (approval_id, voter)
+);
+CREATE TABLE IF NOT EXISTS policy_versions (
+  version INTEGER PRIMARY KEY, document_json TEXT NOT NULL,
+  status TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ledger (
   id TEXT PRIMARY KEY, task_id TEXT, amount_eur REAL NOT NULL,
   description TEXT NOT NULL, created_at TEXT NOT NULL
@@ -92,6 +101,8 @@ def migrate_company_database(db, now: str) -> None:
     _add_column(db, "tasks", "proposal_json", "TEXT")
     _add_column(db, "approvals", "decision_comment", "TEXT")
     _add_column(db, "approvals", "decided_by", "TEXT")
+    _add_column(db, "approvals", "required_approvals", "INTEGER NOT NULL DEFAULT 1")
+    _add_column(db, "approvals", "expires_at", "TEXT")
     _add_column(
         db, "runtime_settings", "allow_cloud_fallback",
         "INTEGER NOT NULL DEFAULT 0",

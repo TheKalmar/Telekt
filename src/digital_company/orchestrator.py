@@ -54,7 +54,7 @@ class CompanyOrchestrator:
             reporter=self._report,
             remaining_budget=lambda: self.store.snapshot().remaining_budget_eur,
         )
-        self.governor = governor or Governor()
+        self.governor = governor or Governor(store.get_policy()["document"])
         self.company_id = company_id
         self.execution_runtime = execution_runtime
         if self.execution_runtime is None and company_id and os.getenv("EXECUTION_RUNTIME_URL"):
@@ -129,7 +129,11 @@ class CompanyOrchestrator:
                         proposal.platform_candidate or "unknown",
                         proposal.required_capabilities,
                     )
-                approval_id = self.store.request_approval(task_id, proposal, policy.reason)
+                approval_id = self.store.request_approval(
+                    task_id, proposal, policy.reason,
+                    required_approvals=policy.approval_quorum,
+                    ttl_hours=policy.approval_ttl_hours,
+                )
                 self.store.audit("approval.queued_without_pause", {"approval_id": approval_id})
                 continue
             if proposal.action == ActionType.STOP:

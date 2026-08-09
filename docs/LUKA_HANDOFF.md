@@ -10,7 +10,7 @@ Use branch `codex/usage-budget-accounting`. It contains the complete current
 POC history, including:
 
 - multi-company portfolio and per-company goals, budgets, settings, and state;
-- autonomous CEO/specialist decision loop with deterministic policy checks;
+- autonomous CEO/specialist decision loop with versioned per-company policy checks;
 - local, hybrid, and remote model-connection routing;
 - durable polling worker, approvals, email approvals, and stakeholder chat;
 - build/buy/integrate/manual strategy and platform capability records;
@@ -176,6 +176,8 @@ stakeholder goal/directive
 
 The model never grants itself permission. `Governor`, the orchestrator, storage
 transitions, browser allowlists, and approval records are deterministic boundaries.
+Policy edits create immutable versions; approval quorum and expiry are durable,
+while contract signing remains an invariant denial. See `docs/company-policy.md`.
 Do not move external side effects into prompts.
 
 For an approved Browser Mission, the worker opens an isolated single-domain

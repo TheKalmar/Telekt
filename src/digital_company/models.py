@@ -117,6 +117,27 @@ class PolicyDecision(BaseModel):
     """Deterministic Governor verdict for a proposed action."""
     outcome: Literal["allow", "require_approval", "deny"]
     reason: str
+    approval_quorum: int = Field(default=1, ge=1, le=20)
+    approval_ttl_hours: int = Field(default=72, ge=1, le=720)
+
+
+class PolicyDocument(BaseModel):
+    """Versioned, per-company authorization rules interpreted by the Governor."""
+
+    deny_actions: list[ActionType] = Field(default_factory=lambda: [ActionType.SIGN_CONTRACT])
+    approval_actions: list[ActionType] = Field(default_factory=lambda: [
+        ActionType.EXTERNAL_OUTREACH,
+        ActionType.SPEND_MONEY,
+        ActionType.DEPLOY_PRODUCTION,
+        ActionType.REQUEST_PLATFORM_ACCESS,
+        ActionType.PUBLISH_CATALOG,
+        ActionType.BROWSER_OPERATE,
+        ActionType.NEGOTIATE_VENDOR,
+        ActionType.HIRE_VENDOR,
+    ])
+    autonomous_spend_limit_eur: float = Field(default=0, ge=0)
+    approval_quorum: int = Field(default=1, ge=1, le=20)
+    approval_ttl_hours: int = Field(default=72, ge=1, le=720)
 
 
 class CompanySnapshot(BaseModel):

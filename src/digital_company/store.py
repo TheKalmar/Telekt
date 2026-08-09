@@ -13,12 +13,12 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from digital_company.company_schema import migrate_company_database
-from digital_company.models import CompanySnapshot, SpecialistResult, TaskProposal
+from digital_company.models import ActionType, CompanySnapshot, PolicyDocument, SpecialistResult, TaskProposal
 from digital_company.operations_projection import decode_audit_events, project_operations
 from digital_company.postgres_compat import PostgresCompat, company_schema
 from digital_company.skill_catalog import BUILTIN_SKILLS
@@ -65,7 +65,54 @@ class CompanyStore:
     def _migrate(self) -> None:
         """Create additive POC tables and idempotent singleton defaults."""
         migrate_company_database(self.db, utc_now())
+        self._ensure_default_policy()
         self._sync_builtin_skills()
+
+    def _ensure_default_policy(self) -> None:
+        """Bootstrap a safe policy without rewriting an existing company's rules."""
+        self.db.execute(
+            "INSERT OR IGNORE INTO policy_versions(version,document_json,status,created_at,created_by) "
+            "VALUES(1,?,'active',?,'system')",
+            (PolicyDocument().model_dump_json(), utc_now()),
+        )
+        self.db.commit()
+
+    def get_policy(self) -> dict:
+        """Return the active immutable policy version and its validated document."""
+        row = self.db.execute(
+            "SELECT * FROM policy_versions WHERE status='active' ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            self._ensure_default_policy()
+            row = self.db.execute(
+                "SELECT * FROM policy_versions WHERE status='active' ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+        document = PolicyDocument.model_validate_json(row["document_json"])
+        return {
+            "version": row["version"], "status": row["status"],
+            "created_at": row["created_at"], "created_by": row["created_by"],
+            "document": document.model_dump(mode="json"),
+        }
+
+    def set_policy(self, document: PolicyDocument | dict, created_by: str = "dashboard") -> dict:
+        """Create a new policy version; prior versions remain available for audit."""
+        validated = PolicyDocument.model_validate(document)
+        if ActionType.SIGN_CONTRACT not in validated.deny_actions:
+            validated.deny_actions.append(ActionType.SIGN_CONTRACT)
+        row = self.db.execute(
+            "SELECT COALESCE(MAX(version),0) AS value FROM policy_versions"
+        ).fetchone()
+        version = int(row["value"]) + 1
+        now = utc_now()
+        self.db.execute("UPDATE policy_versions SET status='superseded' WHERE status='active'")
+        self.db.execute(
+            "INSERT INTO policy_versions(version,document_json,status,created_at,created_by) "
+            "VALUES(?,?,'active',?,?)",
+            (version, validated.model_dump_json(), now, created_by.strip() or "dashboard"),
+        )
+        self.db.commit()
+        self.audit("policy.version_created", {"version": version, "created_by": created_by})
+        return self.get_policy()
 
     def initialize(self, goal: str, budget: float, profile: dict | None = None) -> None:
         """Create or replace the singleton company header and optional profile."""
@@ -114,8 +161,11 @@ class CompanyStore:
         for failure in failures:
             if failure["result_json"]:
                 failure["result"] = json.loads(failure.pop("result_json"))
+        self.expire_pending_approvals()
         approvals = [dict(row) for row in self.db.execute(
-            "SELECT id,task_id,status,reason FROM approvals WHERE status='pending' ORDER BY created_at"
+            "SELECT a.id,a.task_id,a.status,a.reason,a.required_approvals,a.expires_at,"
+            "(SELECT COUNT(*) FROM approval_votes v WHERE v.approval_id=a.id AND v.decision='approve') "
+            "AS approval_count FROM approvals a WHERE a.status='pending' ORDER BY a.created_at"
         )]
         evidence = []
         for task in tasks[-5:]:
@@ -643,17 +693,30 @@ class CompanyStore:
         self.db.execute("UPDATE tasks SET status=?,completed_at=? WHERE id=?", (status, utc_now(), task_id))
         self.db.commit()
 
-    def request_approval(self, task_id: str, proposal: TaskProposal, reason: str) -> str:
+    def request_approval(
+        self, task_id: str, proposal: TaskProposal, reason: str,
+        required_approvals: int = 1, ttl_hours: int = 72,
+    ) -> str:
         """Freeze the exact proposed payload as a pending human approval."""
+        if not 1 <= required_approvals <= 20:
+            raise ValueError("Approval quorum must be between 1 and 20")
+        if not 1 <= ttl_hours <= 720:
+            raise ValueError("Approval TTL must be between 1 and 720 hours")
         approval_id = str(uuid4())
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(hours=ttl_hours)).isoformat()
         self.db.execute(
-            "INSERT INTO approvals(id,task_id,payload_json,status,reason,created_at,resolved_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (approval_id, task_id, proposal.model_dump_json(), "pending", reason, utc_now(), None),
+            "INSERT INTO approvals(id,task_id,payload_json,status,reason,created_at,resolved_at,"
+            "required_approvals,expires_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (approval_id, task_id, proposal.model_dump_json(), "pending", reason,
+             now.isoformat(), None, required_approvals, expires_at),
         )
         self.db.execute("UPDATE tasks SET status='waiting_approval' WHERE id=?", (task_id,))
         self.db.commit()
-        self.audit("approval.requested", {"approval_id": approval_id, "task_id": task_id})
+        self.audit("approval.requested", {
+            "approval_id": approval_id, "task_id": task_id,
+            "required_approvals": required_approvals, "expires_at": expires_at,
+        })
         return approval_id
 
     def has_pending_equivalent_approval(self, proposal: TaskProposal) -> bool:
@@ -679,41 +742,106 @@ class CompanyStore:
 
     def list_approvals(self) -> list[dict]:
         """Return approval history, newest first."""
-        return [dict(row) for row in self.db.execute("SELECT * FROM approvals ORDER BY created_at DESC")]
+        self.expire_pending_approvals()
+        return [dict(row) for row in self.db.execute(
+            "SELECT a.*,(SELECT COUNT(*) FROM approval_votes v WHERE v.approval_id=a.id "
+            "AND v.decision='approve') AS approval_count FROM approvals a ORDER BY a.created_at DESC"
+        )]
 
     def pending_approval_details(self) -> list[dict]:
         """Return frozen pending proposals ready for a consolidated brief."""
+        self.expire_pending_approvals()
         result = []
-        for row in self.db.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY created_at"):
+        for row in self.db.execute(
+            "SELECT a.*,(SELECT COUNT(*) FROM approval_votes v WHERE v.approval_id=a.id "
+            "AND v.decision='approve') AS approval_count FROM approvals a "
+            "WHERE a.status='pending' ORDER BY a.created_at"
+        ):
             item = dict(row)
             item["proposal"] = TaskProposal.model_validate_json(item.pop("payload_json"))
             result.append(item)
         return result
 
-    def approve(self, approval_id: str, comment: str = "", decided_by: str = "dashboard") -> None:
-        """Approve one still-pending payload; approvals are single-use."""
-        row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()
+    def expire_pending_approvals(self) -> list[str]:
+        """Close approvals after their policy TTL so stale authority cannot be used."""
+        now = datetime.now(timezone.utc)
+        expired = []
+        rows = self.db.execute(
+            "SELECT id,task_id,expires_at FROM approvals WHERE status='pending' AND expires_at IS NOT NULL"
+        ).fetchall()
+        for row in rows:
+            if datetime.fromisoformat(row["expires_at"]) > now:
+                continue
+            self.db.execute(
+                "UPDATE approvals SET status='expired',resolved_at=?,decision_comment=?,decided_by='system' "
+                "WHERE id=? AND status='pending'",
+                (now.isoformat(), "Approval window expired", row["id"]),
+            )
+            self.db.execute(
+                "UPDATE tasks SET status='rejected',completed_at=? WHERE id=? AND status='waiting_approval'",
+                (now.isoformat(), row["task_id"]),
+            )
+            expired.append(row["id"])
+        if expired:
+            self.db.commit()
+            for approval_id in expired:
+                self.audit("approval.expired", {"approval_id": approval_id})
+        return expired
+
+    def approve(self, approval_id: str, comment: str = "", decided_by: str = "dashboard") -> dict:
+        """Record a distinct approval vote and release only after quorum is reached."""
+        self.expire_pending_approvals()
+        row = self.db.execute(
+            "SELECT task_id,status,required_approvals FROM approvals WHERE id=?", (approval_id,)
+        ).fetchone()
         if not row:
             raise RuntimeError("Approval not found.")
         if row["status"] != "pending":
             raise RuntimeError("Approval has already been resolved.")
+        voter = decided_by.strip().lower() or "dashboard"
+        existing = self.db.execute(
+            "SELECT decision FROM approval_votes WHERE approval_id=? AND voter=?",
+            (approval_id, voter),
+        ).fetchone()
+        if existing:
+            raise RuntimeError("This approver has already voted.")
         now = utc_now()
         self.db.execute(
-            "UPDATE approvals SET status='approved',resolved_at=?,decision_comment=?,decided_by=? WHERE id=?",
-            (now, comment.strip() or None, decided_by, approval_id),
+            "INSERT INTO approval_votes(approval_id,voter,decision,comment,created_at) VALUES(?,?,?,?,?)",
+            (approval_id, voter, "approve", comment.strip() or None, now),
         )
-        self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
-        self.db.execute(
-            "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
-            ("Approved task queued for execution", now),
-        )
+        vote_count = int(self.db.execute(
+            "SELECT COUNT(*) AS value FROM approval_votes WHERE approval_id=? AND decision='approve'",
+            (approval_id,),
+        ).fetchone()["value"])
+        required = int(row["required_approvals"])
+        final = vote_count >= required
+        if final:
+            self.db.execute(
+                "UPDATE approvals SET status='approved',resolved_at=?,decision_comment=?,decided_by=? WHERE id=?",
+                (now, comment.strip() or None, voter, approval_id),
+            )
+            self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
+            self.db.execute(
+                "UPDATE runtime_control SET state='running',detail=?,updated_at=? WHERE id=1",
+                ("Approval quorum reached; task queued for execution", now),
+            )
         self.db.commit()
-        self.audit("approval.approved", {"approval_id": approval_id, "task_id": row["task_id"]})
+        event = "approval.approved" if final else "approval.vote_recorded"
+        self.audit(event, {
+            "approval_id": approval_id, "task_id": row["task_id"],
+            "voter": voter, "approval_count": vote_count, "required_approvals": required,
+        })
         if comment.strip():
-            self.add_approval_feedback(comment, approval_id, decided_by, "approved")
+            self.add_approval_feedback(comment, approval_id, voter, "approved")
+        return {
+            "status": "approved" if final else "pending",
+            "approval_count": vote_count, "required_approvals": required,
+        }
 
     def claim_approved_task(self) -> tuple[str, TaskProposal] | None:
         """Atomically claim the oldest frozen approved payload exactly once."""
+        self.expire_pending_approvals()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
@@ -745,13 +873,23 @@ class CompanyStore:
         """Reject one still-pending payload and its associated task."""
         if not comment.strip():
             raise ValueError("A decline reason is required.")
+        self.expire_pending_approvals()
         row = self.db.execute("SELECT task_id,status FROM approvals WHERE id=?", (approval_id,)).fetchone()
         if not row or row["status"] != "pending":
             raise RuntimeError("Pending approval not found.")
+        voter = decided_by.strip().lower() or "dashboard"
+        if self.db.execute(
+            "SELECT 1 FROM approval_votes WHERE approval_id=? AND voter=?", (approval_id, voter)
+        ).fetchone():
+            raise RuntimeError("This approver has already voted.")
         now = utc_now()
         self.db.execute(
+            "INSERT INTO approval_votes(approval_id,voter,decision,comment,created_at) VALUES(?,?,?,?,?)",
+            (approval_id, voter, "reject", comment.strip(), now),
+        )
+        self.db.execute(
             "UPDATE approvals SET status='rejected',resolved_at=?,decision_comment=?,decided_by=? WHERE id=?",
-            (now, comment.strip(), decided_by, approval_id),
+            (now, comment.strip(), voter, approval_id),
         )
         self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
         self.db.execute(
@@ -760,7 +898,7 @@ class CompanyStore:
         )
         self.db.commit()
         self.audit("approval.rejected", {"approval_id": approval_id, "task_id": row["task_id"]})
-        self.add_approval_feedback(comment, approval_id, decided_by, "rejected")
+        self.add_approval_feedback(comment, approval_id, voter, "rejected")
 
     def add_approval_feedback(self, comment: str, approval_id: str, author: str, decision: str) -> None:
         """Put human decision context into the CEO/specialist canonical snapshot."""
@@ -856,6 +994,7 @@ class CompanyStore:
         snapshot = self.snapshot().model_dump(mode="json")
         snapshot["control"] = self.get_control()
         snapshot["settings"] = self.get_settings()
+        snapshot["policy"] = self.get_policy()
         snapshot["profile"] = self.get_profile()
         snapshot["approvals"] = self.list_approvals()[:20]
         snapshot["human_handoffs"] = self.list_handoffs()

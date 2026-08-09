@@ -31,6 +31,7 @@ from digital_company.api_models import (
     ModelConnectionIn,
     ModelModeIn,
     ModelSettingsIn,
+    PolicyUpdateIn,
 )
 from digital_company.browser_client import (
     BrowserRuntimeError,
@@ -44,6 +45,7 @@ from digital_company.workspace import WorkspaceRuntime
 from digital_company.runtime_secrets import apply_runtime_secrets, save_secret
 from digital_company.runtime_secrets import get_secret
 from digital_company.model_connections import ADAPTERS, ModelConnectionRegistry
+from digital_company.models import ActionType
 from digital_company.preflight import (
     connection_ready as check_model_connection,
     evaluate_runtime_preflight,
@@ -193,6 +195,7 @@ def dashboard():
             "capabilities": [],
             "operations": {"active_model_run": None, "model": {}, "tasks_by_status": {}, "estimated_spend_eur": 0, "recent_events": []},
             "approvals": [],
+            "policy": None,
             "human_handoffs": [],
             "stakeholder_messages": [],
             "portfolio": {"active_company_id": None, "companies": []},
@@ -635,6 +638,20 @@ def integration_connections():
         }
 
 
+@app.get("/api/policy")
+def get_company_policy():
+    """Return the selected company's active versioned authorization policy."""
+    with store_scope() as store:
+        return {**store.get_policy(), "actions": [action.value for action in ActionType]}
+
+
+@app.post("/api/policy")
+def save_company_policy(payload: PolicyUpdateIn):
+    """Create a new policy version; the contract-signing ban is invariant."""
+    with store_scope() as store:
+        return store.set_policy(payload, "dashboard")
+
+
 @app.post("/api/integration-connections")
 def save_integration_connection(payload: IntegrationConnectionIn):
     """Persist profile metadata and write-only credentials through the local vault."""
@@ -694,15 +711,17 @@ def approval(approval_id: str, decision: str, payload: ApprovalDecisionIn):
     with store_scope() as store:
         try:
             if decision == "approve":
-                store.approve(approval_id, payload.comment)
+                result = store.approve(approval_id, payload.comment)
             elif decision == "reject":
                 store.reject(approval_id, payload.comment)
+                result = {"status": "rejected"}
             else:
                 raise HTTPException(400, "Unknown decision")
         except (RuntimeError, ValueError) as exc:
-            raise HTTPException(404, str(exc)) from exc
-    signal_temporal(registry.active_id(), "wake", f"approval_{decision}")
-    return {"status": decision}
+            raise HTTPException(409, str(exc)) from exc
+    if result["status"] != "pending":
+        signal_temporal(registry.active_id(), "wake", f"approval_{decision}")
+    return result
 
 
 @app.post("/api/handoffs/{handoff_id}/{decision}")
@@ -732,13 +751,15 @@ def approval_page(company_id: str, approval_id: str, email: str, expires: int, t
         raise HTTPException(404, "Approval not found") from exc
     proposal = __import__("json").loads(approval["payload_json"])
     disabled = approval["status"] != "pending"
+    approval_count = int(approval.get("approval_count", 0))
+    required_approvals = int(approval.get("required_approvals", 1))
     esc = html.escape
     buttons = "<p>This approval has already been resolved.</p>" if disabled else """
       <textarea name="comment" maxlength="4000" placeholder="Comment or decline reason"></textarea>
       <div class="buttons"><button name="decision" value="approve" class="approve">Approve</button>
       <button name="decision" value="reject" class="reject">Decline</button></div>"""
     return f"""<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Approval review</title>
-<style>body{{margin:0;background:#090d13;color:#eaf1f8;font:15px Arial,sans-serif}}main{{max-width:680px;margin:40px auto;padding:26px;background:#151c26;border:1px solid #2a384b;border-radius:16px}}h1{{font-size:26px}}.meta{{padding:16px;background:#0d1219;border-radius:10px;line-height:1.7;color:#cbd5e1}}textarea{{box-sizing:border-box;width:100%;min-height:120px;margin:20px 0;padding:12px;background:#0b1017;color:white;border:1px solid #34445a;border-radius:9px}}button{{padding:13px 22px;border:0;border-radius:9px;font-weight:bold;cursor:pointer}}.approve{{background:#4ee3a1}}.reject{{background:#ff6b7a;margin-left:8px}}.note{{color:#91a0b4}}.message{{color:#4ee3a1}}</style></head><body><main><div class="note">DIGITAL COMPANY · SECURE HUMAN DECISION</div><h1>{esc(proposal['title'])}</h1><p>{esc(proposal['objective'])}</p><div class="meta"><b>Action:</b> {esc(proposal['action'])}<br><b>Estimated cost:</b> €{proposal['estimated_cost_eur']:.2f}<br><b>Status:</b> {esc(approval['status'])}</div><p class="message">{esc(message)}</p><form method="post"><input type="hidden" name="email" value="{esc(email)}"><input type="hidden" name="expires" value="{expires}"><input type="hidden" name="token" value="{esc(token)}">{buttons}</form><p class="note">Decline requires a reason. Comments become canonical context for the AI company.</p></main></body></html>"""
+<style>body{{margin:0;background:#090d13;color:#eaf1f8;font:15px Arial,sans-serif}}main{{max-width:680px;margin:40px auto;padding:26px;background:#151c26;border:1px solid #2a384b;border-radius:16px}}h1{{font-size:26px}}.meta{{padding:16px;background:#0d1219;border-radius:10px;line-height:1.7;color:#cbd5e1}}textarea{{box-sizing:border-box;width:100%;min-height:120px;margin:20px 0;padding:12px;background:#0b1017;color:white;border:1px solid #34445a;border-radius:9px}}button{{padding:13px 22px;border:0;border-radius:9px;font-weight:bold;cursor:pointer}}.approve{{background:#4ee3a1}}.reject{{background:#ff6b7a;margin-left:8px}}.note{{color:#91a0b4}}.message{{color:#4ee3a1}}</style></head><body><main><div class="note">DIGITAL COMPANY · SECURE HUMAN DECISION</div><h1>{esc(proposal['title'])}</h1><p>{esc(proposal['objective'])}</p><div class="meta"><b>Action:</b> {esc(proposal['action'])}<br><b>Estimated cost:</b> €{proposal['estimated_cost_eur']:.2f}<br><b>Status:</b> {esc(approval['status'])}<br><b>Approval quorum:</b> {approval_count} / {required_approvals}<br><b>Expires:</b> {esc(approval.get('expires_at') or 'not set')}</div><p class="message">{esc(message)}</p><form method="post"><input type="hidden" name="email" value="{esc(email)}"><input type="hidden" name="expires" value="{expires}"><input type="hidden" name="token" value="{esc(token)}">{buttons}</form><p class="note">Decline requires a reason. Comments become canonical context for the AI company.</p></main></body></html>"""
 
 
 @app.get("/approval/{company_id}/{approval_id}", response_class=HTMLResponse)
@@ -759,16 +780,24 @@ async def email_approval_decision(company_id: str, approval_id: str, request: Re
     try:
         with store_scope(company_id) as store:
             if decision == "approve":
-                store.approve(approval_id, comment, email)
-                message = "Approved. The exact frozen task has been queued for execution."
+                result = store.approve(approval_id, comment, email)
+                if result["status"] == "approved":
+                    message = "Approval quorum reached. The exact frozen task is queued."
+                else:
+                    message = (
+                        f"Vote recorded ({result['approval_count']} / "
+                        f"{result['required_approvals']}). Waiting for the remaining approver(s)."
+                    )
             elif decision == "reject":
                 store.reject(approval_id, comment, email)
+                result = {"status": "rejected"}
                 message = "Declined. The CEO will reconsider using your reason."
             else:
                 raise ValueError("Choose Approve or Decline")
     except (RuntimeError, ValueError) as exc:
         return HTMLResponse(approval_page(company_id, approval_id, email, expires, token, str(exc)), status_code=400)
-    await asyncio.to_thread(signal_temporal, company_id, "wake", f"email_approval_{decision}")
+    if result["status"] != "pending":
+        await asyncio.to_thread(signal_temporal, company_id, "wake", f"email_approval_{decision}")
     return approval_page(company_id, approval_id, email, expires, token, message)
 
 
