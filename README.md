@@ -223,7 +223,10 @@ src/digital_company/
   web.py             FastAPI control plane
   worker.py          Restart-safe autonomous cycle worker
   cli.py             Legacy single-company CLI
-  static/index.html  Dashboard UI
+  static/index.html  Dashboard shell, layout, and core render/navigation code
+  static/ui-core.js  Shared escaping, formatting, links, and API client
+  static/settings-ui.js Models, email, integrations, and policy configuration UI
+  static/browser-ui.js Human-intervention browser cockpit UI
 config/
   Modelfile.deepseek-company
 docs/
@@ -234,6 +237,7 @@ docs/
   operations.md
   known-limitations.md
 tests/
+  test_frontend_contract.py Zero-build module, escaping, and mobile contract checks
 ```
 
 ## Developer handoff

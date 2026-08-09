@@ -106,7 +106,12 @@ The registry SQLite connection uses `check_same_thread=False` without an explici
 
 ## Frontend
 
-The dashboard is a single static HTML file with inline CSS and JavaScript. It has no component framework, build pipeline, typed API client, automated accessibility audit, or frontend test suite.
+The dashboard remains a zero-build frontend. Shared primitives, settings, and
+the browser cockpit are split into allowlisted JavaScript modules, while the
+page shell, inline CSS, and the main render/navigation controller remain in
+`index.html`. Contract tests cover module ordering, HTML escaping, and the
+mobile-layout markers, but there is not yet a typed API client, automated
+accessibility audit, or full end-to-end browser suite.
 
 ## CLI
 

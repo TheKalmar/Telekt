@@ -85,10 +85,29 @@ model and tests. Do not replace `WorkspaceRuntime` with direct model-controlled
 
 ## Database migrations
 
-The POC schema bootstrap lives in `company_schema.py` and uses idempotent
-`CREATE TABLE IF NOT EXISTS` plus additive column checks. This is acceptable for
-additive prototypes only. Before production, introduce a migration framework
-such as Alembic and version every schema change.
+Global and per-company PostgreSQL/SQLite schemas have explicit, monotonic
+versions in `company_schema.py`. Startup takes a PostgreSQL advisory lock before
+applying each idempotent migration; SQLite applies the same ordered versions in
+its single-process compatibility path. Never edit an already-released migration:
+append a new version and add upgrade tests from the previous version. Alembic or
+an equivalent operator-facing migration runner is still recommended before
+multi-tenant production rollout.
+
+## Frontend organization
+
+The control plane intentionally remains zero-build for portable Docker and local
+installations. Keep these boundaries intact:
+
+- `static/index.html`: semantic shell, responsive CSS, core state/render/navigation;
+- `static/ui-core.js`: shared escaping, formatting, safe links, and API requests;
+- `static/settings-ui.js`: model, email, integration, and policy configuration;
+- `static/browser-ui.js`: browser cockpit and human-intervention controls;
+- `static/i18n.js`: locale dictionaries and translation application.
+
+Every new JavaScript asset must be added to the explicit allowlist in `web.py`
+and loaded after `ui-core.js` when it uses shared helpers. Do not interpolate
+API or model text into HTML without `esc()`. Run `tests/test_frontend_contract.py`
+plus a real local-browser smoke test after changing module order or navigation.
 
 ## Application service boundaries
 
@@ -105,7 +124,7 @@ such as Alembic and version every schema change.
 
 Current tests are deterministic and make no model calls. They cover policy,
 storage, stakeholder semantics, model settings, company isolation, operational
-telemetry, and workspace confinement.
+telemetry, workspace confinement, and frontend module/security contracts.
 
 Recommended next test layers:
 

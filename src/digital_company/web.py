@@ -60,6 +60,7 @@ from digital_company.integration_connectors import (
 
 ROOT = Path.cwd()
 STATIC_DIR = Path(__file__).parent / "static"
+FRONTEND_JS_ASSETS = {"ui-core.js", "settings-ui.js", "browser-ui.js"}
 load_dotenv(ROOT / ".env.local")
 apply_runtime_secrets()
 STATE_DIR = Path(os.getenv("COMPANY_DATA_DIR", str(ROOT / ".company"))).expanduser().resolve()
@@ -167,6 +168,18 @@ def telekt_logo():
 @app.get("/assets/telekt.ico", include_in_schema=False)
 def telekt_icon():
     return FileResponse(STATIC_DIR / "telekt.ico", media_type="image/x-icon")
+
+
+@app.get("/assets/{asset_name}", include_in_schema=False)
+def frontend_asset(asset_name: str):
+    """Serve only explicitly registered frontend modules, never arbitrary paths."""
+    if asset_name not in FRONTEND_JS_ASSETS:
+        raise HTTPException(404, "Frontend asset not found")
+    return FileResponse(
+        STATIC_DIR / asset_name,
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/health")

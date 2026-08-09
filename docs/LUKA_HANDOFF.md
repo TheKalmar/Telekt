@@ -201,7 +201,11 @@ Pause/Stop are cooperative and take effect between model calls/browser actions.
 | `src/digital_company/web.py` | FastAPI control plane and browser proxy |
 | `src/digital_company/browser_runtime.py` | Isolated Playwright/Chromium process |
 | `src/digital_company/computer_use.py` | Bounded screenshot/action loop and interruption checks |
-| `src/digital_company/static/index.html` | Zero-build mission-control dashboard |
+| `src/digital_company/static/index.html` | Zero-build dashboard shell and core render/navigation code |
+| `src/digital_company/static/ui-core.js` | Shared HTML escaping, formatting, links, and API client |
+| `src/digital_company/static/settings-ui.js` | Models, email, integrations, and company-policy screens |
+| `src/digital_company/static/browser-ui.js` | Human-intervention browser cockpit |
+| `tests/test_frontend_contract.py` | Module-load, escaping, and responsive-layout contract tests |
 | `compose*.yaml` | Cloud, existing-local, bundled-local, GPU, and email variants |
 
 Public code uses module/class/function docstrings for intent and security
