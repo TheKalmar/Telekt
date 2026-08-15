@@ -22,7 +22,8 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 from digital_company.errors import BudgetLimitError
 from digital_company.model_adapters import ModelAdapterFactory
 from digital_company.models import (
-    ActionType, CompanySnapshot, SpecialistResult, TaskProposal, TaskProposalDraft,
+    ActionType, CompanySnapshot, SpecialistResult, SpecialistResultDraft,
+    TaskProposal, TaskProposalDraft,
 )
 from digital_company.pricing import usage_payload
 
@@ -180,11 +181,11 @@ class AgentEngine:
             use_local = mode == "local" or (mode == "hybrid" and name not in {"development", "research"})
             tools = [WebSearchTool(search_context_size="medium")] if name == "research" and not use_local and cloud_hosted_tools else []
             self.specialists[name] = self._agent(
-                name.title(), instructions, SpecialistResult, use_local, retry_settings, tools,
+                name.title(), instructions, SpecialistResultDraft, use_local, retry_settings, tools,
             )
             self.specialist_fallbacks[name] = (
                 self._agent(
-                    name.title() + " fallback", instructions, SpecialistResult, False,
+                    name.title() + " fallback", instructions, SpecialistResultDraft, False,
                     retry_settings,
                     [WebSearchTool(search_context_size="medium")] if name == "research" and cloud_hosted_tools else [],
                 )
@@ -250,6 +251,12 @@ class AgentEngine:
         """Apply cross-field business rules after transport-schema parsing."""
         payload = value.model_dump(mode="json") if hasattr(value, "model_dump") else value
         return TaskProposal.model_validate(payload)
+
+    @staticmethod
+    def _specialist_result_validator(value) -> SpecialistResult:
+        """Promote strict model output into the runtime-enriched result type."""
+        payload = value.model_dump(mode="json") if hasattr(value, "model_dump") else value
+        return SpecialistResult.model_validate(payload)
 
     @staticmethod
     def _validation_feedback(exc: Exception, output) -> tuple[str, dict]:
@@ -446,10 +453,11 @@ class AgentEngine:
             "active_agent": agent_context,
             "granted_plugins": plugin_context or [],
         }, indent=2)
-        result = self._run(
+        model_result = self._run(
             selected, self.specialist_fallbacks[proposal.specialist],
             prompt, proposal.specialist,
         )
+        result = self._specialist_result_validator(model_result)
         if proposal.action in {ActionType.RESEARCH_MARKET, ActionType.RESEARCH_CONTENT}:
             valid_sources = {
                 value for value in result.sources

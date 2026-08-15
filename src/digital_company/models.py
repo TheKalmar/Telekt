@@ -147,8 +147,13 @@ class ContentPackage(BaseModel):
         return self
 
 
-class SpecialistResult(BaseModel):
-    """Validated output returned by a specialist agent."""
+class SpecialistResultDraft(BaseModel):
+    """Strict structured output produced by a specialist model.
+
+    Runtime-owned metadata is deliberately excluded. Arbitrary dictionaries are
+    not valid strict JSON Schema output and must never be trusted as model-owned
+    execution state.
+    """
     status: Literal["completed", "failed"]
     summary: str
     evidence: list[str]
@@ -156,9 +161,13 @@ class SpecialistResult(BaseModel):
     artifact_path: str | None = None
     artifact_content: str | None = None
     content_package: ContentPackage | None = None
+    recommendation: str
+
+
+class SpecialistResult(SpecialistResultDraft):
+    """Validated result enriched by deterministic QA or integration runtimes."""
     quality_report: dict | None = None
     publication_state: dict | None = None
-    recommendation: str
 
 
 class PolicyDecision(BaseModel):

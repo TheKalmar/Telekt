@@ -1,10 +1,11 @@
 from types import SimpleNamespace
 
-from agents import ModelBehaviorError
+from agents import AgentOutputSchema, ModelBehaviorError
 
 from digital_company.agents import AgentEngine
 from digital_company.models import (
-    ActionType, CompanySnapshot, TaskProposal, TaskProposalDraft,
+    ActionType, CompanySnapshot, SpecialistResult, SpecialistResultDraft,
+    TaskProposal, TaskProposalDraft,
 )
 
 
@@ -164,6 +165,20 @@ def test_cloud_ceo_uses_grammar_safe_draft_schema():
     engine = AgentEngine(mode="cloud")
 
     assert engine.ceo.output_type is TaskProposalDraft
+
+
+def test_specialists_use_strict_model_output_without_runtime_dicts():
+    engine = AgentEngine(mode="cloud")
+
+    for specialist in engine.specialists.values():
+        assert specialist.output_type is SpecialistResultDraft
+        assert AgentOutputSchema(specialist.output_type).is_strict_json_schema() is True
+    promoted = engine._specialist_result_validator(SpecialistResultDraft(
+        status="completed", summary="Done", evidence=["Verified"],
+        recommendation="Continue",
+    ))
+    assert isinstance(promoted, SpecialistResult)
+    assert promoted.quality_report is None
 
 
 def test_ceo_context_uses_compact_skill_routing_metadata(monkeypatch):
