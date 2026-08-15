@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from digital_company.text_encoding import repair_text_encoding
+
 
 AGENT_TYPES = [
     {
@@ -87,7 +89,7 @@ def validate_agent_config(agent_type: str, config: dict) -> dict:
     definition = get_agent_type(agent_type)
     schema = definition["config_schema"]
     properties = schema.get("properties", {})
-    normalized = dict(config or {})
+    normalized = repair_text_encoding(dict(config or {}))
     if schema.get("additionalProperties") is False:
         unknown = set(normalized) - set(properties)
         if unknown:

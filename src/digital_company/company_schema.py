@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
+from digital_company.text_encoding import repair_text_encoding
+
 
 BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS company_schema_versions (
@@ -152,6 +156,7 @@ SCHEMA_VERSIONS = (
     (8, "Typed agent templates and scoped runtime context"),
     (9, "Agent-scoped stakeholder messages and intervention queues"),
     (10, "Versioned agent playbooks and approval delivery tracking"),
+    (11, "Repair legacy UTF-8 text decoded as Latin-1"),
 )
 
 
@@ -195,6 +200,12 @@ def migrate_company_database(db, now: str) -> None:
     _add_column(db, "agent_instances", "agent_type", "TEXT NOT NULL DEFAULT 'custom'")
     _add_column(db, "stakeholder_messages", "agent_id", "TEXT")
     _add_column(db, "approvals", "notified_at", "TEXT")
+    applied_versions = {
+        int(row["version"])
+        for row in db.execute("SELECT version FROM company_schema_versions")
+    }
+    if 11 not in applied_versions:
+        _repair_legacy_text_encoding(db)
     db.execute(
         "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) "
         "VALUES(1,'stopped','Ready',?)",
@@ -218,3 +229,59 @@ def _add_column(db, table: str, column: str, definition: str) -> None:
     columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _repair_legacy_text_encoding(db) -> None:
+    """Repair canonical/display text affected by an old Windows encoding path.
+
+    Audit events remain untouched: they are immutable historical evidence.  The
+    repair is versioned, transactional, idempotent, and limited to values with
+    a high-confidence mojibake fingerprint.
+    """
+    tables = (
+        ("company", "id", ("goal",), ()),
+        ("company_profile", "id", (), ("profile_json",)),
+        (
+            "agent_instances", "id",
+            ("name", "role", "purpose", "instructions"),
+            ("schedule_json", "config_json"),
+        ),
+        ("agent_playbook_versions", "id", (), ("document_json",)),
+        ("stakeholder_messages", "id", ("content", "response"), ()),
+        (
+            "tasks", "id", ("title", "objective", "rationale"),
+            ("proposal_json", "result_json"),
+        ),
+        (
+            "approvals", "id", ("reason", "decision_comment"),
+            ("payload_json",),
+        ),
+        ("human_handoffs", "id", ("outcome",), ("payload_json",)),
+    )
+    for table, key, text_columns, json_columns in tables:
+        columns = (key, *text_columns, *json_columns)
+        rows = db.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
+        for row in rows:
+            updates: dict[str, str] = {}
+            for column in text_columns:
+                current = row[column]
+                repaired = repair_text_encoding(current)
+                if repaired != current:
+                    updates[column] = repaired
+            for column in json_columns:
+                current = row[column]
+                if not current:
+                    continue
+                try:
+                    decoded = json.loads(current)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                repaired = repair_text_encoding(decoded)
+                if repaired != decoded:
+                    updates[column] = json.dumps(repaired, ensure_ascii=False)
+            if updates:
+                assignments = ",".join(f"{column}=?" for column in updates)
+                db.execute(
+                    f"UPDATE {table} SET {assignments} WHERE {key}=?",
+                    (*updates.values(), row[key]),
+                )

@@ -23,7 +23,7 @@ def proposal(action: ActionType, cost: float = 0) -> TaskProposal:
 
 def test_policy_versions_are_immutable_and_contract_ban_cannot_be_removed(tmp_path: Path):
     store = CompanyStore(tmp_path / "company.db")
-    assert store.schema_version() == 10
+    assert store.schema_version() == 11
     initial = store.get_policy()
 
     updated = store.set_policy({

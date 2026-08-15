@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 
 from digital_company.postgres_compat import company_schema
 from digital_company.store import CompanyStore, utc_now
+from digital_company.text_encoding import repair_text_encoding
 
 
 class CompanyRegistry:
@@ -292,6 +293,7 @@ class CompanyRegistry:
 
     def create(self, profile: dict) -> dict:
         """Create an isolated company, make it active, and return registry metadata."""
+        profile = repair_text_encoding(profile)
         company_id = str(uuid4())
         company_dir = self.state_dir / "companies" / company_id
         db_path = company_dir / "company.db"
@@ -381,6 +383,7 @@ class CompanyRegistry:
 
     def update_profile(self, company_id: str, profile: dict) -> dict:
         """Synchronize the canonical brief with portfolio switcher metadata."""
+        profile = repair_text_encoding(profile)
         self.get(company_id)
         with self.store_for(company_id) as store:
             updated = store.update_profile(profile)

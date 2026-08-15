@@ -32,6 +32,7 @@ from digital_company.integration_connectors import (
     validate_connection,
 )
 from digital_company.runtime_secrets import get_secret
+from digital_company.text_encoding import repair_text_encoding
 
 
 def utc_now() -> str:
@@ -138,6 +139,8 @@ class CompanyStore:
         bootstrap_legacy_agent: bool = True,
     ) -> None:
         """Create or replace the singleton company header and optional profile."""
+        goal = repair_text_encoding(goal)
+        profile = repair_text_encoding(profile) if profile is not None else None
         self.db.execute(
             "INSERT INTO company(id, goal, initial_budget_eur, created_at) VALUES(1,?,?,?) "
             "ON CONFLICT(id) DO UPDATE SET goal=excluded.goal,initial_budget_eur=excluded.initial_budget_eur,created_at=excluded.created_at",
@@ -398,6 +401,7 @@ class CompanyStore:
     ) -> dict:
         """Create a new immutable playbook version and retain prior versions for audit."""
         self.get_agent(agent_id)
+        document = repair_text_encoding(document)
         rules = [str(value).strip() for value in document.get("rules", []) if str(value).strip()]
         examples = [
             str(value).strip() for value in document.get("reference_examples", [])
@@ -459,6 +463,7 @@ class CompanyStore:
 
     def create_agent(self, value: dict) -> dict:
         """Create one independently configurable digital employee."""
+        value = repair_text_encoding(value)
         agent_id = value.get("id") or str(uuid4())
         agent_type = value.get("agent_type", "custom")
         config = validate_agent_config(agent_type, value.get("config") or {})
@@ -483,6 +488,7 @@ class CompanyStore:
 
     def update_agent(self, agent_id: str, value: dict) -> dict:
         """Update configuration while preserving run and usage history."""
+        value = repair_text_encoding(value)
         if not self.db.execute("SELECT 1 FROM agent_instances WHERE id=?", (agent_id,)).fetchone():
             raise KeyError(agent_id)
         agent_type = value.get("agent_type", "custom")
@@ -709,6 +715,7 @@ class CompanyStore:
 
     def update_profile(self, profile: dict) -> dict:
         """Replace the editable brief without changing accounting history."""
+        profile = repair_text_encoding(profile)
         if not self.is_initialized():
             raise RuntimeError("Company is not initialized")
         now = utc_now()
