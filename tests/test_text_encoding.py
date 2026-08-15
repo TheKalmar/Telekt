@@ -74,4 +74,4 @@ def test_schema_v11_repairs_existing_company_and_agent_text(tmp_path: Path):
         assert reopened.get_profile()["goal"] == "Povećati vidljivost"
         assert repaired["purpose"] == "Povećavati organsku vidljivost"
         assert repaired["config"]["target_audience"] == "Građani"
-        assert reopened.schema_version() == 11
+        assert reopened.schema_version() == 12

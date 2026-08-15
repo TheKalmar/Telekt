@@ -72,6 +72,13 @@ AGENT_TYPES = [
                 "require_official_sources": {"type": "boolean", "default": True},
                 "seo_target_score": {"type": "integer", "default": 70, "minimum": 0, "maximum": 100},
                 "minimum_word_count": {"type": "integer", "default": 700, "minimum": 300, "maximum": 5000},
+                "active_topic_target": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
+                "wake_interval_minutes": {
+                    "type": "integer", "default": 1440, "minimum": 1, "maximum": 10080,
+                },
+                "review_followup_hours": {
+                    "type": "integer", "default": 24, "minimum": 1, "maximum": 168,
+                },
             },
             "additionalProperties": False,
         },

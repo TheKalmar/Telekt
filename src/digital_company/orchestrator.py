@@ -223,6 +223,13 @@ class CompanyOrchestrator:
             task_id = self.store.create_task(
                 proposal, "proposed", self.execution_key, agent_id=self.agent_id,
             )
+            if self.agent_id:
+                # Content tasks must carry one durable topic identity. When a
+                # small model omits it, bind the oldest eligible queue item
+                # deterministically instead of operating on a global latest draft.
+                proposal = self.store.resolve_content_work_item(
+                    self.agent_id, task_id, proposal,
+                )
 
             if self.agent_id:
                 if not action_is_allowed(self.agent["agent_type"], proposal.action.value):
@@ -258,6 +265,13 @@ class CompanyOrchestrator:
                 if self.store.has_pending_equivalent_approval(proposal, self.agent_id):
                     self.store.set_task_status(task_id, "superseded")
                     self.store.audit("company.blocked_by_pending_approval", {"task_id": task_id})
+                    if (
+                        self.agent and self.agent["agent_type"] == "content_seo"
+                        and proposal.action == ActionType.PUBLISH_CONTENT
+                    ):
+                        return self._sleep_until_next_cadence(
+                            cycle, "Content review is pending; follow up on the next cadence",
+                        )
                     return {"status": "waiting_for_approval", "cycles": cycle,
                             "reason": "No useful autonomous work remains; pending human decision is blocking"}
                 if proposal.action == ActionType.REQUEST_PLATFORM_ACCESS:
@@ -273,6 +287,9 @@ class CompanyOrchestrator:
                 self.store.audit("approval.queued_without_pause", {"approval_id": approval_id})
                 continue
             if proposal.action == ActionType.STOP:
+                if self.agent and self.agent["agent_type"] == "content_seo":
+                    self.store.set_task_status(task_id, "deferred")
+                    return self._sleep_until_next_cadence(cycle, proposal.rationale)
                 self.store.set_task_status(task_id, "stopped")
                 return {"status": "stopped", "cycles": cycle, "reason": proposal.rationale}
 
@@ -286,6 +303,18 @@ class CompanyOrchestrator:
             self._execute_specialist(task_id, proposal, snapshot)
 
         return {"status": "cycle_limit_reached", "cycles": max_cycles}
+
+    def _sleep_until_next_cadence(self, cycle: int, reason: str) -> dict:
+        """Convert content-planner idleness into a restartable durable timer."""
+        interval_minutes = int(
+            (self.agent.get("config") or {}).get("wake_interval_minutes", 1440)
+        )
+        scheduled = self.store.schedule_agent_wake(
+            self.agent_id, interval_minutes * 60, reason,
+        )
+        return {
+            "status": "sleeping", "cycles": cycle, "reason": reason, **scheduled,
+        }
 
     def _execute_claimed(self, task_id: str, proposal, cycle: int) -> dict:
         """Execute one human-approved frozen proposal without asking the CEO again."""
@@ -440,7 +469,7 @@ class CompanyOrchestrator:
         self, task_id: str, proposal, cycle: int, grant: dict,
     ) -> dict:
         """Use a granted REST connection before considering browser automation."""
-        draft = self.store.latest_content_draft(self.agent_id)
+        draft = self.store.latest_content_draft(self.agent_id, proposal.work_item_id)
         if not draft:
             raise RuntimeError("No completed content draft exists for this agent")
         runtime = WordPressPluginRuntime(
@@ -562,6 +591,24 @@ class CompanyOrchestrator:
                     f"on {checkpoint['branch']}"
                 )
         self.store.complete_task(task_id, result, proposal.estimated_cost_eur)
+        if not self.agent_id:
+            return
+        if proposal.action == ActionType.RESEARCH_CONTENT:
+            self.store.create_content_work_item(
+                self.agent_id, task_id, proposal.title, result.summary,
+            )
+        elif proposal.action == ActionType.CREATE_CONTENT_DRAFT:
+            self.store.transition_content_work_item(
+                proposal.work_item_id, "draft_ready", task_id=task_id,
+            )
+        elif proposal.action == ActionType.SAVE_CONTENT_DRAFT:
+            self.store.transition_content_work_item(
+                proposal.work_item_id, "draft_saved", task_id=task_id,
+            )
+        elif proposal.action == ActionType.PUBLISH_CONTENT:
+            self.store.transition_content_work_item(
+                proposal.work_item_id, "published", task_id=task_id,
+            )
 
     def _artifact_context(self, specialist: str) -> dict | None:
         """Provide QA with the current MVP and cheap deterministic preflight data."""

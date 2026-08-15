@@ -170,7 +170,7 @@ class CompanyLoopWorkflow:
         })
 
 
-@workflow.defn(name="AgentLoopWorkflowV1")
+@workflow.defn(name="AgentLoopWorkflowV2")
 class AgentLoopWorkflow:
     """One durable, independently controlled loop for one configured agent.
 
@@ -188,12 +188,14 @@ class AgentLoopWorkflow:
         self._run_cycles = 0
         self._last_status = "idle"
         self._last_wake_reason = "workflow_created"
+        self._next_wake_at = None
 
     @workflow.signal
     async def start(self, reason: str = "operator_start") -> None:
         self._running = True
         self._paused = False
         self._last_wake_reason = reason
+        self._next_wake_at = None
 
     @workflow.signal
     async def pause(self, reason: str = "operator_pause") -> None:
@@ -201,6 +203,7 @@ class AgentLoopWorkflow:
         self._paused = True
         self._last_status = "paused"
         self._last_wake_reason = reason
+        self._next_wake_at = None
 
     @workflow.signal
     async def resume(self, reason: str = "operator_resume") -> None:
@@ -216,6 +219,7 @@ class AgentLoopWorkflow:
         self._paused = False
         self._last_status = "stopped"
         self._last_wake_reason = reason
+        self._next_wake_at = None
 
     @workflow.signal
     async def shutdown(self, reason: str = "agent_deleted") -> None:
@@ -232,6 +236,7 @@ class AgentLoopWorkflow:
             "cycles": self._cycles,
             "last_status": self._last_status,
             "last_wake_reason": self._last_wake_reason,
+            "next_wake_at": self._next_wake_at,
         }
 
     @workflow.run
@@ -243,6 +248,7 @@ class AgentLoopWorkflow:
         self._cycles = int(input_value.get("cycles", 0))
         self._last_status = str(input_value.get("last_status", "idle"))
         self._last_wake_reason = str(input_value.get("last_wake_reason", "workflow_created"))
+        self._next_wake_at = input_value.get("next_wake_at")
 
         while not self._shutdown:
             if not self._running or self._paused:
@@ -275,7 +281,24 @@ class AgentLoopWorkflow:
             self._run_cycles += 1
             self._sequence += 1
             self._last_status = str(result.get("status", "unknown"))
-            if waits_for_external_signal(self._last_status):
+            if self._last_status == "sleeping":
+                # STOP from a scheduled content planner means "no more useful
+                # work this shift". Keep the workflow alive and wake it after
+                # the durable timer, unless an operator signal supersedes it.
+                self._running = False
+                self._next_wake_at = result.get("next_wake_at")
+                delay = max(60, int(result.get("wake_after_seconds", 86400)))
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._running or self._shutdown,
+                        timeout=timedelta(seconds=delay),
+                    )
+                except asyncio.TimeoutError:
+                    if self._last_status == "sleeping" and not self._paused and not self._shutdown:
+                        self._running = True
+                        self._last_wake_reason = "scheduled_wake"
+                        self._next_wake_at = None
+            elif waits_for_external_signal(self._last_status):
                 self._running = False
             else:
                 await workflow.sleep(1)
@@ -294,6 +317,7 @@ class AgentLoopWorkflow:
                     "cycles": self._cycles,
                     "last_status": self._last_status,
                     "last_wake_reason": self._last_wake_reason,
+                    "next_wake_at": self._next_wake_at,
                 })
 
         return {"status": "shutdown", "cycles": self._cycles}

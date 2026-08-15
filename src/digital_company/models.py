@@ -57,6 +57,10 @@ class TaskProposalDraft(BaseModel):
     stakeholder_response: str | None = Field(default=None, max_length=240)
     stakeholder_message_ids_considered: list[str] = Field(default_factory=list, max_length=20)
     skill_ids: list[str] = Field(default_factory=list)
+    # Carries one content topic across research, drafting, review, and publish.
+    # It is runtime-owned for the first research task and model-selected from
+    # canonical ``work_queue`` state for every subsequent content action.
+    work_item_id: str | None = Field(default=None, max_length=100)
     platform_candidate: str | None = Field(default=None, max_length=80)
     required_capabilities: list[Annotated[str, Field(max_length=80)]] = Field(default_factory=list, max_length=5)
     execution_mode: Literal["reasoning", "api", "browser", "manual", "outsourced", "build"] = "reasoning"
@@ -213,3 +217,4 @@ class CompanySnapshot(BaseModel):
     capabilities: list[dict] = Field(default_factory=list)
     human_handoffs: list[dict] = Field(default_factory=list)
     skills: list[dict] = Field(default_factory=list)
+    work_queue: list[dict] = Field(default_factory=list)

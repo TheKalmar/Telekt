@@ -12,6 +12,10 @@ class BriefMailer(Protocol):
         self, company_id: str, summary: dict, approvals: list[dict], settings: dict
     ) -> int: ...
 
+    def send_content_review(
+        self, company_id: str, summary: dict, approval: dict, settings: dict
+    ) -> int: ...
+
 
 def apply_orchestration_result(store, result: dict) -> None:
     """Project an orchestrator exit condition into canonical runtime control."""
@@ -43,10 +47,55 @@ class StakeholderBriefService:
             item for item in approvals
             if getattr(item.get("proposal"), "action", None) is not None
             and item["proposal"].action.value == "publish_content"
-            and not item.get("notified_at")
+            and (not item.get("notified_at") or item.get("followup_due"))
         ]
         if fresh_content_approvals:
-            approvals = fresh_content_approvals
+            # One message per topic creates an independent, reply-friendly
+            # owner conversation. Daily executive mail may still batch other
+            # decisions, but content drafts must never hide one another.
+            snapshot = store.snapshot()
+            summary = {
+                "control": store.get_control()["state"],
+                "spent": snapshot.spent_eur,
+                "remaining": snapshot.remaining_budget_eur,
+                "results": [task["title"] for task in snapshot.completed_tasks[-8:]],
+            }
+            sent_count = 0
+            sent_ids = []
+            try:
+                for item in fresh_content_approvals:
+                    sender = getattr(self.mailer, "send_content_review", None)
+                    delivered = (
+                        sender(company_id, summary, item, settings)
+                        if sender else self.mailer.send_daily_brief(
+                            company_id, summary, [item], settings,
+                        )
+                    )
+                    if not isinstance(delivered, int) or isinstance(delivered, bool):
+                        raise TypeError("Content review mailer must return an integer recipient count")
+                    sent_count += delivered
+                    if delivered:
+                        sent_ids.append(item["id"])
+                        if hasattr(store, "mark_approvals_notified"):
+                            # Commit each successful SMTP delivery before
+                            # attempting the next thread. A later transport
+                            # failure must not duplicate earlier messages.
+                            store.mark_approvals_notified([item["id"]])
+                if sent_ids:
+                    store.audit("stakeholder.notification_sent", {
+                        "channel": "content_review_threads", "recipients": sent_count,
+                        "approval_ids": sent_ids,
+                    })
+                return {
+                    "status": "sent" if sent_count else "not_configured",
+                    "recipients": sent_count, "threads": len(sent_ids),
+                }
+            except Exception as exc:
+                detail = f"{type(exc).__name__}: {exc}"
+                store.audit("stakeholder.notification_failed", {
+                    "channel": "content_review_threads", "error": detail,
+                })
+                return {"status": "failed", "error": detail}
         snapshot = None if approvals else store.snapshot()
         if not approvals and not snapshot.completed_tasks:
             return {"status": "not_needed"}

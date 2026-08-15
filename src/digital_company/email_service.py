@@ -166,11 +166,23 @@ class ApprovalMailer:
             msg = EmailMessage()
             content_review = len(approvals) == 1 and approvals[0]["proposal"].action.value == "publish_content"
             msg["Subject"] = (
-                f"Content ready for review: {approvals[0]['proposal'].title}"
+                f"Content review: {approvals[0]['proposal'].title} "
+                f"[{(approvals[0]['proposal'].work_item_id or approvals[0]['id'])[:8]}]"
                 if content_review else f"Daily CEO brief: {settings['sender_name']}"
             )
             msg["From"] = f'{settings["sender_name"]} <{transport.sender}>'
             msg["To"] = recipient
+            if content_review:
+                work_item_id = approvals[0]["proposal"].work_item_id or approvals[0]["id"]
+                domain = (transport.sender.split("@", 1)[-1] or "telekt.local").replace(">", "")
+                root_id = f"<telekt-content-{work_item_id}@{domain}>"
+                recipient_key = hashlib.sha256(recipient.encode()).hexdigest()[:12]
+                msg["Message-ID"] = (
+                    f"<telekt-review-{approvals[0]['id']}-{recipient_key}@{domain}>"
+                )
+                msg["In-Reply-To"] = root_id
+                msg["References"] = root_id
+                msg["X-Telekt-Work-Item"] = work_item_id
             result_text = "\n".join(f"- {title}" for title in summary["results"]) or "- No new completed work"
             result_html = "".join(f"<li>{html.escape(title)}</li>" for title in summary["results"]) or "<li>No new completed work</li>"
             msg.set_content(f"Status: {summary['control']}\nSpent: EUR {summary['spent']:.2f}\nRemaining: EUR {summary['remaining']:.2f}\nResults:\n{result_text}\nPending approvals: {len(approvals)}\n" + "\n".join(plain))
@@ -178,6 +190,12 @@ class ApprovalMailer:
             self._deliver(msg, transport)
             sent += 1
         return sent
+
+    def send_content_review(
+        self, company_id: str, summary: dict, approval: dict, settings: dict,
+    ) -> int:
+        """Deliver one draft as one stable email conversation topic."""
+        return self.send_daily_brief(company_id, summary, [approval], settings)
 
     def send_test(self, recipient: str, settings: dict) -> None:
         """Send only after an operator explicitly presses the SMTP test button."""

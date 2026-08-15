@@ -49,7 +49,7 @@ def test_temporal_gateway_is_optional_without_infrastructure(monkeypatch):
 def test_v4_workflow_id_does_not_replay_pre_heartbeat_history():
     assert temporal_gateway.workflow_id("abc") == "company-loop-v4-abc"
     assert TASK_QUEUE == "digital-company-v4"
-    assert temporal_gateway.agent_workflow_id("abc", "writer") == "agent-loop-v1-abc-writer"
+    assert temporal_gateway.agent_workflow_id("abc", "writer") == "agent-loop-v2-abc-writer"
 
 
 def test_agent_workflow_has_independent_restartable_lifecycle():
@@ -62,6 +62,7 @@ def test_agent_workflow_has_independent_restartable_lifecycle():
     assert workflow.state()["running"] is True
     asyncio.run(workflow.stop("owner_stop"))
     assert workflow.state()["last_status"] == "stopped"
+    assert workflow.state()["next_wake_at"] is None
 
 
 class FakeStore:

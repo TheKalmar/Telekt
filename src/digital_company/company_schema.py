@@ -130,6 +130,13 @@ CREATE TABLE IF NOT EXISTS agent_playbook_versions (
   created_by TEXT NOT NULL, created_at TEXT NOT NULL,
   UNIQUE(agent_id, version)
 );
+CREATE TABLE IF NOT EXISTS content_work_items (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, topic TEXT NOT NULL,
+  status TEXT NOT NULL, research_task_id TEXT, draft_task_id TEXT,
+  approval_id TEXT, publication_task_id TEXT, summary TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  last_contact_at TEXT, next_followup_at TEXT
+);
 CREATE INDEX IF NOT EXISTS tasks_status_created ON tasks(status, created_at);
 CREATE INDEX IF NOT EXISTS approvals_status_created ON approvals(status, created_at);
 CREATE INDEX IF NOT EXISTS approvals_task ON approvals(task_id);
@@ -142,6 +149,7 @@ CREATE INDEX IF NOT EXISTS agent_instances_status ON agent_instances(status, upd
 CREATE INDEX IF NOT EXISTS agent_plugin_grants_agent ON agent_plugin_grants(agent_id, status);
 CREATE INDEX IF NOT EXISTS agent_runs_agent_started ON agent_runs(agent_id, started_at);
 CREATE INDEX IF NOT EXISTS agent_playbook_agent_status ON agent_playbook_versions(agent_id, status);
+CREATE INDEX IF NOT EXISTS content_work_agent_status ON content_work_items(agent_id, status, updated_at);
 """
 
 
@@ -157,6 +165,7 @@ SCHEMA_VERSIONS = (
     (9, "Agent-scoped stakeholder messages and intervention queues"),
     (10, "Versioned agent playbooks and approval delivery tracking"),
     (11, "Repair legacy UTF-8 text decoded as Latin-1"),
+    (12, "Durable content work items and scheduled agent wake-ups"),
 )
 
 
@@ -200,6 +209,8 @@ def migrate_company_database(db, now: str) -> None:
     _add_column(db, "agent_instances", "agent_type", "TEXT NOT NULL DEFAULT 'custom'")
     _add_column(db, "stakeholder_messages", "agent_id", "TEXT")
     _add_column(db, "approvals", "notified_at", "TEXT")
+    _add_column(db, "tasks", "work_item_id", "TEXT")
+    _add_column(db, "agent_instances", "next_wake_at", "TEXT")
     applied_versions = {
         int(row["version"])
         for row in db.execute("SELECT version FROM company_schema_versions")

@@ -6,7 +6,8 @@ from digital_company.store import CompanyStore
 from digital_company.agent_templates import action_is_allowed
 from digital_company.capability_plugins import authorize_action
 from digital_company.integration_connectors import secret_name
-from digital_company.models import ActionType, TaskProposal
+from digital_company.models import ActionType, SpecialistResult, TaskProposal
+from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.runtime_secrets import save_secret
 
 
@@ -35,7 +36,7 @@ def test_company_migration_creates_explicit_legacy_ceo(tmp_path: Path):
     store = initialized_store(tmp_path)
     agents = store.list_agents()
 
-    assert store.schema_version() == 11
+    assert store.schema_version() == 12
     assert agents[0]["id"] == "legacy-ceo"
     assert agents[0]["role"] == "ceo"
     assert agents[0]["agent_type"] == "ceo"
@@ -137,6 +138,77 @@ def test_content_agent_type_has_typed_setup_and_bounded_actions(tmp_path: Path):
     assert agent["config"]["require_official_sources"] is True
     assert action_is_allowed("content_seo", "research_content") is True
     assert action_is_allowed("content_seo", "build_mvp") is False
+
+
+def test_content_topics_keep_independent_durable_pipeline_ids(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent() | {
+        "agent_type": "content_seo",
+        "config": {
+            "content_language": "sr-Latn", "target_audience": "Banja Luka",
+            "content_scope": "Employment law", "active_topic_target": 5,
+            "wake_interval_minutes": 10,
+        },
+    })
+    research = TaskProposal(
+        action=ActionType.RESEARCH_CONTENT, title="Neisplaćena plata u RS",
+        objective="Verify demand and legal sources", rationale="Strong local intent",
+        expected_evidence=["Official sources"], estimated_cost_eur=0,
+        specialist="research",
+    )
+    research_task = store.create_task(research, "proposed", agent_id=agent["id"])
+    store.complete_task(research_task, SpecialistResult(
+        status="completed", summary="Verified topic opportunity",
+        evidence=["Evidence"], recommendation="Draft it",
+    ), 0)
+    work_id = store.create_content_work_item(
+        agent["id"], research_task, research.title, "Verified topic opportunity",
+    )
+    draft = TaskProposal(
+        action=ActionType.CREATE_CONTENT_DRAFT, title="Draft unpaid wages guide",
+        objective="Create a reviewable article", rationale="Research is complete",
+        expected_evidence=["Complete draft"], estimated_cost_eur=0,
+        specialist="growth",
+    )
+    draft_task = store.create_task(draft, "proposed", agent_id=agent["id"])
+    bound = store.resolve_content_work_item(agent["id"], draft_task, draft)
+
+    assert bound.work_item_id == work_id
+    store.transition_content_work_item(work_id, "draft_ready", task_id=draft_task)
+    assert store.list_content_work_items(agent["id"])[0]["status"] == "draft_ready"
+    assert store.get_agent(agent["id"])["work_queue"]["active"] == 1
+
+
+class StopEngine:
+    def decide(self, snapshot, agent_context=None):
+        return TaskProposal(
+            action=ActionType.STOP, title="End this content shift",
+            objective="Wait for the next cadence", rationale="Five topics are already active",
+            expected_evidence=["Queue remains durable"], estimated_cost_eur=0,
+            specialist="ceo",
+        )
+
+
+def test_scheduled_content_stop_sleeps_instead_of_terminating(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent() | {
+        "agent_type": "content_seo",
+        "config": {
+            "content_language": "sr-Latn", "target_audience": "Banja Luka",
+            "content_scope": "Legal SEO", "wake_interval_minutes": 10,
+        },
+    })
+    store.set_agent_status(agent["id"], "running")
+
+    result = CompanyOrchestrator(
+        store, tmp_path / "artifacts", engine=StopEngine(), agent_id=agent["id"],
+    ).run(max_cycles=1)
+
+    assert result["status"] == "sleeping"
+    assert result["wake_after_seconds"] == 600
+    current = store.get_agent(agent["id"])
+    assert current["status"] == "sleeping"
+    assert current["next_wake_at"] is not None
 
 
 def test_plugin_permissions_are_runtime_authority_not_prompt_decoration(tmp_path: Path):

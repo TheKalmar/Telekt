@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from digital_company.company_runtime import StakeholderBriefService, apply_orchestration_result
+from digital_company.models import ActionType, TaskProposal
 
 
 class FakeStore:
@@ -45,6 +46,10 @@ class FakeMailer:
         self.calls.append((company_id, summary, approvals, settings))
         return self.recipients
 
+    def send_content_review(self, company_id, summary, approval, settings):
+        self.calls.append((company_id, summary, [approval], settings))
+        return self.recipients
+
 
 def test_brief_service_batches_and_audits_one_delivery():
     store = FakeStore(approvals=[{"id": "approval-1"}])
@@ -86,3 +91,26 @@ def test_orchestration_result_has_one_shared_runtime_projection():
     store = FakeStore()
     apply_orchestration_result(store, {"status": "waiting_for_human", "reason": "Login"})
     assert store.control == ("waiting_human", "Login")
+
+
+def test_content_reviews_are_separate_parallel_email_threads():
+    def review(approval_id, work_item_id):
+        return {
+            "id": approval_id, "notified_at": None, "followup_due": False,
+            "proposal": TaskProposal(
+                action=ActionType.PUBLISH_CONTENT, title=f"Review {work_item_id}",
+                objective="Publish one reviewed article", rationale="Draft is ready",
+                expected_evidence=["Published URL"], estimated_cost_eur=0,
+                specialist="growth", execution_mode="browser",
+                handoff_url="https://example.com/wp-admin", work_item_id=work_item_id,
+            ),
+        }
+
+    store = FakeStore(approvals=[review("a1", "topic-1"), review("a2", "topic-2")])
+    mailer = FakeMailer(1)
+
+    result = StakeholderBriefService(mailer).send_if_due("company-1", store)
+
+    assert result == {"status": "sent", "recipients": 2, "threads": 2}
+    assert [call[2][0]["id"] for call in mailer.calls] == ["a1", "a2"]
+    assert store.events[-1][1]["channel"] == "content_review_threads"

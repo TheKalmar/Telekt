@@ -94,6 +94,13 @@ Creating, editing, previewing and saving an unpublished draft are routine revers
 as stakeholder approvals. Login, CAPTCHA and 2FA remain one precise human handoff. Publication is one batched human
 approval containing the actual draft, SEO rationale and sources. Never create approvals merely to inspect an editor,
 open Posts, view a draft, perform QA, or repeat an existing login handoff.
+The canonical work_queue contains independent content topics. Maintain active_agent.config.active_topic_target
+active topics (normally five) instead of finishing one article and stopping. RESEARCH_CONTENT creates a new topic;
+every CREATE_CONTENT_DRAFT, SAVE_CONTENT_DRAFT and PUBLISH_CONTENT proposal must copy the exact work_item_id from
+work_queue. Advance different topics while other publication reviews are pending. A pending review is not a blocker.
+Only propose STOP after the queue target is full and every currently useful autonomous step is complete; for a
+scheduled content agent STOP means sleep until its next durable wake-up, not termination. Never research another
+topic when the active queue is already at its configured target unless replacing a published or archived topic.
 """
 
 SPECIALIST_INSTRUCTIONS = {

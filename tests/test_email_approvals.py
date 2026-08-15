@@ -138,6 +138,9 @@ def test_content_review_email_renders_full_safe_article(monkeypatch):
     assert "Complete article" in body
     assert "Telekt SEO QA" in body
     assert "alert(1)" not in body
+    assert sent[0]["Subject"].startswith("Content review:")
+    assert sent[0]["X-Telekt-Work-Item"] == "approval-content"
+    assert sent[0]["References"].startswith("<telekt-content-")
 
 
 def test_mailer_uses_selected_write_only_smtp_connection(tmp_path: Path, monkeypatch):

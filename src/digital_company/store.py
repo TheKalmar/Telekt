@@ -72,6 +72,7 @@ class CompanyStore:
         self._ensure_default_policy()
         self._sync_builtin_skills()
         self._sync_builtin_plugins()
+        self._normalize_agent_configs()
         # Existing single-loop companies need a projected CEO during the
         # additive migration. A brand-new company database is intentionally
         # left without agents so organization creation and hiring are separate.
@@ -80,6 +81,26 @@ class CompanyStore:
             and self.get_profile().get("_agent_bootstrap_mode") != "explicit"
         ):
             self._ensure_legacy_ceo_agent()
+
+    def _normalize_agent_configs(self) -> None:
+        """Add newly introduced typed defaults without replacing owner values."""
+        rows = self.db.execute(
+            "SELECT id,agent_type,config_json FROM agent_instances"
+        ).fetchall()
+        for row in rows:
+            try:
+                current = json.loads(row["config_json"] or "{}")
+                normalized = validate_agent_config(row["agent_type"], current)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # Invalid legacy configuration stays visible for explicit owner
+                # repair; an additive migration must not silently discard it.
+                continue
+            if normalized != current:
+                self.db.execute(
+                    "UPDATE agent_instances SET config_json=?,updated_at=? WHERE id=?",
+                    (json.dumps(normalized, ensure_ascii=False), utc_now(), row["id"]),
+                )
+        self.db.commit()
 
     def _ensure_default_policy(self) -> None:
         """Bootstrap a safe policy without rewriting an existing company's rules."""
@@ -240,6 +261,7 @@ class CompanyStore:
             capabilities=self.capability_snapshot(),
             human_handoffs=self.list_handoffs(status="pending", agent_id=agent_id),
             skills=self.list_skills(),
+            work_queue=self.list_content_work_items(agent_id) if agent_id else [],
         )
 
     def _sync_builtin_skills(self) -> None:
@@ -368,6 +390,12 @@ class CompanyStore:
                     "SELECT COUNT(*) AS value FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
                     "WHERE t.agent_id=? AND h.status='pending'", (item["id"],),
                 ).fetchone()["value"]),
+            }
+            queue = self.list_content_work_items(item["id"])
+            item["work_queue"] = {
+                "active": len([work for work in queue if work["status"] not in {"published", "archived"}]),
+                "total": len(queue),
+                "items": queue,
             }
             playbook = self.get_agent_playbook(item["id"])
             item["playbook"] = {
@@ -549,18 +577,148 @@ class CompanyStore:
         """
         if status not in {
             "running", "paused", "stopped", "waiting_approval",
-            "waiting_human", "error",
+            "waiting_human", "sleeping", "error",
         }:
             raise ValueError("Invalid agent status")
+        next_wake_at = None if status in {"running", "paused", "stopped", "error"} else self.get_agent(agent_id).get("next_wake_at")
         changed = self.db.execute(
-            "UPDATE agent_instances SET status=?,updated_at=? WHERE id=?",
-            (status, utc_now(), agent_id),
+            "UPDATE agent_instances SET status=?,next_wake_at=?,updated_at=? WHERE id=?",
+            (status, next_wake_at, utc_now(), agent_id),
         ).rowcount
         self.db.commit()
         if changed != 1:
             raise KeyError(agent_id)
         self.audit("agent." + status, {"agent_id": agent_id})
         return self.get_agent(agent_id)
+
+    def schedule_agent_wake(self, agent_id: str, delay_seconds: int, reason: str) -> dict:
+        """Project a durable Temporal timer into queryable company state."""
+        delay_seconds = max(60, min(int(delay_seconds), 7 * 24 * 3600))
+        wake_at = (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).isoformat()
+        changed = self.db.execute(
+            "UPDATE agent_instances SET status='sleeping',next_wake_at=?,updated_at=? WHERE id=?",
+            (wake_at, utc_now(), agent_id),
+        ).rowcount
+        self.db.commit()
+        if changed != 1:
+            raise KeyError(agent_id)
+        self.audit("agent.sleep_scheduled", {
+            "agent_id": agent_id, "next_wake_at": wake_at,
+            "delay_seconds": delay_seconds, "reason": reason,
+        })
+        return {"next_wake_at": wake_at, "wake_after_seconds": delay_seconds}
+
+    def list_content_work_items(self, agent_id: str | None) -> list[dict]:
+        """Return the durable, topic-scoped content pipeline for one agent."""
+        if not agent_id:
+            return []
+        return [dict(row) for row in self.db.execute(
+            "SELECT * FROM content_work_items WHERE agent_id=? "
+            "ORDER BY CASE status WHEN 'changes_requested' THEN 0 WHEN 'approved' THEN 1 "
+            "WHEN 'researched' THEN 2 WHEN 'draft_ready' THEN 3 WHEN 'draft_saved' THEN 4 "
+            "WHEN 'awaiting_review' THEN 5 ELSE 6 END, updated_at",
+            (agent_id,),
+        )]
+
+    def resolve_content_work_item(
+        self, agent_id: str, task_id: str, proposal: TaskProposal,
+    ) -> TaskProposal:
+        """Bind a content action to one canonical topic, never a global latest draft."""
+        content_actions = {
+            ActionType.CREATE_CONTENT_DRAFT: {"researched", "changes_requested"},
+            ActionType.SAVE_CONTENT_DRAFT: {"draft_ready"},
+            ActionType.PUBLISH_CONTENT: {"draft_saved", "awaiting_review", "approved"},
+        }
+        allowed = content_actions.get(proposal.action)
+        if not allowed:
+            return proposal
+        row = None
+        if proposal.work_item_id:
+            row = self.db.execute(
+                "SELECT id,status FROM content_work_items WHERE id=? AND agent_id=?",
+                (proposal.work_item_id, agent_id),
+            ).fetchone()
+            if not row:
+                raise ValueError("Content work item does not belong to this agent")
+            if row["status"] not in allowed:
+                raise ValueError(
+                    f"Content work item {row['id']} is {row['status']}; "
+                    f"{proposal.action.value} expects {sorted(allowed)}"
+                )
+        else:
+            placeholders = ",".join("?" for _ in allowed)
+            row = self.db.execute(
+                f"SELECT id,status FROM content_work_items WHERE agent_id=? "
+                f"AND status IN ({placeholders}) ORDER BY updated_at LIMIT 1",
+                (agent_id, *sorted(allowed)),
+            ).fetchone()
+        if not row:
+            raise ValueError(
+                f"No content work item is ready for {proposal.action.value}; research a topic first"
+            )
+        bound = proposal.model_copy(update={"work_item_id": row["id"]})
+        self.db.execute(
+            "UPDATE tasks SET work_item_id=?,proposal_json=? WHERE id=?",
+            (row["id"], bound.model_dump_json(), task_id),
+        )
+        self.db.commit()
+        return bound
+
+    def create_content_work_item(
+        self, agent_id: str, task_id: str, topic: str, summary: str,
+    ) -> str:
+        """Turn completed research into one independently reviewable content thread."""
+        normalized = re.sub(r"\s+", " ", topic).strip()
+        existing = self.db.execute(
+            "SELECT id FROM content_work_items WHERE agent_id=? AND LOWER(topic)=LOWER(?) "
+            "AND status NOT IN ('published','archived') ORDER BY created_at LIMIT 1",
+            (agent_id, normalized),
+        ).fetchone()
+        if existing:
+            work_item_id = existing["id"]
+        else:
+            work_item_id = str(uuid4())
+            now = utc_now()
+            self.db.execute(
+                "INSERT INTO content_work_items(id,agent_id,topic,status,research_task_id,draft_task_id,"
+                "approval_id,publication_task_id,summary,created_at,updated_at,last_contact_at,next_followup_at) "
+                "VALUES(?,?,?,'researched',?,NULL,NULL,NULL,?,?,?,NULL,NULL)",
+                (work_item_id, agent_id, normalized, task_id, summary[:4000], now, now),
+            )
+        self.db.execute("UPDATE tasks SET work_item_id=? WHERE id=?", (work_item_id, task_id))
+        self.db.commit()
+        self.audit("content.work_item_created", {
+            "agent_id": agent_id, "work_item_id": work_item_id,
+            "research_task_id": task_id, "topic": normalized,
+        })
+        return work_item_id
+
+    def transition_content_work_item(
+        self, work_item_id: str | None, status: str, *, task_id: str | None = None,
+        approval_id: str | None = None,
+    ) -> None:
+        """Advance one topic without affecting any sibling topic or email thread."""
+        if not work_item_id:
+            return
+        columns = ["status=?", "updated_at=?"]
+        values: list = [status, utc_now()]
+        if status == "draft_ready" and task_id:
+            columns.append("draft_task_id=?")
+            values.append(task_id)
+        if status == "awaiting_review" and approval_id:
+            columns.append("approval_id=?")
+            values.append(approval_id)
+        if status == "published" and task_id:
+            columns.append("publication_task_id=?")
+            values.append(task_id)
+        values.append(work_item_id)
+        self.db.execute(
+            f"UPDATE content_work_items SET {','.join(columns)} WHERE id=?", tuple(values),
+        )
+        self.db.commit()
+        self.audit("content.work_item_" + status, {
+            "work_item_id": work_item_id, "task_id": task_id, "approval_id": approval_id,
+        })
 
     def agent_remaining_budget(self, agent_id: str) -> float:
         """Return this agent's model-spend envelope, independent of company capital.
@@ -1150,10 +1308,12 @@ class CompanyStore:
         task_id = str(uuid4())
         self.db.execute(
             "INSERT INTO tasks(id,action,title,specialist,objective,rationale,estimated_cost_eur,status,"
-            "result_json,created_at,completed_at,proposal_json,agent_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "result_json,created_at,completed_at,proposal_json,agent_id,work_item_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (task_id, proposal.action.value, proposal.title, proposal.specialist,
              proposal.objective, proposal.rationale, proposal.estimated_cost_eur,
-             status, None, utc_now(), None, proposal.model_dump_json(), agent_id),
+             status, None, utc_now(), None, proposal.model_dump_json(), agent_id,
+             proposal.work_item_id),
         )
         if execution_key:
             changed = self.db.execute(
@@ -1352,7 +1512,7 @@ class CompanyStore:
 
     def set_task_status(self, task_id: str, status: str) -> None:
         """Set a deterministic terminal/intermediate status for orchestration."""
-        if status not in {"denied", "stopped", "superseded"}:
+        if status not in {"denied", "stopped", "superseded", "deferred"}:
             raise ValueError("Invalid direct task status")
         self.db.execute("UPDATE tasks SET status=?,completed_at=? WHERE id=?", (status, utc_now(), task_id))
         self.db.commit()
@@ -1390,6 +1550,9 @@ class CompanyStore:
             "approval_id": approval_id, "task_id": task_id,
             "required_approvals": required_approvals, "expires_at": expires_at,
         })
+        self.transition_content_work_item(
+            proposal.work_item_id, "awaiting_review", approval_id=approval_id,
+        )
         return approval_id
 
     def has_pending_equivalent_approval(
@@ -1415,13 +1578,18 @@ class CompanyStore:
             }:
                 existing_host = urlparse(existing.handoff_url).hostname if existing.handoff_url else None
                 proposed_host = urlparse(proposal.handoff_url).hostname if proposal.handoff_url else None
-                if existing_host == proposed_host:
+                if existing_host == proposed_host and (
+                    proposal.action != ActionType.PUBLISH_CONTENT
+                    or existing.work_item_id == proposal.work_item_id
+                ):
                     return True
             if existing.objective.strip().lower() == proposal.objective.strip().lower():
                 return True
         return False
 
-    def latest_content_draft(self, agent_id: str | None = None) -> dict | None:
+    def latest_content_draft(
+        self, agent_id: str | None = None, work_item_id: str | None = None,
+    ) -> dict | None:
         """Return the latest completed content artifact for review and publishing."""
         query = (
             "SELECT id,title,result_json,completed_at FROM tasks "
@@ -1431,6 +1599,9 @@ class CompanyStore:
         if agent_id:
             query += "AND agent_id=? "
             params.append(agent_id)
+        if work_item_id:
+            query += "AND work_item_id=? "
+            params.append(work_item_id)
         query += "ORDER BY completed_at DESC LIMIT 20"
         rows = self.db.execute(query, tuple(params))
         for row in rows:
@@ -1472,7 +1643,7 @@ class CompanyStore:
         except Exception:
             return None
         return (
-            self.latest_content_draft(item.get("agent_id"))
+            self.latest_content_draft(item.get("agent_id"), proposal.work_item_id)
             if proposal.action == ActionType.PUBLISH_CONTENT else None
         )
 
@@ -1495,6 +1666,22 @@ class CompanyStore:
                 "UPDATE approvals SET notified_at=? WHERE id=? AND notified_at IS NULL",
                 (now, approval_id),
             )
+            row = self.db.execute(
+                "SELECT t.agent_id,t.work_item_id FROM approvals a JOIN tasks t ON t.id=a.task_id "
+                "WHERE a.id=?", (approval_id,),
+            ).fetchone()
+            if row and row["agent_id"] and row["work_item_id"]:
+                agent = self.get_agent(row["agent_id"])
+                followup_hours = int(
+                    (agent.get("config") or {}).get("review_followup_hours", 24)
+                )
+                followup_at = (
+                    datetime.now(timezone.utc) + timedelta(hours=max(1, followup_hours))
+                ).isoformat()
+                self.db.execute(
+                    "UPDATE content_work_items SET last_contact_at=?,next_followup_at=?,updated_at=? "
+                    "WHERE id=?", (now, followup_at, now, row["work_item_id"]),
+                )
         self.db.commit()
 
     def list_approvals(self) -> list[dict]:
@@ -1521,9 +1708,19 @@ class CompanyStore:
             item = dict(row)
             item["proposal"] = TaskProposal.model_validate_json(item.pop("payload_json"))
             item["review"] = (
-                self.latest_content_draft(item.get("agent_id"))
+                self.latest_content_draft(item.get("agent_id"), item["proposal"].work_item_id)
                 if item["proposal"].action == ActionType.PUBLISH_CONTENT else None
             )
+            item["followup_due"] = False
+            if item["proposal"].work_item_id:
+                work = self.db.execute(
+                    "SELECT next_followup_at FROM content_work_items WHERE id=?",
+                    (item["proposal"].work_item_id,),
+                ).fetchone()
+                item["followup_due"] = bool(
+                    work and work["next_followup_at"]
+                    and datetime.fromisoformat(work["next_followup_at"]) <= datetime.now(timezone.utc)
+                )
             result.append(item)
         return result
 
@@ -1601,6 +1798,15 @@ class CompanyStore:
                     (now, comment.strip() or None, voter, approval_id),
                 )
                 self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
+                work = self.db.execute(
+                    "SELECT work_item_id FROM tasks WHERE id=?", (row["task_id"],),
+                ).fetchone()
+                if work and work["work_item_id"]:
+                    self.db.execute(
+                        "UPDATE content_work_items SET status='approved',next_followup_at=NULL,"
+                        "updated_at=? WHERE id=?",
+                        (now, work["work_item_id"]),
+                    )
                 if row["agent_id"]:
                     self.db.execute(
                         "UPDATE agent_instances SET status='running',updated_at=? WHERE id=?",
@@ -1693,6 +1899,14 @@ class CompanyStore:
                 (now, comment.strip(), voter, approval_id),
             )
             self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
+            work = self.db.execute(
+                "SELECT work_item_id FROM tasks WHERE id=?", (row["task_id"],),
+            ).fetchone()
+            if work and work["work_item_id"]:
+                self.db.execute(
+                    "UPDATE content_work_items SET status='changes_requested',approval_id=NULL,"
+                    "next_followup_at=NULL,updated_at=? WHERE id=?", (now, work["work_item_id"]),
+                )
             if row["agent_id"]:
                 self.db.execute(
                     "UPDATE agent_instances SET status='running',updated_at=? WHERE id=?",

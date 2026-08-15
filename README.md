@@ -269,6 +269,7 @@ Read these in order:
 6. [Operations](docs/operations.md)
 7. [Known limitations](docs/known-limitations.md)
 8. [Email approvals](docs/email-approvals.md)
+9. [Agent operating cadence and content pipeline](docs/agent-operating-cadence.md)
 9. [Model reliability](docs/model-reliability.md)
 10. [Platform strategy and Shopify](docs/platform-integrations.md)
 11. [Browser missions and human takeover](docs/browser-handoffs.md)

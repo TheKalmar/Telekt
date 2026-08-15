@@ -31,7 +31,9 @@ def workflow_id(company_id: str) -> str:
 
 
 def agent_workflow_id(company_id: str, agent_id: str) -> str:
-    return f"agent-loop-v1-{company_id}-{agent_id}"
+    # V2 adds durable scheduled sleep. Never replay V1 history against the new
+    # timer state machine; old stopped workflows remain inert audit history.
+    return f"agent-loop-v2-{company_id}-{agent_id}"
 
 
 async def ensure_workflow(client: Client, company_id: str):

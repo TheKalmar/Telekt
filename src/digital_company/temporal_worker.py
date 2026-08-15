@@ -149,6 +149,10 @@ def _advance_agent_sync(company_id: str, agent_id: str, execution_key: str) -> d
             if cached is not None:
                 return cached
             agent = store.get_agent(agent_id)
+            if agent["status"] == "sleeping":
+                # A Temporal timer, not a browser request, owns this transition.
+                store.set_agent_status(agent_id, "running")
+                agent = store.get_agent(agent_id)
             if agent["status"] != "running":
                 result = {"status": agent["status"], "cycles": 0, "agent_id": agent_id}
                 store.complete_activity(execution_key, result)
@@ -171,6 +175,10 @@ def _advance_agent_sync(company_id: str, agent_id: str, execution_key: str) -> d
             elif status in {"stopped", "paused"}:
                 store.set_agent_status(agent_id, status)
                 run_status = status
+            elif status == "sleeping":
+                # The orchestrator already stored next_wake_at atomically with
+                # its stopping decision. Keep the run successful and idle.
+                run_status = "completed"
             elif status in {"failed", "error"}:
                 store.set_agent_status(agent_id, "error")
                 run_status = "failed"
