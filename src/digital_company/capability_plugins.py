@@ -65,14 +65,12 @@ BUILTIN_PLUGINS = [
     {
         "id": "email-communication",
         "name": "Email Communication",
-        "version": "1.0.0",
-        "description": "Prepare or send email through a separately configured mailbox connection.",
+        "version": "1.0.1",
+        "description": "Prepare email internally and send it through a separately configured SMTP connection.",
         "tools": ["email"],
         "connection_kinds": ["smtp"],
-        "permissions": ["read_email", "draft_email", "send_email"],
+        "permissions": ["draft_email", "send_email"],
         "connection_capabilities": {
-            "read_email": "email.read",
-            "draft_email": "email.draft",
             "send_email": "email.send",
         },
         "config_schema": {
@@ -80,7 +78,7 @@ BUILTIN_PLUGINS = [
             "properties": {"sender_name": {"type": "string"}},
             "additionalProperties": False,
         },
-        "instructions": "Drafting email is internal; sending requires the agent grant and active company policy authority.",
+        "instructions": "Drafting is internal and needs no mailbox capability. SMTP only sends; inbox reading requires a future inbound-mail connector. Sending requires the agent grant and active company policy authority.",
     },
 ]
 

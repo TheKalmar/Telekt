@@ -187,3 +187,27 @@ def test_plugin_connection_cannot_escalate_beyond_declared_capabilities(
                 "posts_url": "https://example.com/wp-admin/post-new.php",
             },
         })
+
+
+def test_smtp_plugin_draft_is_internal_and_only_send_needs_transport_capability(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent())
+    store.upsert_integration_connection({
+        "id": "smtp-local", "name": "SMTP", "adapter": "smtp",
+        "provider": "Mailpit", "location": "local",
+        "base_url": "smtp://mailpit:1025", "capabilities": ["email.send"],
+        "config": {"security": "plain", "authentication": "none"},
+        "enabled": True,
+    })
+
+    grant = store.grant_agent_plugin(agent["id"], "email-communication", {
+        "connection_id": "smtp-local",
+        "permissions": ["draft_email", "send_email"],
+        "config": {"sender_name": "Acme"},
+    })
+
+    assert grant["permissions"] == ["draft_email", "send_email"]
+    with pytest.raises(ValueError, match="does not declare"):
+        store.grant_agent_plugin(agent["id"], "email-communication", {
+            "connection_id": "smtp-local", "permissions": ["read_email"], "config": {},
+        })
