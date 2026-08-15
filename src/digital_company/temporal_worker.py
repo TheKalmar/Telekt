@@ -5,6 +5,7 @@ import asyncio
 import os
 from pathlib import Path
 
+from agents import ModelBehaviorError
 from dotenv import load_dotenv
 from temporalio import activity
 from temporalio.client import Client
@@ -28,6 +29,16 @@ def registry() -> CompanyRegistry:
 _apply_result_state = apply_orchestration_result
 
 
+def is_non_retryable_activity_error(exc: Exception) -> bool:
+    """Return whether replaying the same frozen input would only repeat failure.
+
+    AgentEngine already performs its one bounded structured-output repair. A
+    remaining ModelBehaviorError is therefore not a transport outage and must
+    not make Temporal repeat the entire paid model activity.
+    """
+    return isinstance(exc, (KeyError, PermissionError, ValueError, ModelBehaviorError))
+
+
 @activity.defn(name="advance_company")
 async def advance_company(input_value: str | dict) -> dict:
     """Run one bounded company cycle without blocking Temporal's event loop."""
@@ -40,19 +51,13 @@ async def advance_company(input_value: str | dict) -> dict:
         return await _to_thread_with_heartbeat(
             _advance_company_sync, company_id, execution_key,
         )
-    except (KeyError, PermissionError, ValueError) as exc:
-        # Schema/policy/validation failures are deterministic. Re-running the
-        # same frozen input would only repeat work and potentially spend tokens.
-        return await asyncio.to_thread(
-            _finalize_activity_failure, company_id, execution_key, exc,
-            activity.info().attempt,
-        )
     except Exception as exc:
-        if activity.info().attempt < 3:
+        attempt = activity.info().attempt
+        if not is_non_retryable_activity_error(exc) and attempt < 3:
             raise
         return await asyncio.to_thread(
             _finalize_activity_failure, company_id, execution_key, exc,
-            activity.info().attempt,
+            attempt,
         )
 
 
@@ -66,17 +71,13 @@ async def advance_agent(input_value: dict) -> dict:
         return await _to_thread_with_heartbeat(
             _advance_agent_sync, company_id, agent_id, execution_key,
         )
-    except (KeyError, PermissionError, ValueError) as exc:
-        return await asyncio.to_thread(
-            _finalize_agent_activity_failure,
-            company_id, agent_id, execution_key, exc, activity.info().attempt,
-        )
     except Exception as exc:
-        if activity.info().attempt < 3:
+        attempt = activity.info().attempt
+        if not is_non_retryable_activity_error(exc) and attempt < 3:
             raise
         return await asyncio.to_thread(
             _finalize_agent_activity_failure,
-            company_id, agent_id, execution_key, exc, activity.info().attempt,
+            company_id, agent_id, execution_key, exc, attempt,
         )
 
 

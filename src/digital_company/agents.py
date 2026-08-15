@@ -205,6 +205,33 @@ class AgentEngine:
             tools=tools or [],
         )
 
+    @staticmethod
+    def _structured_repair_prompt(prompt: str, agent) -> str:
+        """Add an explicit, compact contract for one structured-output repair.
+
+        A repair is a fresh SDK run, so saying only that the "previous response"
+        was invalid gives the model no useful correction signal. Repeating the
+        actual schema makes the retry deterministic without trusting or replaying
+        the malformed model text.
+        """
+        output_type = getattr(agent, "output_type", None)
+        schema = None
+        if hasattr(output_type, "model_json_schema"):
+            schema = output_type.model_json_schema()
+        elif hasattr(output_type, "json_schema"):
+            schema = output_type.json_schema()
+
+        instruction = (
+            "The last attempt could not be parsed as the required structured output. "
+            "Return exactly one complete JSON object, with no markdown fence, preamble, "
+            "commentary, or trailing text. Do not omit required fields."
+        )
+        if schema:
+            instruction += " The JSON object must satisfy this schema exactly:\n" + json.dumps(
+                schema, separators=(",", ":"), sort_keys=True,
+            )
+        return prompt + "\n\nSTRUCTURED OUTPUT REPAIR:\n" + instruction
+
     def _run(self, agent, fallback, prompt: str, role: str):
         """Run with SDK transient retries, structured repair, audit, and opt-in fallback."""
         started = time.monotonic()
@@ -233,7 +260,11 @@ class AgentEngine:
         last_error = None
         for repair_attempt in range(self.structured_retries + 1):
             try:
-                run_result = Runner.run_sync(agent, prompt, max_turns=self.max_turns)
+                attempt_prompt = (
+                    prompt if repair_attempt == 0
+                    else self._structured_repair_prompt(prompt, agent)
+                )
+                run_result = Runner.run_sync(agent, attempt_prompt, max_turns=self.max_turns)
                 usage = usage_payload(run_result, run_id=run_id, provider=provider,
                                       model=self._model_id(agent))
                 if usage:
@@ -254,7 +285,6 @@ class AgentEngine:
                     "run_id": run_id,
                     "error": str(exc)[:500],
                 })
-                prompt += "\n\nYour previous response failed schema validation. Return only a complete response matching the required structured output."
             except (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError) as exc:
                 last_error = exc
                 self.reporter("model.provider_error", {

@@ -20,7 +20,7 @@ def engine_for_test(events, fallback=False):
 def test_invalid_structured_output_is_repaired_once(monkeypatch):
     events = []
     engine = engine_for_test(events)
-    local_agent = SimpleNamespace(model=engine.local_model)
+    local_agent = SimpleNamespace(model=engine.local_model, output_type=TaskProposal)
     calls = []
 
     def run_sync(agent, prompt, max_turns):
@@ -32,7 +32,10 @@ def test_invalid_structured_output_is_repaired_once(monkeypatch):
     monkeypatch.setattr("digital_company.agents.Runner.run_sync", run_sync)
     assert engine._run(local_agent, None, "original", "ceo") == {"valid": True}
     assert len(calls) == 2
-    assert "failed schema validation" in calls[1]
+    assert calls[0] == "original"
+    assert "STRUCTURED OUTPUT REPAIR" in calls[1]
+    assert '"research_market"' in calls[1]
+    assert "```" not in calls[1]
     assert [event for event, _ in events] == [
         "model.started", "model.structured_output_error", "model.succeeded",
     ]
