@@ -8,6 +8,8 @@ from digital_company.email_service import ApprovalMailer, approval_token, verify
 from digital_company.models import ActionType, TaskProposal
 from digital_company.store import CompanyStore
 from digital_company.registry import CompanyRegistry
+from digital_company.integration_connectors import secret_name
+from digital_company.runtime_secrets import save_secret
 from digital_company import web
 
 
@@ -100,6 +102,48 @@ def test_daily_brief_batches_all_pending_decisions(monkeypatch):
     assert "Daily CEO brief" in body
     assert "Market research completed" in body
     assert body.count("Review decision") == 2
+
+
+def test_mailer_uses_selected_write_only_smtp_connection(tmp_path: Path, monkeypatch):
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout):
+            assert (host, port, timeout) == ("smtp.example.com", 587, 15)
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def starttls(self): self.started_tls = True
+        def login(self, username, password):
+            assert (username, password) == ("sender@example.com", "app-password")
+        def send_message(self, message): sent.append(message)
+
+    monkeypatch.setenv("COMPANY_DATA_DIR", str(tmp_path / "runtime-data"))
+    monkeypatch.setenv("APPROVAL_SIGNING_SECRET", "test-secret")
+    monkeypatch.setattr("digital_company.email_service.smtplib.SMTP", FakeSMTP)
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Send approval", 0)
+    connection_id = "approval-smtp"
+    save_secret(secret_name(connection_id, "username"), "sender@example.com")
+    save_secret(secret_name(connection_id, "password"), "app-password")
+    store.upsert_integration_connection({
+        "id": connection_id, "name": "Approval SMTP", "adapter": "smtp",
+        "provider": "Mail provider", "location": "cloud",
+        "base_url": "smtp://smtp.example.com:587", "capabilities": ["email.send"],
+        "config": {"security": "starttls", "authentication": "password"},
+        "enabled": True,
+    })
+    store.set_email_settings(
+        True, ["owner@example.com"], "Acme AI", connection_id,
+        "sender@example.com", "https://telekt.example.com",
+    )
+
+    count = ApprovalMailer().send(
+        "company-1", "approval-1", proposal(), "Owner decision", store.get_email_settings(),
+    )
+
+    assert count == 1
+    assert sent[0]["From"] == "Acme AI <sender@example.com>"
+    assert "https://telekt.example.com/approval/" in str(sent[0])
 
 
 def test_email_review_get_is_safe_and_decline_comment_is_required(tmp_path: Path, monkeypatch):

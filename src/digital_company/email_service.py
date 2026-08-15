@@ -8,14 +8,31 @@ import html
 import os
 import smtplib
 import time
+from dataclasses import dataclass
 from email.message import EmailMessage
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
+from digital_company.integration_connectors import secret_name
 from digital_company.models import TaskProposal
+from digital_company.runtime_secrets import get_secret
+
+
+@dataclass(frozen=True)
+class SMTPTransport:
+    """Resolved transport containing secrets only for the lifetime of one send."""
+
+    host: str
+    port: int
+    security: str
+    authentication: str
+    username: str
+    password: str
+    sender: str
+    public_url: str
 
 
 def approval_token(company_id: str, approval_id: str, recipient: str, expires: int) -> str:
-    secret = os.getenv("APPROVAL_SIGNING_SECRET", "")
+    secret = os.getenv("APPROVAL_SIGNING_SECRET", "") or get_secret("APPROVAL_SIGNING_SECRET") or ""
     if not secret:
         raise RuntimeError("APPROVAL_SIGNING_SECRET is not configured")
     body = f"{company_id}:{approval_id}:{recipient.lower()}:{expires}".encode()
@@ -35,35 +52,79 @@ def verify_approval_token(company_id: str, approval_id: str, recipient: str, exp
 class ApprovalMailer:
     """Send polished approval requests through configured SMTP infrastructure."""
 
+    @staticmethod
+    def _transport(settings: dict, require_callback: bool = True) -> SMTPTransport:
+        connection = settings.get("smtp_connection")
+        if connection:
+            if connection.get("adapter") != "smtp" or connection.get("status") != "ready":
+                raise RuntimeError("Selected SMTP connection is not ready")
+            parsed = urlparse(connection["base_url"])
+            config = connection.get("config") or {}
+            security = str(config.get("security") or (
+                "ssl" if parsed.scheme == "smtps" else "starttls"
+            )).lower()
+            authentication = str(config.get("authentication", "password")).lower()
+            username = get_secret(secret_name(connection["id"], "username")) or ""
+            password = get_secret(secret_name(connection["id"], "password")) or ""
+            if authentication == "password" and (not username or not password):
+                raise RuntimeError("Selected SMTP connection is missing username or password")
+            sender = str(settings.get("from_address", "")).strip()
+            public_url = str(settings.get("public_base_url", "")).strip().rstrip("/")
+            transport = SMTPTransport(
+                host=parsed.hostname or "",
+                port=parsed.port or (465 if security == "ssl" else 587),
+                security=security,
+                authentication=authentication,
+                username=username,
+                password=password,
+                sender=sender,
+                public_url=public_url,
+            )
+        else:
+            transport = SMTPTransport(
+                host=os.getenv("SMTP_HOST", ""),
+                port=int(os.getenv("SMTP_PORT", "587")),
+                security="starttls" if os.getenv("SMTP_TLS", "true").lower() == "true" else "plain",
+                authentication="password" if os.getenv("SMTP_USERNAME", "") else "none",
+                username=os.getenv("SMTP_USERNAME", ""),
+                password=os.getenv("SMTP_PASSWORD", ""),
+                sender=str(settings.get("from_address") or os.getenv("SMTP_FROM", "")).strip(),
+                public_url=str(
+                    settings.get("public_base_url") or os.getenv("PUBLIC_BASE_URL", "")
+                ).strip().rstrip("/"),
+            )
+        if not transport.host or not transport.sender:
+            raise RuntimeError("SMTP host and sender address are required")
+        if require_callback and not transport.public_url:
+            raise RuntimeError("A public callback URL is required for approval links")
+        return transport
+
+    @staticmethod
+    def _deliver(message: EmailMessage, transport: SMTPTransport) -> None:
+        smtp_class = smtplib.SMTP_SSL if transport.security == "ssl" else smtplib.SMTP
+        with smtp_class(transport.host, transport.port, timeout=15) as smtp:
+            if transport.security == "starttls":
+                smtp.starttls()
+            if transport.authentication == "password":
+                smtp.login(transport.username, transport.password)
+            smtp.send_message(message)
+
     def send(self, company_id: str, approval_id: str, proposal: TaskProposal, reason: str, settings: dict) -> int:
         if not settings["enabled"] or not settings["approvers"]:
             return 0
-        host = os.getenv("SMTP_HOST", "")
-        public_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-        sender = os.getenv("SMTP_FROM", "")
-        if not host or not public_url or not sender:
-            raise RuntimeError("SMTP_HOST, SMTP_FROM, and PUBLIC_BASE_URL are required")
-        port = int(os.getenv("SMTP_PORT", "587"))
-        username = os.getenv("SMTP_USERNAME", "")
-        password = os.getenv("SMTP_PASSWORD", "")
-        use_tls = os.getenv("SMTP_TLS", "true").lower() == "true"
+        transport = self._transport(settings)
         sent = 0
         expires = int(time.time()) + int(os.getenv("APPROVAL_LINK_TTL_HOURS", "72")) * 3600
         for recipient in settings["approvers"]:
             token = approval_token(company_id, approval_id, recipient, expires)
-            url = f"{public_url}/approval/{quote(company_id)}/{quote(approval_id)}?email={quote(recipient)}&expires={expires}&token={token}"
+            url = f"{transport.public_url}/approval/{quote(company_id)}/{quote(approval_id)}?email={quote(recipient)}&expires={expires}&token={token}"
             msg = EmailMessage()
             msg["Subject"] = f"Approval required: {proposal.title}"
-            msg["From"] = f'{settings["sender_name"]} <{sender}>'
+            msg["From"] = f'{settings["sender_name"]} <{transport.sender}>'
             msg["To"] = recipient
             msg.set_content(f"Approval required for {proposal.title}. Review safely at: {url}")
             msg.add_alternative(self._html(proposal, reason, url, settings["sender_name"]), subtype="html")
-            with smtplib.SMTP(host, port, timeout=15) as smtp:
-                if use_tls:
-                    smtp.starttls()
-                if username:
-                    smtp.login(username, password)
-                smtp.send_message(msg)
+            self._deliver(msg, transport)
             sent += 1
         return sent
 
@@ -71,9 +132,7 @@ class ApprovalMailer:
         """Send one executive digest with recipient-specific links for every decision."""
         if not settings["enabled"] or not settings["approvers"]:
             return 0
-        host, public_url, sender = os.getenv("SMTP_HOST", ""), os.getenv("PUBLIC_BASE_URL", "").rstrip("/"), os.getenv("SMTP_FROM", "")
-        if not host or not public_url or not sender:
-            raise RuntimeError("SMTP_HOST, SMTP_FROM, and PUBLIC_BASE_URL are required")
+        transport = self._transport(settings)
         sent = 0
         expires = int(time.time()) + int(os.getenv("APPROVAL_LINK_TTL_HOURS", "72")) * 3600
         for recipient in settings["approvers"]:
@@ -83,7 +142,7 @@ class ApprovalMailer:
                 proposal = item["proposal"]
                 review = item.get("review") or {}
                 token = approval_token(company_id, item["id"], recipient, expires)
-                url = f"{public_url}/approval/{quote(company_id)}/{quote(item['id'])}?email={quote(recipient)}&expires={expires}&token={token}"
+                url = f"{transport.public_url}/approval/{quote(company_id)}/{quote(item['id'])}?email={quote(recipient)}&expires={expires}&token={token}"
                 review_text = str(review.get("content", ""))[:12_000]
                 plain.append(
                     f"- {proposal.title}: {url}" +
@@ -107,18 +166,33 @@ class ApprovalMailer:
                 f"Content ready for review: {approvals[0]['proposal'].title}"
                 if content_review else f"Daily CEO brief: {settings['sender_name']}"
             )
-            msg["From"] = f'{settings["sender_name"]} <{sender}>'
+            msg["From"] = f'{settings["sender_name"]} <{transport.sender}>'
             msg["To"] = recipient
             result_text = "\n".join(f"- {title}" for title in summary["results"]) or "- No new completed work"
             result_html = "".join(f"<li>{html.escape(title)}</li>" for title in summary["results"]) or "<li>No new completed work</li>"
             msg.set_content(f"Status: {summary['control']}\nSpent: EUR {summary['spent']:.2f}\nRemaining: EUR {summary['remaining']:.2f}\nResults:\n{result_text}\nPending approvals: {len(approvals)}\n" + "\n".join(plain))
             msg.add_alternative(f'''<!doctype html><html><body style="background:#0b0f15;color:#eaf1f8;font-family:Arial;padding:28px"><div style="max-width:650px;margin:auto"><div style="color:#4ee3a1">DAILY CEO BRIEF</div><h1>{html.escape(settings["sender_name"])}</h1><p>Status: <b>{html.escape(summary["control"])}</b> · Spent: <b>€{summary["spent"]:.2f}</b> · Remaining: <b>€{summary["remaining"]:.2f}</b></p><h2>Results</h2><ul>{result_html}</ul><h2>Decisions ({len(approvals)})</h2>{''.join(cards) or '<p>No decisions required today.</p>'}<p style="color:#667386;font-size:12px">This is the single routine stakeholder digest for the current 24-hour window.</p></div></body></html>''', subtype="html")
-            with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=15) as smtp:
-                if os.getenv("SMTP_TLS", "true").lower() == "true": smtp.starttls()
-                if os.getenv("SMTP_USERNAME", ""): smtp.login(os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD", ""))
-                smtp.send_message(msg)
+            self._deliver(msg, transport)
             sent += 1
         return sent
+
+    def send_test(self, recipient: str, settings: dict) -> None:
+        """Send only after an operator explicitly presses the SMTP test button."""
+        transport = self._transport(settings, require_callback=False)
+        msg = EmailMessage()
+        msg["Subject"] = f"Telekt SMTP test: {settings['sender_name']}"
+        msg["From"] = f'{settings["sender_name"]} <{transport.sender}>'
+        msg["To"] = recipient
+        msg.set_content(
+            "SMTP is configured correctly for this Telekt company. "
+            "No approval or company action was performed."
+        )
+        msg.add_alternative(
+            '<div style="font-family:Arial;padding:24px"><h2>SMTP works</h2>'
+            '<p>This Telekt company can deliver approval messages. No company action was performed.</p></div>',
+            subtype="html",
+        )
+        self._deliver(msg, transport)
 
     @staticmethod
     def _html(proposal: TaskProposal, reason: str, url: str, company: str) -> str:

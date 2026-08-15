@@ -78,6 +78,15 @@ class EmailSettingsIn(BaseModel):
     enabled: bool = False
     approvers: list[str] = Field(default_factory=list, max_length=50)
     sender_name: str = Field(default="Digital Company", min_length=1, max_length=100)
+    smtp_connection_id: str | None = Field(default=None, max_length=100)
+    from_address: str = Field(default="", max_length=254)
+    public_base_url: str = Field(default="", max_length=2000)
+
+
+class EmailTestIn(BaseModel):
+    """Explicit recipient for a user-triggered SMTP transport test."""
+
+    recipient: str = Field(min_length=3, max_length=254)
 
 
 class IntegrationSettingsIn(BaseModel):

@@ -63,3 +63,15 @@ def test_company_creation_and_agent_configuration_are_separate():
     assert 'name="model_mode"' not in html
     assert "filter(x=>x.enabled)" in agents
     assert "renderAgentOverview" in agents
+
+
+def test_email_settings_expose_smtp_connection_and_explicit_test_action():
+    html = (web.STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    settings = (web.STATIC_DIR / "settings-ui.js").read_text(encoding="utf-8")
+
+    assert 'id="emailSmtpConnection"' in html
+    assert 'id="emailFromAddress"' in html
+    assert 'id="emailPublicBaseUrl"' in html
+    assert "smtp_connection_id:emailSmtpConnection.value||null" in settings
+    assert "'/api/settings/email/test'" in settings
+    assert "createSmtpConnection" in settings

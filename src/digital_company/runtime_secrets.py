@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-ALLOWED_SECRETS = {"OPENAI_API_KEY"}
+ALLOWED_SECRETS = {"OPENAI_API_KEY", "APPROVAL_SIGNING_SECRET"}
 
 
 def _allowed(name: str) -> bool:

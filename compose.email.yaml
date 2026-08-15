@@ -2,6 +2,14 @@ services:
   app:
     environment:
       APPROVAL_SIGNING_SECRET: ${APPROVAL_SIGNING_SECRET:-local-development-only-change-me}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8421}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: ${SMTP_FROM:-approvals@digital-company.local}
+      SMTP_TLS: "false"
+    depends_on:
+      mailpit:
+        condition: service_started
 
   worker:
     environment:

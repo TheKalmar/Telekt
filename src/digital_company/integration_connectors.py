@@ -79,6 +79,16 @@ def validate_connection(value: dict) -> dict:
     config = dict(value.get("config") or {})
     if len(str(config)) > 4000:
         raise ValueError("Integration configuration is too large")
+    if adapter == "smtp":
+        security = str(config.get("security") or ("ssl" if parsed.scheme == "smtps" else "starttls")).lower()
+        authentication = str(config.get("authentication", "password")).lower()
+        if security not in {"starttls", "ssl", "plain"}:
+            raise ValueError("SMTP security must be starttls, ssl, or plain")
+        if authentication not in {"password", "none"}:
+            raise ValueError("SMTP authentication must be password or none")
+        if parsed.scheme == "smtps" and security != "ssl":
+            raise ValueError("An smtps:// URL must use ssl security")
+        config = {**config, "security": security, "authentication": authentication}
     return {
         "id": connection_id,
         "name": name,

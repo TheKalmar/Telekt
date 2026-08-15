@@ -6,6 +6,8 @@ import asyncio
 import os
 import html
 import re
+import secrets
+import smtplib
 import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -26,6 +28,7 @@ from digital_company.api_models import (
     CompanyBriefIn,
     CompanyCreateIn,
     EmailSettingsIn,
+    EmailTestIn,
     HandoffDecisionIn,
     IntegrationSettingsIn,
     IntegrationConnectionIn,
@@ -42,7 +45,7 @@ from digital_company.browser_client import (
 )
 from digital_company.registry import CompanyRegistry
 from digital_company.store import CompanyStore
-from digital_company.email_service import verify_approval_token
+from digital_company.email_service import ApprovalMailer, verify_approval_token
 from digital_company.temporal_gateway import TemporalCommandError, signal_agent, signal_company
 from digital_company.workspace import WorkspaceRuntime
 from digital_company.runtime_secrets import apply_runtime_secrets, save_secret
@@ -834,8 +837,66 @@ def save_email_settings(payload: EmailSettingsIn):
             emails.append(email)
     if payload.enabled and not emails:
         raise HTTPException(400, "At least one approver email is required")
+    if "\r" in payload.sender_name or "\n" in payload.sender_name:
+        raise HTTPException(400, "Sender name must be one line")
+    from_address = payload.from_address.strip().lower()
+    if from_address and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", from_address):
+        raise HTTPException(400, "Invalid sender email address")
+    public_base_url = payload.public_base_url.strip().rstrip("/")
+    if public_base_url:
+        parsed = urlparse(public_base_url)
+        local_http = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+        if (
+            (parsed.scheme != "https" and not local_http)
+            or not parsed.hostname or parsed.username or parsed.password
+            or parsed.query or parsed.fragment
+        ):
+            raise HTTPException(
+                400,
+                "Public callback URL must be HTTPS (localhost HTTP is allowed for local testing)",
+            )
     with store_scope() as store:
-        return store.set_email_settings(payload.enabled, emails, payload.sender_name)
+        connection = None
+        if payload.smtp_connection_id:
+            try:
+                connection = store.get_integration_connection(payload.smtp_connection_id)
+            except KeyError as exc:
+                raise HTTPException(400, "Selected SMTP connection does not exist") from exc
+            if connection["adapter"] != "smtp":
+                raise HTTPException(400, "Selected connection is not an SMTP transport")
+            if connection["status"] != "ready":
+                raise HTTPException(400, f"Selected SMTP connection is not ready: {connection['status']}")
+            if "email.send" not in connection["capabilities"]:
+                raise HTTPException(400, "SMTP connection must grant the email.send capability")
+        if payload.enabled and connection and (not from_address or not public_base_url):
+            raise HTTPException(400, "Sender address and public callback URL are required")
+        if payload.enabled and not connection and not (
+            os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM")
+        ):
+            raise HTTPException(400, "Choose a ready SMTP connection before enabling email")
+        if payload.enabled and not (
+            os.getenv("APPROVAL_SIGNING_SECRET") or get_secret("APPROVAL_SIGNING_SECRET")
+        ):
+            save_secret("APPROVAL_SIGNING_SECRET", secrets.token_urlsafe(48))
+        return store.set_email_settings(
+            payload.enabled, emails, payload.sender_name,
+            payload.smtp_connection_id, from_address, public_base_url,
+        )
+
+
+@app.post("/api/settings/email/test")
+def test_email_settings(payload: EmailTestIn):
+    """Send one inert message after an explicit operator request."""
+    recipient = payload.recipient.strip().lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", recipient):
+        raise HTTPException(400, "Invalid test recipient email")
+    try:
+        with store_scope() as store:
+            settings = store.get_email_settings()
+        ApprovalMailer().send_test(recipient, settings)
+    except (OSError, RuntimeError, smtplib.SMTPException) as exc:
+        raise HTTPException(409, f"SMTP test failed: {exc}") from exc
+    return {"status": "sent", "recipient": recipient}
 
 
 @app.get("/api/settings/integrations")

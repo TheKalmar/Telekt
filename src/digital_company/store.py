@@ -765,8 +765,12 @@ class CompanyStore:
                 for field in fields
             }
             configured = row["status"] == "configured"
-            ready = configured and all(secret_status.values())
             config = json.loads(row["config_json"])
+            no_auth_smtp = (
+                row["adapter"] == "smtp"
+                and str(config.get("authentication", "password")).lower() == "none"
+            )
+            ready = configured and (no_auth_smtp or all(secret_status.values()))
             authorization_required = (
                 row["adapter"] == "oauth2_authorization_code"
                 and not bool(config.get("authorized"))
@@ -1562,25 +1566,52 @@ class CompanyStore:
     def get_email_settings(self) -> dict:
         """Return non-secret, per-company email notification preferences."""
         profile = self.get_profile()
+        connection_id = profile.get("approval_smtp_connection_id") or None
+        connection = None
+        if connection_id:
+            try:
+                candidate = self.get_integration_connection(connection_id)
+                if candidate["adapter"] == "smtp":
+                    connection = candidate
+            except KeyError:
+                connection = None
         return {
             "enabled": bool(profile.get("approval_email_enabled", False)),
             "approvers": profile.get("approval_emails", []),
             "sender_name": profile.get("approval_sender_name", profile.get("name", "Digital Company")),
+            "smtp_connection_id": connection_id,
+            "smtp_connection": connection,
+            "from_address": profile.get("approval_from_address", ""),
+            "public_base_url": profile.get("approval_public_base_url", ""),
+            "environment_fallback_ready": bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM")),
+            "signing_secret_configured": bool(
+                os.getenv("APPROVAL_SIGNING_SECRET") or get_secret("APPROVAL_SIGNING_SECRET")
+            ),
         }
 
-    def set_email_settings(self, enabled: bool, approvers: list[str], sender_name: str) -> dict:
-        """Persist recipient preferences; SMTP credentials remain environment secrets."""
+    def set_email_settings(
+        self, enabled: bool, approvers: list[str], sender_name: str,
+        smtp_connection_id: str | None = None, from_address: str = "",
+        public_base_url: str = "",
+    ) -> dict:
+        """Persist recipients and a reference to write-only SMTP credentials."""
         profile = self.get_profile()
         profile["approval_email_enabled"] = enabled
         profile["approval_emails"] = approvers
         profile["approval_sender_name"] = sender_name.strip() or profile.get("name", "Digital Company")
+        profile["approval_smtp_connection_id"] = smtp_connection_id or ""
+        profile["approval_from_address"] = from_address.strip()
+        profile["approval_public_base_url"] = public_base_url.strip().rstrip("/")
         self.db.execute(
             "INSERT INTO company_profile(id,profile_json,updated_at) VALUES(1,?,?) "
             "ON CONFLICT(id) DO UPDATE SET profile_json=excluded.profile_json,updated_at=excluded.updated_at",
             (json.dumps(profile), utc_now()),
         )
         self.db.commit()
-        self.audit("email.settings", {"enabled": enabled, "approver_count": len(approvers)})
+        self.audit("email.settings", {
+            "enabled": enabled, "approver_count": len(approvers),
+            "smtp_connection_id": smtp_connection_id,
+        })
         return self.get_email_settings()
 
     def get_control(self) -> dict:

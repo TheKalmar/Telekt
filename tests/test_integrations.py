@@ -155,3 +155,20 @@ def test_smtp_is_a_provider_neutral_mailbox_connection(tmp_path: Path, monkeypat
     assert connection["status"] == "ready"
     assert connection["adapter"] == "smtp"
     assert connection["secret_status"] == {"username": True, "password": True}
+
+
+def test_local_smtp_can_be_ready_without_authentication(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("COMPANY_DATA_DIR", str(tmp_path / "runtime-data"))
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Preview email locally", 0)
+
+    connection = store.upsert_integration_connection({
+        "id": "mailpit", "name": "Local Mailpit", "adapter": "smtp",
+        "provider": "Mailpit", "location": "local",
+        "base_url": "smtp://mailpit:1025", "capabilities": ["email.send"],
+        "config": {"security": "plain", "authentication": "none"},
+        "enabled": True,
+    })
+
+    assert connection["status"] == "ready"
+    assert connection["secret_status"] == {"username": False, "password": False}
