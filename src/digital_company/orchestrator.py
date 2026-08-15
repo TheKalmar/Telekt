@@ -114,16 +114,45 @@ class CompanyOrchestrator:
         examples = "\n".join(
             f"- {value}" for value in playbook["document"]["reference_examples"]
         ) or "- None"
+        browser_grant = self._browser_grant()
+        browser_permissions = set(browser_grant.get("permissions", [])) if browser_grant else set()
+        can_take_over = bool(
+            browser_grant
+            and "request_human_takeover" in browser_permissions
+            and (browser_grant.get("config") or {}).get("allow_human_takeover", True)
+        )
+        browser_boundary = (
+            "Browser Automation permissions: " + ", ".join(sorted(browser_permissions)) + ". "
+            + (
+                "A human takeover may be requested only for a genuine human-only checkpoint that blocks all "
+                "useful autonomous work."
+                if can_take_over else
+                "Human takeover is disabled; never propose REQUEST_HUMAN_HANDOFF."
+            )
+            if browser_grant else
+            "Browser Automation is not granted. Never propose BROWSER_OPERATE or REQUEST_HUMAN_HANDOFF. "
+            "Prefer granted APIs and autonomous work; if no useful path remains, stop with a precise reason "
+            "instead of interrupting the owner."
+        )
         return (
             f"Name: {self.agent['name']}\nType: {self.agent['agent_type']}\nRole: {self.agent['role']}\n"
             f"Purpose: {self.agent['purpose']}\nInstructions: {self.agent['instructions']}\n"
             f"Autonomy mode: {self.agent['autonomy_mode']}\nGranted capability plugins:\n{capabilities}\n"
             f"Durable owner playbook v{playbook['version']} (authoritative):\n{durable_rules}\n"
             f"Reference examples:\n{examples}\nNotes: {playbook['document']['notes']}\n"
+            f"Browser boundary: {browser_boundary}\n"
             "Stay inside this mandate. A configured URL or connection reference is not proof that login or "
-            "credentials are ready. Use only granted permissions, and request one precise human checkpoint "
-            "only when no useful autonomous work remains."
+            "credentials are ready. Use only granted permissions."
         )
+
+    def _browser_grant(self, permission: str | None = None) -> dict | None:
+        """Return this agent's explicit browser grant; other plugins never imply it."""
+        return next((
+            item for item in self.plugins
+            if item["plugin_id"] == "browser-automation"
+            and item["status"] == "enabled"
+            and (permission is None or permission in item.get("permissions", []))
+        ), None)
 
     def _agent_context(self) -> dict | None:
         if not self.agent:
@@ -141,6 +170,11 @@ class CompanyOrchestrator:
         return self.store.get_agent(self.agent_id)["status"] if self.agent_id else self.store.get_control()["state"]
 
     def _report(self, event: str, payload: dict) -> None:
+        payload = dict(payload)
+        if self.agent:
+            payload.setdefault("agent_id", self.agent_id)
+            payload.setdefault("agent_name", self.agent["name"])
+            payload.setdefault("agent_role", self.agent["role"])
         if event == "model.usage":
             self.store.record_model_usage(payload)
         self.store.audit(event, payload)
@@ -316,6 +350,11 @@ class CompanyOrchestrator:
             return self._execute_wordpress_api(
                 task_id, proposal, cycle, wordpress_grant,
             )
+        browser_grant = self._browser_grant("operate_browser")
+        if self.agent_id and not browser_grant:
+            raise RuntimeError(
+                "Browser Automation plugin is disabled for this agent; configure the required API plugin instead"
+            )
         hostname = urlparse(proposal.handoff_url).hostname
         if not hostname:
             raise RuntimeError("Browser mission has no valid starting hostname")
@@ -332,7 +371,12 @@ class CompanyOrchestrator:
             "url": proposal.handoff_url, "allowed_domains": allowed_domains,
             "mutation_scope": mutation_scope,
         })
-        max_steps = max(1, min(30, int(__import__("os").getenv("COMPUTER_USE_MAX_STEPS", "12"))))
+        configured_steps = (
+            (browser_grant.get("config") or {}).get("max_steps") if browser_grant else None
+        )
+        max_steps = max(1, min(30, int(
+            configured_steps or __import__("os").getenv("COMPUTER_USE_MAX_STEPS", "12")
+        )))
         self.store.audit("browser.mission_started", {
             "task_id": task_id, "objective": proposal.objective,
             "allowed_domains": allowed_domains, "max_steps": max_steps,
@@ -356,6 +400,14 @@ class CompanyOrchestrator:
             mutation_scope=mutation_scope,
         )
         if outcome.status in {"waiting_human", "blocked"}:
+            if browser_grant and not (browser_grant.get("config") or {}).get(
+                "allow_human_takeover", True,
+            ):
+                self.store.fail_task(task_id, outcome.summary)
+                return {
+                    "status": "failed", "cycles": cycle, "task_id": task_id,
+                    "reason": "Human takeover is disabled in the Browser Automation plugin",
+                }
             handoff = proposal.model_copy(update={
                 "handoff_instructions": [
                     outcome.summary,

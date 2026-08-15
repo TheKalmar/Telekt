@@ -21,11 +21,11 @@ POC history, including:
 - provider-neutral local and remote model connections;
 - durable polling worker, approvals, email approvals, and stakeholder chat;
 - build/buy/integrate/manual strategy and platform capability records;
-- isolated persistent Chromium runtime and manual browser cockpit;
-- guided operator handoffs that open the frozen URL in the cockpit, explain why
-  the CEO stopped, list exact steps/evidence, and require a completion or blocker result;
-- governed OpenAI Computer Use missions with live dashboard visibility;
-- automatic human takeover for login, CAPTCHA, 2FA, safety checks, and form submission.
+- optional agent-scoped Browser Automation plugin backed by isolated persistent
+  Chromium and a manual cockpit;
+- guided operator handoffs only when the selected agent has explicitly granted
+  `request_human_takeover`; disabling the plugin hides its browser/intervention UI;
+- governed OpenAI Computer Use missions with live dashboard visibility when granted;
 - internal network-isolated execution runtime with idempotent per-company Git checkpoints;
 - deterministic autonomy reliability scenarios and operator recovery from committed state.
 
@@ -187,11 +187,13 @@ Policy edits create immutable versions; approval quorum and expiry are durable,
 while contract signing remains an invariant denial. See `docs/company-policy.md`.
 Do not move external side effects into prompts.
 
-For an approved Browser Mission, the worker opens an isolated single-domain
+For a Browser Mission authorized by that agent's `browser-automation` plugin,
+the worker opens an isolated single-domain
 Chromium session, requests structured actions from the Responses API `computer`
 tool, executes a bounded batch, audits it, and returns a fresh screenshot. The
 live dashboard shows objective, step, last action, status, and screenshot.
 Pause/Stop are cooperative and take effect between model calls/browser actions.
+WordPress uses its REST connection and never implies browser authority.
 
 ## 6. Source map
 

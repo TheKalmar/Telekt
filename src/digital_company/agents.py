@@ -416,7 +416,7 @@ class AgentEngine:
         context["active_agent"] = agent_context
         prompt = "Current canonical company state:\n" + json.dumps(context, separators=(",", ":"))
         return self._run(
-            self.ceo, self.ceo_fallback, prompt, "ceo",
+            self.ceo, self.ceo_fallback, prompt, "planner" if agent_context else "ceo",
             output_validator=self._task_proposal_validator,
         )
 

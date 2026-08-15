@@ -185,7 +185,8 @@ class CompanyStore:
         spent = float(self.db.execute("SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger").fetchone()["value"])
         spent += float(self.db.execute("SELECT COALESCE(SUM(estimated_budget_cost),0) AS value FROM model_usage").fetchone()["value"])
         tasks = [dict(row) for row in self.db.execute(
-            "SELECT action,title,specialist,status,result_json FROM tasks WHERE status='completed' ORDER BY created_at"
+            "SELECT action,title,specialist,status,result_json,agent_id FROM tasks "
+            "WHERE status='completed' ORDER BY created_at"
         )]
         for task in tasks:
             if task["result_json"]:
@@ -693,6 +694,13 @@ class CompanyStore:
             ),
         )
         self.db.commit()
+        if plugin_id == "browser-automation" and (
+            "request_human_takeover" not in permissions
+            or not config.get("allow_human_takeover", True)
+        ):
+            self.supersede_agent_handoffs(
+                agent_id, "Browser Automation human takeover was disabled",
+            )
         self.audit("agent.plugin_granted", {
             "agent_id": agent_id, "plugin_id": plugin_id, "permissions": permissions,
         })
@@ -706,7 +714,39 @@ class CompanyStore:
         self.db.commit()
         if changed != 1:
             raise KeyError(plugin_id)
+        if plugin_id == "browser-automation":
+            self.supersede_agent_handoffs(
+                agent_id, "Browser Automation was disabled for this agent",
+            )
         self.audit("agent.plugin_revoked", {"agent_id": agent_id, "plugin_id": plugin_id})
+
+    def supersede_agent_handoffs(self, agent_id: str, reason: str) -> int:
+        """Clear obsolete browser takeovers without waking or restarting the agent."""
+        now = utc_now()
+        rows = list(self.db.execute(
+            "SELECT h.id,h.task_id FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
+            "WHERE h.status='pending' AND t.agent_id=?", (agent_id,),
+        ))
+        for row in rows:
+            self.db.execute(
+                "UPDATE human_handoffs SET status='superseded',outcome=?,resolved_at=? WHERE id=?",
+                (reason, now, row["id"]),
+            )
+            self.db.execute(
+                "UPDATE tasks SET status='superseded',completed_at=? WHERE id=? "
+                "AND status IN ('proposed','waiting_human')", (now, row["task_id"]),
+            )
+        if rows:
+            self.db.execute(
+                "UPDATE agent_instances SET status='stopped',updated_at=? "
+                "WHERE id=? AND status='waiting_human'", (now, agent_id),
+            )
+        self.db.commit()
+        if rows:
+            self.audit("agent.handoffs_superseded", {
+                "agent_id": agent_id, "count": len(rows), "reason": reason,
+            })
+        return len(rows)
 
     def get_profile(self) -> dict:
         """Return user-configurable company creation parameters."""

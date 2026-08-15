@@ -19,6 +19,26 @@ BUILTIN_PLUGINS = [
         "instructions": "Cite direct sources, distinguish facts from inference, and never invent demand or evidence.",
     },
     {
+        "id": "browser-automation",
+        "name": "Browser Automation",
+        "version": "1.0.0",
+        "description": "Operate an isolated browser and request a human takeover only at login, CAPTCHA, 2FA or equivalent checkpoints.",
+        "tools": ["browser"],
+        "connection_kinds": [],
+        "permissions": ["operate_browser", "request_human_takeover"],
+        "config_schema": {
+            "type": "object",
+            "properties": {
+                "max_steps": {
+                    "type": "integer", "default": 12, "minimum": 1, "maximum": 30,
+                },
+                "allow_human_takeover": {"type": "boolean", "default": True},
+            },
+            "additionalProperties": False,
+        },
+        "instructions": "Use browser automation only when a granted API cannot do the job. Human takeover is limited to checkpoints the agent cannot lawfully or safely complete.",
+    },
+    {
         "id": "workspace-content",
         "name": "Content Workspace",
         "version": "1.0.0",
@@ -39,9 +59,9 @@ BUILTIN_PLUGINS = [
     {
         "id": "wordpress-content",
         "name": "WordPress Content Publishing",
-        "version": "1.1.0",
-        "description": "Inspect posts, create unpublished drafts, preview them, and publish only with granted authority.",
-        "tools": ["browser", "platform_api"],
+        "version": "1.2.0",
+        "description": "Use the WordPress REST API to inspect posts, create unpublished drafts, manage media/SEO, and publish only with granted authority.",
+        "tools": ["platform_api"],
         "connection_kinds": ["http_basic", "http_bearer", "http_api_key"],
         "permissions": [
             "read_posts", "write_drafts", "manage_terms", "upload_media",
@@ -124,6 +144,8 @@ ACTION_PLUGIN_REQUIREMENTS = {
     "save_content_draft": ("wordpress-content", "write_drafts"),
     "publish_content": ("wordpress-content", "publish_posts"),
     "external_outreach": ("email-communication", "send_email"),
+    "browser_operate": ("browser-automation", "operate_browser"),
+    "request_human_handoff": ("browser-automation", "request_human_takeover"),
 }
 
 
@@ -133,16 +155,17 @@ def authorize_action(action: str, grants: list[dict]) -> tuple[bool, str]:
     requirement = ACTION_PLUGIN_REQUIREMENTS.get(action)
     if requirement:
         plugin_id, permission = requirement
-        allowed = any(
-            item.get("plugin_id") == plugin_id and permission in item.get("permissions", [])
-            for item in enabled
-        )
-        if not allowed:
+        matching_grant = next((
+            item for item in enabled
+            if item.get("plugin_id") == plugin_id
+            and permission in item.get("permissions", [])
+        ), None)
+        if not matching_grant:
             return False, f"Action requires {plugin_id}:{permission}"
-    if action == "browser_operate" and not any(
-        "browser" in item.get("definition", {}).get("tools", []) for item in enabled
-    ):
-        return False, "Browser operation requires an enabled browser-capable plugin"
+        if action == "request_human_handoff" and not (
+            matching_grant.get("config") or {}
+        ).get("allow_human_takeover", True):
+            return False, "Human takeover is disabled in the browser-automation plugin"
     return True, "Action is inside enabled plugin grants"
 
 

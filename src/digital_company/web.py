@@ -164,21 +164,31 @@ def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
     """Evaluate whether the selected company can safely start its configured loop."""
     settings = store.get_settings()
     cache_key = str(store.path)
-    signature = (settings["updated_at"], bool(os.getenv("OPENAI_API_KEY")),
-                 bool(os.getenv("ANTHROPIC_API_KEY")))
+    browser_required = any(
+        plugin.get("plugin_id") == "browser-automation"
+        and plugin.get("status") == "enabled"
+        and "operate_browser" in plugin.get("permissions", [])
+        for agent in store.list_agents()
+        for plugin in agent.get("plugins", [])
+    )
+    signature = (
+        settings["updated_at"], bool(os.getenv("OPENAI_API_KEY")),
+        bool(os.getenv("ANTHROPIC_API_KEY")), browser_required,
+    )
     cached = _preflight_cache.get(cache_key)
     if not force and cached and cached[1] == signature and time.monotonic() - cached[0] < 5:
         return cached[2]
     worker = registry.worker_status()
     connection_registry = ModelConnectionRegistry()
     connections = connection_registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
-    browser = browser_health()
+    browser = browser_health() if browser_required else {"status": "disabled"}
     execution = execution_health()
     result = evaluate_runtime_preflight(
         settings,
         worker=worker,
         connections=connections,
         browser=browser,
+        browser_required=browser_required,
         execution=execution,
         connection_check=lambda connection, verify: connection_ready(connection, verify),
     )

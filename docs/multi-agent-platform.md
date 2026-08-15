@@ -54,8 +54,8 @@ A direct chat directive supersedes stale work only for its target agent.
 ## Runtime and accounting boundaries
 
 `AgentLoopWorkflowV1` uses a stable workflow ID derived from company and agent.
-Start, pause, resume, stop, approvals, human handoffs, and direct stakeholder
-messages are Temporal signals. Activity execution keys and task ownership are
+Start, pause, resume, stop, approvals, optional human handoffs, and direct
+stakeholder messages are Temporal signals. Activity execution keys and task ownership are
 agent-scoped so a retry cannot execute another agent's task.
 
 Before each model call the runtime checks the agent's remaining token allowance.
@@ -111,9 +111,12 @@ when the agent has `publish_posts`.
    that connection, choose permissions, and save.
 
 Credentials are write-only and stored in the local runtime secret vault. They
-are never returned by the API or placed in agent prompts. If no REST connection
-is attached, the plugin can use the isolated browser path and stop for login,
-CAPTCHA, 2FA, terms, identity, or other human-only checkpoints.
+are never returned by the API or placed in agent prompts. WordPress no longer
+implies browser authority: without a ready REST connection its operation fails
+closed. Browser use and human takeover require a separate, agent-scoped
+`browser-automation` grant with `operate_browser` and/or
+`request_human_takeover`. Disabling that grant removes browser actions and new
+human handoffs for only that agent.
 
 ## G&K migration included in the development state
 
@@ -121,8 +124,9 @@ The current G&K company profile contains organization facts only. A stopped
 `Content & SEO` agent owns the legal-content mandate, uses the configured cloud
 connection, has a 250,000-token limit and a EUR 10 model-spend limit, and has Web
 Research, Content Workspace, WordPress Content, AI Featured Images, and Email
-grants. Its WordPress REST connection and write-only Application Password are
-configured. Historical stale attention items were superseded, not deleted.
+grants. Browser Automation is intentionally not granted. Its WordPress REST
+connection and write-only Application Password are configured. Historical stale
+attention items were superseded, not deleted.
 
 The agent also has a versioned owner playbook. A chat message sent as `memory`
 creates a new immutable playbook version; ordinary directives and questions do

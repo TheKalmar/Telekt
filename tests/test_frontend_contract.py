@@ -10,14 +10,14 @@ def test_frontend_loads_domain_modules_in_dependency_order():
     sources = re.findall(r'<script src="([^"]+)"', html)
 
     assert sources == [
-        "/assets/i18n.js?v=10",
+        "/assets/i18n.js?v=11",
         "/assets/ui-core.js?v=9",
-        "/assets/agent-ui.js?v=10",
+        "/assets/agent-ui.js?v=11",
         "/assets/settings-ui.js?v=9",
         "/assets/browser-ui.js?v=9",
     ]
     assert html.index("/assets/ui-core.js?v=9") < html.index("/assets/settings-ui.js?v=9")
-    assert html.index("/assets/ui-core.js?v=9") < html.index("/assets/agent-ui.js?v=10")
+    assert html.index("/assets/ui-core.js?v=9") < html.index("/assets/agent-ui.js?v=11")
     assert "function openPolicySettings" not in html
     assert "function openBrowserCockpit" not in html
 
@@ -63,6 +63,20 @@ def test_company_creation_and_agent_configuration_are_separate():
     assert 'name="model_mode"' not in html
     assert "filter(x=>x.enabled)" in agents
     assert "renderAgentOverview" in agents
+
+
+def test_browser_ui_is_agent_plugin_scoped_and_operations_use_agent_identity():
+    html = (web.STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    plugins = (web.STATIC_DIR.parent / "capability_plugins.py").read_text(encoding="utf-8")
+
+    assert '"id": "browser-automation"' in plugins
+    assert '"tools": ["platform_api"]' in plugins
+    assert 'id="humanHandoffPanel"' in html
+    assert "plugin.plugin_id==='browser-automation'" in html
+    assert "activeRun?.agent_name||activeAgent?.name" in html
+    assert "roleLabel(t.specialist,t.agent_id)" in html
+    assert "JSON.stringify(eventPayload(e))" in html
+    assert "CEO" not in html
 
 
 def test_email_settings_expose_smtp_connection_and_explicit_test_action():

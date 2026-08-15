@@ -28,7 +28,9 @@ AGENT_TYPES = [
         "default_purpose": "Advance company goals through evidence-backed, reversible decisions.",
         "default_token_limit": 250_000,
         "default_spend_limit_eur": 30,
-        "suggested_plugins": ["web-research", "email-communication"],
+        "suggested_plugins": [
+            "web-research", "email-communication", "browser-automation",
+        ],
         "allowed_actions": None,
         "config_schema": {
             "type": "object",

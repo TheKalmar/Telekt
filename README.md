@@ -40,13 +40,16 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Stakeholder directives that supersede stale approvals
 - Cooperative start, pause, and stop controls
 - Operations dashboard with active agent, model latency, failures, fallbacks, task states, and audit events
-- Runtime readiness gate for worker, selected model connections, credentials, and browser service
+- Runtime readiness gate for worker, selected model connections and credentials;
+  browser readiness appears only when an agent has the Browser Automation plugin
 - Confined per-company artifact workspace with atomic writes, validation, hashes, inventory, and downloads
 - Internal network-isolated execution service with idempotent per-company Git checkpoints
 - Build/buy/integrate/manual strategy gate with durable platform capability tracking
 - Provider-neutral HTTP/OAuth/webhook connections with write-only credentials and idempotent operation preparation
-- Human takeover missions for login, CAPTCHA, 2FA, identity, terms, and other manual checkpoints
-- Isolated persistent Chromium cockpit with domain allowlists, screenshots, manual clicks, and direct typing
+- Optional per-agent Browser Automation and human takeover permissions for login,
+  CAPTCHA, 2FA, identity, terms, and other manual checkpoints
+- Isolated persistent Chromium cockpit with domain allowlists, screenshots,
+  manual clicks, and direct typing, hidden when no agent has the plugin
 - Local web control plane
 - Local Ollama model support through an OpenAI-compatible API
 - Automatic adoption of the original single-company POC database

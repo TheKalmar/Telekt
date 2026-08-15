@@ -2,9 +2,10 @@
 
 ## Goal
 
-The CEO should acquire capabilities rather than wait for a hardcoded connector.
-For any external system it can choose among documented API integration, bounded
-browser operation, manual stakeholder action, outsourced work, or custom build.
+An agent may acquire capabilities rather than wait for a hardcoded connector,
+but browser access is never implicit. For any external system it can choose
+among its granted API integration, bounded browser operation, manual stakeholder
+action, outsourced work, or custom build.
 
 ## Browser mission contract
 
@@ -13,8 +14,9 @@ per company, an HTTPS/domain boundary, screenshots, manual coordinate clicks,
 keyboard input, navigation, and checkpoint detection. Browser profiles persist
 in a Docker volume so cookies can survive container replacement.
 
-The cockpit supports human operation and the worker can run an approved Computer
-Use mission. It receives a mission, not unrestricted internet access:
+The cockpit supports human operation and the worker can run a Computer Use
+mission only when that agent has the `browser-automation:operate_browser` grant.
+It receives a mission, not unrestricted internet access:
 
 - objective and allowed domains;
 - allowed read/write actions;
@@ -31,16 +33,18 @@ and production changes remain separate governed actions.
 After approval, the worker opens an isolated single-domain session, executes each
 returned action, captures a fresh screenshot, and returns it as
 `computer_call_output`. Every action is audited. The mission stops at
-`COMPUTER_USE_MAX_STEPS` (12 by default), before Enter/Return form submission, at
+the plugin's configured `max_steps` (12 by default), before Enter/Return form submission, at
 any model safety check, or whenever login, CAPTCHA, or verification is detected.
 The page is always treated as untrusted input.
 
 ## Human takeover
 
 When a browser reaches login, CAPTCHA, 2FA, identity verification, terms, payment
-details, or another account-owner checkpoint, it stops. The dashboard shows:
+details, or another account-owner checkpoint, it stops. A handoff is created only
+when the same agent has `request_human_takeover` and `allow_human_takeover=true`.
+The dashboard then shows:
 
-- why the CEO needs help;
+- why the agent needs help;
 - the exact HTTP(S) URL;
 - click-level numbered steps that name the account, project, resource, permission,
   or configuration screen involved;
@@ -55,8 +59,8 @@ isolated Chromium runtime. Required product and identity-provider hostnames are
 part of the frozen handoff contract. The normal-browser link remains available
 for sites that reject headless Chromium.
 
-The returned result becomes canonical CEO context and wakes the worker. A
-cancelled handoff also requires the operator to explain the blocker so the CEO
+The returned result becomes canonical agent context and wakes the worker. A
+cancelled handoff also requires the operator to explain the blocker so the agent
 can choose a different route. CAPTCHA must never be bypassed, outsourced to a
 solving service, or misrepresented as completed.
 
@@ -77,6 +81,6 @@ The intended sequence is deliberately separated:
 6. Return competing offers to the CEO/stakeholder.
 7. Require approval for hiring, spend, terms, and contracts.
 
-This lets the CEO be resourceful without granting it authority to impersonate the
+This lets an agent be resourceful without granting it authority to impersonate the
 stakeholder, create accounts under false identity, accept platform terms, or spend
 capital silently.

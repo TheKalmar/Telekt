@@ -177,6 +177,7 @@ def test_ceo_context_uses_compact_skill_routing_metadata(monkeypatch):
     )
     def capture_run(agent, fallback, prompt, role, output_validator=None):
         captured["prompt"] = prompt
+        captured["role"] = role
         return output_validator(expected) if output_validator else expected
 
     engine._run = capture_run
@@ -192,6 +193,10 @@ def test_ceo_context_uses_compact_skill_routing_metadata(monkeypatch):
 
     assert "very long instructions" not in captured["prompt"]
     assert '"id":"market"' in captured["prompt"]
+    assert captured["role"] == "ceo"
+
+    engine.decide(snapshot, {"id": "agent-1", "name": "Content & SEO"})
+    assert captured["role"] == "planner"
 
 
 def test_adapter_model_id_is_used_for_usage_accounting():

@@ -6,6 +6,7 @@ from digital_company.store import CompanyStore
 from digital_company.agent_templates import action_is_allowed
 from digital_company.capability_plugins import authorize_action
 from digital_company.integration_connectors import secret_name
+from digital_company.models import ActionType, TaskProposal
 from digital_company.runtime_secrets import save_secret
 
 
@@ -154,6 +155,64 @@ def test_plugin_permissions_are_runtime_authority_not_prompt_decoration(tmp_path
     allowed, reason = authorize_action("publish_content", grants)
     assert allowed is False
     assert "publish_posts" in reason
+
+
+def test_browser_and_human_takeover_require_their_own_agent_plugin(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent())
+    store.grant_agent_plugin(agent["id"], "wordpress-content", {
+        "permissions": ["read_posts", "write_drafts"],
+        "config": {
+            "site_url": "https://gkadvokati.com",
+            "posts_url": "https://gkadvokati.com/wp-admin/post-new.php",
+        },
+    })
+    grants = store.list_agent_plugins(agent["id"])
+
+    assert authorize_action("browser_operate", grants)[0] is False
+    assert authorize_action("request_human_handoff", grants)[0] is False
+    assert "browser" not in next(
+        item for item in grants if item["plugin_id"] == "wordpress-content"
+    )["definition"]["tools"]
+
+    store.grant_agent_plugin(agent["id"], "browser-automation", {
+        "permissions": ["operate_browser", "request_human_takeover"],
+        "config": {"max_steps": 8, "allow_human_takeover": False},
+    })
+    grants = store.list_agent_plugins(agent["id"])
+    assert authorize_action("browser_operate", grants)[0] is True
+    assert authorize_action("request_human_handoff", grants)[0] is False
+
+    store.grant_agent_plugin(agent["id"], "browser-automation", {
+        "permissions": ["operate_browser", "request_human_takeover"],
+        "config": {"max_steps": 8, "allow_human_takeover": True},
+    })
+    grants = store.list_agent_plugins(agent["id"])
+    assert authorize_action("request_human_handoff", grants)[0] is True
+
+
+def test_disabling_browser_plugin_supersedes_agent_handoff_without_restarting(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent())
+    store.grant_agent_plugin(agent["id"], "browser-automation", {
+        "permissions": ["operate_browser", "request_human_takeover"],
+        "config": {"max_steps": 8, "allow_human_takeover": True},
+    })
+    proposal = TaskProposal(
+        action=ActionType.REQUEST_HUMAN_HANDOFF,
+        title="Complete login", objective="Access a protected editor",
+        rationale="The account owner must authenticate",
+        expected_evidence=["Authenticated editor"], specialist="operations",
+        execution_mode="manual", handoff_url="https://example.com/login",
+        handoff_instructions=["Sign in"], resume_evidence=["Confirm access"],
+    )
+    task_id = store.create_task(proposal, "waiting_human", agent_id=agent["id"])
+    store.create_handoff(task_id, proposal)
+
+    store.revoke_agent_plugin(agent["id"], "browser-automation")
+
+    assert store.list_handoffs()[0]["status"] == "superseded"
+    assert store.get_agent(agent["id"])["status"] == "stopped"
 
 
 def test_temporal_activity_identity_cannot_cross_agent_boundary(tmp_path: Path):
