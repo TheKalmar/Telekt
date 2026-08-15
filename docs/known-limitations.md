@@ -77,7 +77,10 @@ An agent can evaluate build/buy/integrate/manual paths, request a platform, and
 reason over durable capability readiness. Provider-neutral HTTP, SMTP, OAuth,
 and webhook profiles store capability grants, write-only credential references,
 and stable idempotency keys for prepared operations. WordPress REST draft
-creation and publication are implemented with grant/capability checks.
+creation and publication are implemented with grant/capability checks, taxonomy
+resolution, AIOSEO title/description metadata, and optional AI featured-image
+generation/upload. Telekt's deterministic quality score is not a replacement
+for every proprietary AIOSEO/TruSEO analysis rule.
 Agent-specific SMTP dispatch, OAuth exchanges, generic adapter dispatch, API
 health verification, catalog operations, incoming webhooks, and supplier
 marketplace connectors are not implemented yet.

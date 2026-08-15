@@ -10,14 +10,14 @@ def test_frontend_loads_domain_modules_in_dependency_order():
     sources = re.findall(r'<script src="([^"]+)"', html)
 
     assert sources == [
-        "/assets/i18n.js?v=9",
+        "/assets/i18n.js?v=10",
         "/assets/ui-core.js?v=9",
-        "/assets/agent-ui.js?v=9",
+        "/assets/agent-ui.js?v=10",
         "/assets/settings-ui.js?v=9",
         "/assets/browser-ui.js?v=9",
     ]
     assert html.index("/assets/ui-core.js?v=9") < html.index("/assets/settings-ui.js?v=9")
-    assert html.index("/assets/ui-core.js?v=9") < html.index("/assets/agent-ui.js?v=9")
+    assert html.index("/assets/ui-core.js?v=9") < html.index("/assets/agent-ui.js?v=10")
     assert "function openPolicySettings" not in html
     assert "function openBrowserCockpit" not in html
 

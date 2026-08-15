@@ -179,6 +179,12 @@ def _advance_agent_sync(company_id: str, agent_id: str, execution_key: str) -> d
             store.complete_agent_run(run_id, run_status, result.get("error"))
             result["agent_id"] = agent_id
             store.complete_activity(execution_key, result)
+            # Content-review delivery follows committed state. SMTP failures are
+            # audited and never roll back finished agent work.
+            contact_hours = max(1, int(os.getenv("STAKEHOLDER_CONTACT_INTERVAL_HOURS", "24")))
+            result["stakeholder_notification"] = StakeholderBriefService(
+                ApprovalMailer(), contact_interval_hours=contact_hours,
+            ).send_if_due(company_id, store)
             return result
     finally:
         portfolio.close()

@@ -120,6 +120,12 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   trigger_type TEXT NOT NULL, execution_key TEXT,
   started_at TEXT NOT NULL, completed_at TEXT, error TEXT
 );
+CREATE TABLE IF NOT EXISTS agent_playbook_versions (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL,
+  document_json TEXT NOT NULL, status TEXT NOT NULL, source_message_id TEXT,
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+  UNIQUE(agent_id, version)
+);
 CREATE INDEX IF NOT EXISTS tasks_status_created ON tasks(status, created_at);
 CREATE INDEX IF NOT EXISTS approvals_status_created ON approvals(status, created_at);
 CREATE INDEX IF NOT EXISTS approvals_task ON approvals(task_id);
@@ -131,6 +137,7 @@ CREATE INDEX IF NOT EXISTS activities_status_updated ON activity_executions(stat
 CREATE INDEX IF NOT EXISTS agent_instances_status ON agent_instances(status, updated_at);
 CREATE INDEX IF NOT EXISTS agent_plugin_grants_agent ON agent_plugin_grants(agent_id, status);
 CREATE INDEX IF NOT EXISTS agent_runs_agent_started ON agent_runs(agent_id, started_at);
+CREATE INDEX IF NOT EXISTS agent_playbook_agent_status ON agent_playbook_versions(agent_id, status);
 """
 
 
@@ -144,6 +151,7 @@ SCHEMA_VERSIONS = (
     (7, "Multi-agent instances and reusable capability plugins"),
     (8, "Typed agent templates and scoped runtime context"),
     (9, "Agent-scoped stakeholder messages and intervention queues"),
+    (10, "Versioned agent playbooks and approval delivery tracking"),
 )
 
 
@@ -186,6 +194,7 @@ def migrate_company_database(db, now: str) -> None:
     _add_column(db, "activity_executions", "agent_id", "TEXT")
     _add_column(db, "agent_instances", "agent_type", "TEXT NOT NULL DEFAULT 'custom'")
     _add_column(db, "stakeholder_messages", "agent_id", "TEXT")
+    _add_column(db, "approvals", "notified_at", "TEXT")
     db.execute(
         "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) "
         "VALUES(1,'stopped','Ready',?)",

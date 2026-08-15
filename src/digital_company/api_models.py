@@ -12,6 +12,14 @@ class MessageIn(BaseModel):
     kind: str = "directive"
 
 
+class AgentPlaybookIn(BaseModel):
+    """Durable owner-approved operating rules for one agent."""
+
+    rules: list[str] = Field(default_factory=list, max_length=100)
+    reference_examples: list[str] = Field(default_factory=list, max_length=30)
+    notes: str = Field(default="", max_length=12_000)
+
+
 class ModelModeIn(BaseModel):
     """Per-company model router selection."""
 

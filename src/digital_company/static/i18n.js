@@ -105,6 +105,18 @@
     ,"config.companyTab":"Firma","config.agentsTab":"Agenti","config.pluginsTab":"Pluginovi","config.connectionsTab":"Konekcije","config.legacySkillsTab":"Legacy skillovi","config.companyProfile":"Profil firme","config.companyProfileBody":"Identitet, djelatnost, tržište, jurisdikcija, web i kontekst koji dijele svi agenti.","config.editCompany":"Uredi firmu","config.newCompany":"Nova firma","config.organization":"Organizacija","config.organizationBody":"Agenti imaju nezavisne modele, limite, pluginove i životne cikluse.","config.manageAgents":"Upravljaj agentima","config.modelConnections":"Konekcije modela","config.modelConnectionsBody":"Podesi tehnologiju adaptera, endpoint, proizvoljan model ID i routing.","config.configureRouting":"Podesi routing",
     "email.title":"Email approvali","email.subtitle":"Svaki primalac dobija svoj potpisani jednokratni link za pregled.","email.notifications":"Obavještenja","email.disabled":"Isključena","email.enabled":"Uključena","email.senderName":"Ime pošiljaoca","email.smtpConnection":"SMTP konekcija","email.fromAddress":"Email adresa pošiljaoca","email.callbackUrl":"Javni callback URL","email.approvers":"Email adrese odobravalaca (jedna po redu)","email.howTitle":"Kako ovo radi","email.howBody":"Telekt šalje draft ili dnevni brief na navedene adrese. Link vodi na Telekt approval stranicu, zato callback mora biti javno dostupan HTTPS URL. Za lokalni Mailpit može localhost.","email.testRecipient":"Primalac testa","email.transportTest":"Test transporta","email.sendTest":"Pošalji testni email","email.newSmtp":"+ Podesi SMTP konekciju","email.save":"Sačuvaj email postavke","email.envFallback":"Postojeći .env transport","email.chooseSmtp":"Izaberi SMTP konekciju","email.credentialStored":"spremljen","email.credentialMissing":"nedostaje","email.passwordHidden":"Lozinke se nikada ne prikazuju.","email.envStatus":"Koristi se postojeća .env SMTP konfiguracija. Imenovana SMTP konekcija je preporučena radi jasnog company setupa.","email.missingStatus":"SMTP još nije podešen. Klikni ‘Podesi SMTP konekciju’.","email.testAddressRequired":"Unesi adresu na koju želiš test.","email.testSending":"Čuvam postavke i šaljem inertni testni email…","email.testSent":"Testni email je poslan na","email.testInert":"Nije izvršena nijedna approval akcija.","email.smtpGmailHelp":"Gmail: koristi punu email adresu i Google App Password, ne običnu lozinku. Mailpit: smtp://mailpit:1025, local, plain security i bez autentifikacije."
   });
+  Object.assign(catalogs.en, {
+    "agent.playbook":"Playbook","agent.remember":"Remember as permanent rule",
+    "agent.playbookTitle":"Durable agent playbook","agent.playbookBody":"Versioned owner rules are loaded on every future run.",
+    "agent.rules":"Rules (one per paragraph)","agent.references":"Reference example URLs (one per line)",
+    "agent.playbookNotes":"Additional notes","agent.savePlaybook":"Save new playbook version"
+  });
+  Object.assign(catalogs.sr, {
+    "agent.playbook":"Playbook","agent.remember":"Zapamti kao trajno pravilo",
+    "agent.playbookTitle":"Trajni playbook agenta","agent.playbookBody":"Verzionisana pravila vlasnika učitavaju se pri svakom budućem pokretanju.",
+    "agent.rules":"Pravila (jedno po pasusu)","agent.references":"Referentni primjeri / URL-ovi (jedan po redu)",
+    "agent.playbookNotes":"Dodatne napomene","agent.savePlaybook":"Sačuvaj novu verziju playbooka"
+  });
   const labels = {en:"English",sr:"Srpski"};
   let language = localStorage.getItem(STORAGE_KEY) || (navigator.language.toLowerCase().startsWith("sr") ? "sr" : "en");
   if (!catalogs[language]) language = "en";

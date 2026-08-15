@@ -34,7 +34,7 @@ def test_company_migration_creates_explicit_legacy_ceo(tmp_path: Path):
     store = initialized_store(tmp_path)
     agents = store.list_agents()
 
-    assert store.schema_version() == 9
+    assert store.schema_version() == 10
     assert agents[0]["id"] == "legacy-ceo"
     assert agents[0]["role"] == "ceo"
     assert agents[0]["agent_type"] == "ceo"

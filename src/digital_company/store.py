@@ -189,6 +189,8 @@ class CompanyStore:
                 result = json.loads(task.pop("result_json"))
                 if result.get("artifact_content"):
                     result["artifact_content"] = "[stored artifact omitted from decision context]"
+                if (result.get("content_package") or {}).get("html_content"):
+                    result["content_package"]["html_content"] = "[stored content HTML omitted from decision context]"
                 task["result"] = result
         failures = [dict(row) for row in self.db.execute(
             "SELECT id,action,title,specialist,status,result_json,completed_at FROM tasks "
@@ -363,8 +365,91 @@ class CompanyStore:
                     "WHERE t.agent_id=? AND h.status='pending'", (item["id"],),
                 ).fetchone()["value"]),
             }
+            playbook = self.get_agent_playbook(item["id"])
+            item["playbook"] = {
+                "version": playbook["version"],
+                "rule_count": len(playbook["document"]["rules"]),
+                "updated_at": playbook.get("created_at"),
+            }
             result.append(item)
         return result
+
+    def get_agent_playbook(self, agent_id: str) -> dict:
+        """Return the active immutable playbook or an empty version-zero document."""
+        if not self.db.execute("SELECT 1 FROM agent_instances WHERE id=?", (agent_id,)).fetchone():
+            raise KeyError(agent_id)
+        row = self.db.execute(
+            "SELECT * FROM agent_playbook_versions WHERE agent_id=? AND status='active' "
+            "ORDER BY version DESC LIMIT 1", (agent_id,),
+        ).fetchone()
+        if not row:
+            return {
+                "agent_id": agent_id, "version": 0, "status": "empty",
+                "document": {"rules": [], "reference_examples": [], "notes": ""},
+                "created_by": None, "created_at": None, "source_message_id": None,
+            }
+        item = dict(row)
+        item["document"] = json.loads(item.pop("document_json"))
+        return item
+
+    def set_agent_playbook(
+        self, agent_id: str, document: dict, created_by: str = "dashboard",
+        source_message_id: str | None = None,
+    ) -> dict:
+        """Create a new immutable playbook version and retain prior versions for audit."""
+        self.get_agent(agent_id)
+        rules = [str(value).strip() for value in document.get("rules", []) if str(value).strip()]
+        examples = [
+            str(value).strip() for value in document.get("reference_examples", [])
+            if str(value).strip()
+        ]
+        normalized = {
+            "rules": list(dict.fromkeys(rules))[:100],
+            "reference_examples": list(dict.fromkeys(examples))[:30],
+            "notes": str(document.get("notes", "")).strip()[:12_000],
+        }
+        if any(len(value) > 4000 for value in normalized["rules"]):
+            raise ValueError("A playbook rule cannot exceed 4000 characters")
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            if getattr(self.db, "is_postgres", False):
+                self.db.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("playbook:" + agent_id,))
+            row = self.db.execute(
+                "SELECT COALESCE(MAX(version),0) AS value FROM agent_playbook_versions WHERE agent_id=?",
+                (agent_id,),
+            ).fetchone()
+            version = int(row["value"]) + 1
+            now = utc_now()
+            self.db.execute(
+                "UPDATE agent_playbook_versions SET status='superseded' "
+                "WHERE agent_id=? AND status='active'", (agent_id,),
+            )
+            self.db.execute(
+                "INSERT INTO agent_playbook_versions(id,agent_id,version,document_json,status,"
+                "source_message_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    str(uuid4()), agent_id, version,
+                    json.dumps(normalized, ensure_ascii=False), "active", source_message_id,
+                    created_by.strip() or "dashboard", now,
+                ),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        self.audit("agent.playbook_version_created", {
+            "agent_id": agent_id, "version": version,
+            "source_message_id": source_message_id, "rule_count": len(normalized["rules"]),
+        })
+        return self.get_agent_playbook(agent_id)
+
+    def append_agent_playbook_rule(self, agent_id: str, rule: str, source_message_id: str) -> dict:
+        current = self.get_agent_playbook(agent_id)
+        document = current["document"]
+        return self.set_agent_playbook(
+            agent_id, {**document, "rules": [*document["rules"], rule]},
+            created_by="stakeholder_chat", source_message_id=source_message_id,
+        )
 
     def get_agent(self, agent_id: str) -> dict:
         item = next((agent for agent in self.list_agents() if agent["id"] == agent_id), None)
@@ -1303,15 +1388,34 @@ class CompanyStore:
         rows = self.db.execute(query, tuple(params))
         for row in rows:
             result = json.loads(row["result_json"])
+            package = result.get("content_package")
             if result.get("artifact_path") and result.get("artifact_content"):
-                return {
+                value = {
                     "task_id": row["id"], "title": row["title"],
                     "path": result["artifact_path"], "content": result["artifact_content"],
+                    "content_package": package,
+                    "quality_report": result.get("quality_report"),
                     "summary": result.get("summary", ""),
                     "evidence": result.get("evidence", []),
                     "sources": result.get("sources", []),
                     "completed_at": row["completed_at"],
                 }
+                save_query = (
+                    "SELECT result_json FROM tasks WHERE action=? AND status='completed' "
+                    "AND result_json IS NOT NULL "
+                )
+                save_params: list = [ActionType.SAVE_CONTENT_DRAFT.value]
+                if agent_id:
+                    save_query += "AND agent_id=? "
+                    save_params.append(agent_id)
+                save_query += "ORDER BY completed_at DESC LIMIT 10"
+                for save_row in self.db.execute(save_query, tuple(save_params)):
+                    save_result = json.loads(save_row["result_json"])
+                    publication = save_result.get("publication_state")
+                    if publication and publication.get("source_task_id") == row["id"]:
+                        value["publication_state"] = publication
+                        break
+                return value
         return None
 
     def _approval_review(self, item: dict) -> dict | None:
@@ -1335,6 +1439,16 @@ class CompanyStore:
             return True
         sent = datetime.fromisoformat(row["created_at"])
         return (datetime.now(timezone.utc) - sent).total_seconds() >= hours * 3600
+
+    def mark_approvals_notified(self, approval_ids: list[str]) -> None:
+        """Record successful delivery so a new content approval is emailed once."""
+        now = utc_now()
+        for approval_id in approval_ids:
+            self.db.execute(
+                "UPDATE approvals SET notified_at=? WHERE id=? AND notified_at IS NULL",
+                (now, approval_id),
+            )
+        self.db.commit()
 
     def list_approvals(self) -> list[dict]:
         """Return approval history, newest first."""
@@ -1641,7 +1755,7 @@ class CompanyStore:
         A directive changes the decision context, so an approval produced before
         that intervention must not remain executable with stale assumptions.
         """
-        if kind not in {"directive", "question"}:
+        if kind not in {"directive", "question", "memory"}:
             raise ValueError("Invalid stakeholder message kind")
         if agent_id:
             self.get_agent(agent_id)
@@ -1649,7 +1763,11 @@ class CompanyStore:
         self.db.execute(
             "INSERT INTO stakeholder_messages(id,kind,content,status,response,created_at,addressed_at,agent_id) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            (message_id, kind, content, "pending", None, utc_now(), None, agent_id),
+            (
+                message_id, kind, content, "addressed" if kind == "memory" else "pending",
+                "Saved to the durable agent playbook." if kind == "memory" else None,
+                utc_now(), utc_now() if kind == "memory" else None, agent_id,
+            ),
         )
         if kind == "directive":
             task_scope = " AND t.agent_id=?" if agent_id else ""

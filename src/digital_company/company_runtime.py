@@ -39,10 +39,18 @@ class StakeholderBriefService:
             return {"status": "not_needed"}
 
         approvals = store.pending_approval_details()
+        fresh_content_approvals = [
+            item for item in approvals
+            if getattr(item.get("proposal"), "action", None) is not None
+            and item["proposal"].action.value == "publish_content"
+            and not item.get("notified_at")
+        ]
+        if fresh_content_approvals:
+            approvals = fresh_content_approvals
         snapshot = None if approvals else store.snapshot()
         if not approvals and not snapshot.completed_tasks:
             return {"status": "not_needed"}
-        if not store.stakeholder_notification_allowed(self.contact_interval_hours):
+        if not fresh_content_approvals and not store.stakeholder_notification_allowed(self.contact_interval_hours):
             return {"status": "rate_limited"}
 
         try:
@@ -61,8 +69,12 @@ class StakeholderBriefService:
             if not isinstance(sent_count, int) or isinstance(sent_count, bool):
                 raise TypeError("Daily brief mailer must return an integer recipient count")
             if sent_count:
+                if hasattr(store, "mark_approvals_notified"):
+                    store.mark_approvals_notified([item["id"] for item in approvals])
                 store.audit("stakeholder.notification_sent", {
-                    "channel": "daily_ceo_brief", "recipients": sent_count,
+                    "channel": "content_review" if fresh_content_approvals else "daily_ceo_brief",
+                    "recipients": sent_count,
+                    "approval_ids": [item["id"] for item in approvals],
                 })
             return {
                 "status": "sent" if sent_count else "not_configured",

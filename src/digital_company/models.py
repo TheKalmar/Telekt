@@ -111,6 +111,42 @@ class TaskProposal(TaskProposalDraft):
         return self
 
 
+class FeaturedImageSpec(BaseModel):
+    """Reviewable instructions for a content-specific featured image."""
+
+    prompt: str = Field(min_length=20, max_length=2000)
+    alt_text: str = Field(min_length=3, max_length=250)
+    filename: str = Field(min_length=3, max_length=120)
+
+
+class ContentPackage(BaseModel):
+    """Structured publication payload produced before any CMS side effect."""
+
+    title: str = Field(min_length=5, max_length=200)
+    slug: str = Field(min_length=3, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    focus_keyword: str = Field(min_length=2, max_length=160)
+    secondary_keywords: list[Annotated[str, Field(max_length=160)]] = Field(
+        default_factory=list, max_length=12,
+    )
+    seo_title: str = Field(min_length=5, max_length=100)
+    meta_description: str = Field(min_length=40, max_length=320)
+    excerpt: str = Field(min_length=20, max_length=500)
+    categories: list[Annotated[str, Field(max_length=100)]] = Field(min_length=1, max_length=5)
+    tags: list[Annotated[str, Field(max_length=100)]] = Field(min_length=2, max_length=15)
+    html_content: str = Field(min_length=200, max_length=200_000)
+    internal_links: list[Annotated[str, Field(max_length=500)]] = Field(default_factory=list, max_length=15)
+    cta: str = Field(min_length=10, max_length=1000)
+    jurisdiction_notes: str = Field(default="", max_length=4000)
+    source_urls: list[Annotated[str, Field(max_length=1000)]] = Field(min_length=2, max_length=30)
+    featured_image: FeaturedImageSpec | None = None
+
+    @model_validator(mode="after")
+    def direct_sources_only(self):
+        if any(urlparse(value).scheme not in {"http", "https"} for value in self.source_urls):
+            raise ValueError("Content sources must be direct HTTP(S) URLs")
+        return self
+
+
 class SpecialistResult(BaseModel):
     """Validated output returned by a specialist agent."""
     status: Literal["completed", "failed"]
@@ -119,6 +155,9 @@ class SpecialistResult(BaseModel):
     sources: list[str] = Field(default_factory=list)
     artifact_path: str | None = None
     artifact_content: str | None = None
+    content_package: ContentPackage | None = None
+    quality_report: dict | None = None
+    publication_state: dict | None = None
     recommendation: str
 
 

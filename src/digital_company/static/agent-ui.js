@@ -44,7 +44,7 @@ function renderCapabilityPlugins(){
 }
 
 window.addEventListener('languagechange',()=>{
-  ['agentModal','agentPluginsModal','pluginGrantModal','agentChatModal'].forEach(id=>document.getElementById(id)?.remove());
+  ['agentModal','agentPluginsModal','pluginGrantModal','agentChatModal','agentPlaybookModal'].forEach(id=>document.getElementById(id)?.remove());
   renderAgentOverview(window.agentInstances||[]);
   renderAgents();
   renderCapabilityPlugins();
@@ -84,3 +84,38 @@ function goToConnectionsFromPlugin(){closePluginGrant();closeAgentPlugins();open
 function closePluginGrant(){pluginGrantModal.classList.remove('open')}
 async function savePluginGrant(event){event.preventDefault();const permissions=[...document.querySelectorAll('[data-plugin-permission]:checked')].map(x=>x.value),config={};document.querySelectorAll('[data-plugin-config]').forEach(x=>{if(x.value.trim())config[x.dataset.pluginConfig]=x.value.trim()});try{await api(`/api/agents/${window.pluginAgentId}/plugins/${window.pluginGrantId}`,{method:'PUT',body:JSON.stringify({connection_id:document.getElementById('pluginConnection')?.value||null,permissions,config})});closePluginGrant();closeAgentPlugins();await refreshAgents();openAgentPlugins(window.pluginAgentId)}catch(error){pluginGrantHelp.textContent=error.message}}
 async function revokePlugin(pluginId){if(!confirm(agentText('agent.disableConfirm')))return;try{await api(`/api/agents/${window.pluginAgentId}/plugins/${pluginId}`,{method:'DELETE'});closeAgentPlugins();await refreshAgents();openAgentPlugins(window.pluginAgentId)}catch(error){alert(error.message)}}
+
+/* Durable playbook UI is intentionally separate from free-form chat history. */
+function ensurePlaybookModal(){
+  if(document.getElementById('agentPlaybookModal'))return;
+  document.body.insertAdjacentHTML('beforeend',`<div id="agentPlaybookModal" class="modal"><div class="modalCard"><div class="modalTop"><div><h2 id="agentPlaybookTitle">${agentText('agent.playbookTitle')}</h2><div class="statusDetail">${agentText('agent.playbookBody')} <span id="agentPlaybookVersion"></span></div></div><button class="btn" onclick="closeAgentPlaybook()">${agentText('agent.close')}</button></div><form onsubmit="saveAgentPlaybook(event)"><div class="field"><label>${agentText('agent.rules')}</label><textarea id="agentPlaybookRules" style="min-height:220px"></textarea></div><div class="field"><label>${agentText('agent.references')}</label><textarea id="agentPlaybookReferences"></textarea></div><div class="field"><label>${agentText('agent.playbookNotes')}</label><textarea id="agentPlaybookNotes"></textarea></div><div id="agentPlaybookHelp" class="statusDetail"></div><div class="formActions"><button type="button" class="btn" onclick="closeAgentPlaybook()">${agentText('agent.cancel')}</button><button class="btn primary">${agentText('agent.savePlaybook')}</button></div></form></div></div>`);
+}
+async function openAgentPlaybook(agentId){
+  ensurePlaybookModal();window.playbookAgentId=agentId;agentPlaybookModal.classList.add('open');
+  agentPlaybookHelp.textContent=agentText('agent.loading');
+  try{const value=await api(`/api/agents/${agentId}/playbook`),doc=value.document||{};agentPlaybookVersion.textContent=`v${value.version||0}`;agentPlaybookRules.value=(doc.rules||[]).join('\n\n');agentPlaybookReferences.value=(doc.reference_examples||[]).join('\n');agentPlaybookNotes.value=doc.notes||'';agentPlaybookHelp.textContent=''}catch(error){agentPlaybookHelp.textContent=error.message}
+}
+function closeAgentPlaybook(){agentPlaybookModal.classList.remove('open')}
+async function saveAgentPlaybook(event){
+  event.preventDefault();const paragraphs=value=>value.split(/\n\s*\n/).map(x=>x.trim()).filter(Boolean),lines=value=>value.split('\n').map(x=>x.trim()).filter(Boolean);
+  try{const result=await api(`/api/agents/${window.playbookAgentId}/playbook`,{method:'PUT',body:JSON.stringify({rules:paragraphs(agentPlaybookRules.value),reference_examples:lines(agentPlaybookReferences.value),notes:agentPlaybookNotes.value.trim()})});agentPlaybookVersion.textContent=`v${result.version}`;agentPlaybookHelp.textContent=`Saved v${result.version}`;await refreshAgents()}catch(error){agentPlaybookHelp.textContent=error.message}
+}
+
+const _renderAgentsWithPlaybook=renderAgents;
+renderAgents=function(){
+  _renderAgentsWithPlaybook();
+  document.querySelectorAll('#agentConfigRoot .agentCard').forEach((card,index)=>{const agent=(window.agentInstances||[])[index],actions=card.querySelector('.agentActions');if(agent&&actions&&!actions.querySelector('[data-playbook]'))actions.insertAdjacentHTML('beforeend',`<button class="btn small" data-playbook onclick="openAgentPlaybook('${esc(agent.id)}')">${agentText('agent.playbook')} · v${Number(agent.playbook?.version||0)}</button>`)});
+};
+
+const _ensureChatWithMemory=ensureAgentChatModal;
+ensureAgentChatModal=function(){
+  _ensureChatWithMemory();const select=document.getElementById('agentChatKind');
+  if(select&&!select.querySelector('option[value="memory"]'))select.insertAdjacentHTML('beforeend',`<option value="memory">${agentText('agent.remember')}</option>`);
+};
+
+const _openPluginGrantTyped=openPluginGrant;
+openPluginGrant=function(pluginId){
+  _openPluginGrantTyped(pluginId);const plugin=(window.capabilityPlugins||[]).find(x=>x.id===pluginId),schema=plugin?.definition?.config_schema||{};
+  Object.entries(schema.properties||{}).forEach(([name,rules])=>{const old=document.querySelector(`[data-plugin-config="${CSS.escape(name)}"]`);if(!old)return;const current=old.value;if(rules.type==='boolean'){const replacement=document.createElement('select');replacement.dataset.pluginConfig=name;replacement.innerHTML=`<option value="true">true</option><option value="false">false</option>`;replacement.value=String(current||rules.default||false);old.replaceWith(replacement)}else if(rules.enum){const replacement=document.createElement('select');replacement.dataset.pluginConfig=name;replacement.innerHTML=rules.enum.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');replacement.value=current||rules.default||'';old.replaceWith(replacement)}else if(rules.type==='integer'){old.type='number';old.min=rules.minimum??0;old.max=rules.maximum??100}}
+  );
+};

@@ -18,6 +18,7 @@ from digital_company.execution_client import ExecutionRuntimeClient
 from digital_company.capability_plugins import authorize_action
 from digital_company.agent_templates import action_is_allowed
 from digital_company.wordpress_plugin import WordPressPluginRuntime
+from digital_company.image_generation import ImageGenerationRuntime
 
 
 class CompanyOrchestrator:
@@ -54,6 +55,7 @@ class CompanyOrchestrator:
         )
         by_id = {item["id"]: item for item in connections}
         selected_connection = by_id.get(self.agent["model_connection_id"]) if self.agent else None
+        self.model_connection = selected_connection
         if self.agent and (not selected_connection or not selected_connection.get("enabled", True)):
             raise ValueError(
                 f"Agent model connection is missing or disabled: {self.agent['model_connection_id']}"
@@ -104,10 +106,19 @@ class CompanyOrchestrator:
                 f"configuration={grant['config']}; instructions={grant['definition'].get('instructions', '')}"
             )
         capabilities = "\n".join(plugin_lines) or "- No plugins are granted. Do not claim external access."
+        playbook = self.store.get_agent_playbook(self.agent_id)
+        durable_rules = "\n".join(
+            f"- {rule}" for rule in playbook["document"]["rules"]
+        ) or "- No durable owner rules have been saved yet."
+        examples = "\n".join(
+            f"- {value}" for value in playbook["document"]["reference_examples"]
+        ) or "- None"
         return (
             f"Name: {self.agent['name']}\nType: {self.agent['agent_type']}\nRole: {self.agent['role']}\n"
             f"Purpose: {self.agent['purpose']}\nInstructions: {self.agent['instructions']}\n"
             f"Autonomy mode: {self.agent['autonomy_mode']}\nGranted capability plugins:\n{capabilities}\n"
+            f"Durable owner playbook v{playbook['version']} (authoritative):\n{durable_rules}\n"
+            f"Reference examples:\n{examples}\nNotes: {playbook['document']['notes']}\n"
             "Stay inside this mandate. A configured URL or connection reference is not proof that login or "
             "credentials are ready. Use only granted permissions, and request one precise human checkpoint "
             "only when no useful autonomous work remains."
@@ -116,12 +127,14 @@ class CompanyOrchestrator:
     def _agent_context(self) -> dict | None:
         if not self.agent:
             return None
-        return {
+        result = {
             key: self.agent[key] for key in (
                 "id", "name", "role", "purpose", "instructions", "autonomy_mode",
                 "agent_type", "token_limit", "spend_limit_eur", "config",
             )
         }
+        result["playbook"] = self.store.get_agent_playbook(self.agent_id)
+        return result
 
     def _control_state(self) -> str:
         return self.store.get_agent(self.agent_id)["status"] if self.agent_id else self.store.get_control()["state"]
@@ -379,6 +392,7 @@ class CompanyOrchestrator:
             raise RuntimeError("No completed content draft exists for this agent")
         runtime = WordPressPluginRuntime(
             self.store, grant, self.execution_key or f"task:{task_id}",
+            image_runtime=self._image_runtime(),
         )
         if proposal.action == ActionType.SAVE_CONTENT_DRAFT:
             response = runtime.save_draft(draft)
@@ -394,9 +408,16 @@ class CompanyOrchestrator:
         ]
         if response.get("link"):
             evidence.append("WordPress post URL: " + response["link"])
+        if response.get("categories"):
+            evidence.append("WordPress categories: " + ", ".join(response["categories"]))
+        if response.get("tags"):
+            evidence.append("WordPress tags: " + ", ".join(response["tags"]))
+        if (response.get("featured_image") or {}).get("source_url"):
+            evidence.append("Featured image: " + response["featured_image"]["source_url"])
         self._persist_result(task_id, proposal, SpecialistResult(
             status="completed", summary=summary, evidence=evidence,
             sources=[response["link"]] if response.get("link") else [],
+            publication_state=response,
             recommendation=recommendation,
         ))
         self.store.audit("plugin.wordpress_executed", {
@@ -409,6 +430,21 @@ class CompanyOrchestrator:
             "status": "approved_task_completed", "cycles": cycle,
             "task_id": task_id, "plugin": "wordpress-content",
         }
+
+    def _image_runtime(self):
+        """Resolve optional image generation from an explicit least-privilege grant."""
+        grant = next((
+            item for item in self.plugins
+            if item["plugin_id"] == "featured-image-generation"
+            and item["status"] == "enabled"
+            and "generate_image" in item.get("permissions", [])
+            and item.get("config", {}).get("enabled", True)
+        ), None)
+        if not grant:
+            return None
+        if not self.model_connection:
+            raise RuntimeError("Featured-image plugin needs the agent's model connection")
+        return ImageGenerationRuntime(self.model_connection, grant.get("config") or {})
 
     def _persist_result(self, task_id: str, proposal, result) -> None:
         """Persist a specialist result and confine any model-provided artifact path."""

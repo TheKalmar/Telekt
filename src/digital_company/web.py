@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from digital_company.api_models import (
     ApprovalDecisionIn,
+    AgentPlaybookIn,
     AgentConfigIn,
     AgentPluginGrantIn,
     BrowserActionIn,
@@ -63,6 +64,7 @@ from digital_company.integration_connectors import (
     secret_name as integration_secret_name,
 )
 from digital_company.agent_templates import AGENT_TYPES
+from digital_company.content_rendering import render_content_review
 
 
 ROOT = Path.cwd()
@@ -595,6 +597,10 @@ def agent_message(agent_id: str, payload: MessageIn):
             message_id = store.add_stakeholder_message(
                 payload.content.strip(), payload.kind, agent_id=agent_id,
             )
+            playbook = (
+                store.append_agent_playbook_rule(agent_id, payload.content.strip(), message_id)
+                if payload.kind == "memory" else None
+            )
             should_wake = (
                 payload.kind == "directive"
                 and agent["status"] in {"running", "paused", "waiting_approval", "waiting_human", "error"}
@@ -607,7 +613,30 @@ def agent_message(agent_id: str, payload: MessageIn):
         raise HTTPException(400, str(exc)) from exc
     if should_wake:
         signal_agent_temporal(company_id, agent_id, "wake", "stakeholder_directive")
-    return {"id": message_id, "status": "pending", "agent_id": agent_id}
+    return {
+        "id": message_id, "status": "addressed" if payload.kind == "memory" else "pending",
+        "agent_id": agent_id, "playbook_version": playbook["version"] if playbook else None,
+    }
+
+
+@app.get("/api/agents/{agent_id}/playbook")
+def agent_playbook(agent_id: str):
+    try:
+        with store_scope() as store:
+            return store.get_agent_playbook(agent_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Agent not found") from exc
+
+
+@app.put("/api/agents/{agent_id}/playbook")
+def update_agent_playbook(agent_id: str, payload: AgentPlaybookIn):
+    try:
+        with store_scope() as store:
+            return store.set_agent_playbook(agent_id, payload.model_dump(), created_by="dashboard")
+    except KeyError as exc:
+        raise HTTPException(404, "Agent not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/settings/model-mode")
@@ -1070,6 +1099,7 @@ def approval_page(company_id: str, approval_id: str, email: str, expires: int, t
     except (KeyError, StopIteration) as exc:
         raise HTTPException(404, "Approval not found") from exc
     proposal = __import__("json").loads(approval["payload_json"])
+    review_html = render_content_review(approval.get("review"))
     disabled = approval["status"] != "pending"
     approval_count = int(approval.get("approval_count", 0))
     required_approvals = int(approval.get("required_approvals", 1))
@@ -1078,6 +1108,7 @@ def approval_page(company_id: str, approval_id: str, email: str, expires: int, t
       <textarea name="comment" maxlength="4000" placeholder="Comment or decline reason"></textarea>
       <div class="buttons"><button name="decision" value="approve" class="approve">Approve</button>
       <button name="decision" value="reject" class="reject">Decline</button></div>"""
+    buttons = review_html + buttons
     return f"""<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Approval review</title>
 <style>body{{margin:0;background:#090d13;color:#eaf1f8;font:15px Arial,sans-serif}}main{{max-width:680px;margin:40px auto;padding:26px;background:#151c26;border:1px solid #2a384b;border-radius:16px}}h1{{font-size:26px}}.meta{{padding:16px;background:#0d1219;border-radius:10px;line-height:1.7;color:#cbd5e1}}textarea{{box-sizing:border-box;width:100%;min-height:120px;margin:20px 0;padding:12px;background:#0b1017;color:white;border:1px solid #34445a;border-radius:9px}}button{{padding:13px 22px;border:0;border-radius:9px;font-weight:bold;cursor:pointer}}.approve{{background:#4ee3a1}}.reject{{background:#ff6b7a;margin-left:8px}}.note{{color:#91a0b4}}.message{{color:#4ee3a1}}</style></head><body><main><div class="note">DIGITAL COMPANY · SECURE HUMAN DECISION</div><h1>{esc(proposal['title'])}</h1><p>{esc(proposal['objective'])}</p><div class="meta"><b>Action:</b> {esc(proposal['action'])}<br><b>Estimated cost:</b> €{proposal['estimated_cost_eur']:.2f}<br><b>Status:</b> {esc(approval['status'])}<br><b>Approval quorum:</b> {approval_count} / {required_approvals}<br><b>Expires:</b> {esc(approval.get('expires_at') or 'not set')}</div><p class="message">{esc(message)}</p><form method="post"><input type="hidden" name="email" value="{esc(email)}"><input type="hidden" name="expires" value="{expires}"><input type="hidden" name="token" value="{esc(token)}">{buttons}</form><p class="note">Decline requires a reason. Comments become canonical context for the AI company.</p></main></body></html>"""
 

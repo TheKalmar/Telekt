@@ -14,7 +14,9 @@ POC history, including:
   limits, plugins, direct chat, usage, tasks, attention queue, and run history;
 - reusable capability plugins plus separately configured API/mail connections;
 - durable concurrent `AgentLoopWorkflowV1` Temporal workflows;
-- idempotent WordPress REST draft/publish support for content agents;
+- versioned per-agent owner playbooks promoted explicitly from stakeholder chat;
+- typed content packages, deterministic SEO QA, WordPress taxonomy/AIOSEO/media
+  drafts, optional AI featured images, and full-content approval emails;
 - autonomous legacy CEO/specialist loop with versioned company policy checks;
 - provider-neutral local and remote model connections;
 - durable polling worker, approvals, email approvals, and stakeholder chat;
@@ -246,14 +248,13 @@ state, browser profiles, and downloaded models.
 
 Highest-value next engineering steps:
 
-1. Configure a dedicated G&K WordPress user/Application Password and attach the
-   connection described in `docs/multi-agent-platform.md`; do not use a personal admin.
-2. Implement provider-specific per-agent SMTP sending on top of the new SMTP
-   connection profile; the current approval mail transport is still company-level.
-3. Add authentication and tenant authorization before any remote deployment.
-4. Add production PostgreSQL/Temporal backup and restore drills.
-5. Add real provider plugins with idempotency: Shopify OAuth/catalog drafts first.
-6. Reconcile recorded token estimates with provider invoices and add tool-call pricing.
+1. Add authentication and tenant authorization before any remote deployment.
+2. Add production PostgreSQL/Temporal backup and restore drills.
+3. Add WordPress/AIOSEO integration tests against a disposable staging site;
+   the unit suite currently uses transport fakes.
+4. Add real provider plugins with idempotency: Shopify OAuth/catalog drafts first.
+5. Reconcile recorded token and image-generation estimates with provider invoices
+   and add tool-call pricing.
 
 Do not build autonomous CAPTCHA solving, silent account creation, contract signing,
 payment submission, or unrestricted browser/shell access.

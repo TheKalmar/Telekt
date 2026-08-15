@@ -135,7 +135,19 @@ signal only that agent's `AgentLoopWorkflowV1`.
 
 - `GET /api/agents/{agent_id}/messages` lists direct and company-wide context.
 - `POST /api/agents/{agent_id}/messages` sends a `directive` or `question` to
-  one agent. A directive supersedes only that agent's stale attention items.
+  one agent. `memory` stores an explicit owner rule and creates a new immutable
+  agent-playbook version without waking the agent. A directive supersedes only
+  that agent's stale attention items.
+
+### Agent playbook
+
+- `GET /api/agents/{agent_id}/playbook` returns the active version and document.
+- `PUT /api/agents/{agent_id}/playbook` writes a new immutable version with
+  `rules`, `reference_examples`, and `notes`.
+
+Playbooks are durable company state and are inserted into both planning and
+specialist context on every subsequent run. Chat history is not used as a
+substitute for this memory.
 
 ## Capability plugins
 

@@ -71,12 +71,25 @@ databases remain import/rollback sources and are not silently deleted.
 The built-in `wordpress-content` plugin declares:
 
 - setup: `site_url`, `posts_url`, optional review email, draft-only default;
-- permissions: `read_posts`, `write_drafts`, `publish_posts`;
+- permissions: `read_posts`, `write_drafts`, `manage_terms`, `upload_media`,
+  `write_seo_metadata`, `publish_posts`;
 - transports: HTTP Basic, Bearer token, or API-key header;
 - connection capabilities: `wordpress.posts.read`,
-  `wordpress.posts.write_drafts`, and `wordpress.posts.publish`.
+  `wordpress.posts.write_drafts`, `wordpress.terms.manage`,
+  `wordpress.media.upload`, `wordpress.seo.write`, and
+  `wordpress.posts.publish`.
 
-The API runtime writes an unpublished post using a deterministic slug. Temporal
+The content agent first returns a typed `ContentPackage`: clean title and slug,
+keywords, SEO title and description, excerpt, categories, tags, complete HTML,
+internal links, CTA, authoritative sources, and a featured-image specification.
+Deterministic Telekt SEO QA must reach the agent's configured target before a
+WordPress side effect is allowed. This score is intentionally distinct from any
+score computed by AIOSEO.
+
+The API runtime resolves or creates categories and tags, writes AIOSEO title and
+description metadata, optionally generates and uploads a featured image through
+the separately granted `featured-image-generation` plugin, then writes an
+unpublished post using a deterministic slug. Temporal
 retries reuse a durable integration operation, while later retries also look up
 the slug before creating anything. Publication changes that same draft to
 `publish`; it is still blocked by the deterministic company approval policy even
@@ -90,7 +103,7 @@ when the agent has `publish_posts`.
 
    - adapter: `HTTP API · Basic authentication`;
    - base URL: `https://YOUR-SITE/wp-json/wp/v2`;
-   - capabilities: `wordpress.posts.read, wordpress.posts.write_drafts, wordpress.posts.publish`;
+   - capabilities: `wordpress.posts.read, wordpress.posts.write_drafts, wordpress.terms.manage, wordpress.media.upload, wordpress.seo.write, wordpress.posts.publish`;
    - username: dedicated WordPress username;
    - password: the Application Password.
 
@@ -105,14 +118,17 @@ CAPTCHA, 2FA, terms, identity, or other human-only checkpoints.
 ## G&K migration included in the development state
 
 The current G&K company profile contains organization facts only. A stopped
-`Content & SEO` agent now owns the legal-content mandate, uses the configured
-low-cost cloud connection, has a 150,000-token limit and a EUR 10 model-spend
-limit, and has Web Research, Content Workspace, WordPress Content, and Email
-grants. Historical stale approval requests were superseded, not deleted.
+`Content & SEO` agent owns the legal-content mandate, uses the configured cloud
+connection, has a 250,000-token limit and a EUR 10 model-spend limit, and has Web
+Research, Content Workspace, WordPress Content, AI Featured Images, and Email
+grants. Its WordPress REST connection and write-only Application Password are
+configured. Historical stale attention items were superseded, not deleted.
 
-The WordPress grant has the G&K site and review email configured, but no REST
-connection is attached because no WordPress Application Password was supplied.
-Attach that connection using the steps above before expecting API draft creation.
+The agent also has a versioned owner playbook. A chat message sent as `memory`
+creates a new immutable playbook version; ordinary directives and questions do
+not silently become permanent rules. A publication approval email contains the
+complete sanitized article, SEO facts, taxonomy, sources, quality result,
+featured image, and WordPress preview link. Publishing remains approval-gated.
 
 ## Current safety boundary
 

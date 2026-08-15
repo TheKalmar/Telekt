@@ -32,7 +32,8 @@ This repository proves the control loop and governance model. It is not yet a pr
 - Provider-neutral model and integration connections with write-only credentials
 - Concurrent durable per-agent Temporal workflows and recovery keys
 - Per-agent stakeholder chat, tasks, approvals, handoffs, runs, and usage
-- Content & SEO agent template and idempotent WordPress REST draft/publish plugin
+- Content & SEO agent template, versioned owner playbooks, structured SEO QA,
+  idempotent WordPress taxonomy/AIOSEO/media drafts, and full-draft approval email
 - Local and cloud model connections assignable independently to each agent
 - Deterministic allow / approval / deny policy
 - Durable tasks, decisions, approvals, budget ledger, chat, and audit history

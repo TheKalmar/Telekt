@@ -39,14 +39,20 @@ BUILTIN_PLUGINS = [
     {
         "id": "wordpress-content",
         "name": "WordPress Content Publishing",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "description": "Inspect posts, create unpublished drafts, preview them, and publish only with granted authority.",
         "tools": ["browser", "platform_api"],
         "connection_kinds": ["http_basic", "http_bearer", "http_api_key"],
-        "permissions": ["read_posts", "write_drafts", "publish_posts"],
+        "permissions": [
+            "read_posts", "write_drafts", "manage_terms", "upload_media",
+            "write_seo_metadata", "publish_posts",
+        ],
         "connection_capabilities": {
             "read_posts": "wordpress.posts.read",
             "write_drafts": "wordpress.posts.write_drafts",
+            "manage_terms": "wordpress.terms.manage",
+            "upload_media": "wordpress.media.upload",
+            "write_seo_metadata": "wordpress.seo.write",
             "publish_posts": "wordpress.posts.publish",
         },
         "config_schema": {
@@ -57,10 +63,35 @@ BUILTIN_PLUGINS = [
                 "posts_url": {"type": "string", "format": "uri"},
                 "review_email": {"type": "string", "format": "email"},
                 "default_post_status": {"type": "string", "enum": ["draft"], "default": "draft"},
+                "seo_target_score": {"type": "integer", "default": 70},
             },
             "additionalProperties": False,
         },
         "instructions": "Drafting is reversible. Never publish unless publish_posts is granted and an exact content approval is active.",
+    },
+    {
+        "id": "featured-image-generation",
+        "name": "AI Featured Images",
+        "version": "1.0.0",
+        "description": "Generate a reviewable featured image using the agent's model-provider connection.",
+        "tools": ["image_generation"],
+        "connection_kinds": [],
+        "permissions": ["generate_image"],
+        "config_schema": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "default": True},
+                "model": {"type": "string", "default": "gpt-image-2"},
+                "size": {
+                    "type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536"],
+                    "default": "1536x1024",
+                },
+                "quality": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
+                "brand_style": {"type": "string", "default": "professional editorial photography, no text, no logos"},
+            },
+            "additionalProperties": False,
+        },
+        "instructions": "Generate only from the approved content brief and durable brand playbook. Never imitate copyrighted assets or add misleading text/logos.",
     },
     {
         "id": "email-communication",
@@ -131,8 +162,18 @@ def validate_plugin_config(definition: dict, config: dict) -> dict:
         if name not in normalized:
             continue
         value = normalized[name]
+        if rules.get("type") == "boolean" and isinstance(value, str) and value.lower() in {"true", "false"}:
+            value = normalized[name] = value.lower() == "true"
+        if rules.get("type") == "integer" and isinstance(value, str) and value.strip().isdigit():
+            value = normalized[name] = int(value)
         if rules.get("type") == "string" and not isinstance(value, str):
             raise ValueError(f"Plugin field {name} must be a string")
+        if rules.get("type") == "boolean" and not isinstance(value, bool):
+            raise ValueError(f"Plugin field {name} must be true or false")
+        if rules.get("type") == "integer" and (
+            not isinstance(value, int) or isinstance(value, bool)
+        ):
+            raise ValueError(f"Plugin field {name} must be an integer")
         if "enum" in rules and value not in rules["enum"]:
             raise ValueError(f"Plugin field {name} has an unsupported value")
         if rules.get("format") == "uri":

@@ -104,6 +104,42 @@ def test_daily_brief_batches_all_pending_decisions(monkeypatch):
     assert body.count("Review decision") == 2
 
 
+def test_content_review_email_renders_full_safe_article(monkeypatch):
+    sent = []
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def send_message(self, message): sent.append(message)
+    monkeypatch.setenv("APPROVAL_SIGNING_SECRET", "test-secret")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://localhost:8421")
+    monkeypatch.setenv("SMTP_HOST", "mailpit")
+    monkeypatch.setenv("SMTP_FROM", "brief@example.com")
+    monkeypatch.setenv("SMTP_TLS", "false")
+    monkeypatch.setattr("digital_company.email_service.smtplib.SMTP", FakeSMTP)
+    content_proposal = proposal().model_copy(update={
+        "action": ActionType.PUBLISH_CONTENT, "execution_mode": "browser",
+        "handoff_url": "https://example.com/wp-admin/post.php?post=42",
+    })
+    review = {
+        "content_package": {
+            "html_content": "<h1>Unpaid wages</h1><script>alert(1)</script><p>Complete article.</p>",
+            "focus_keyword": "unpaid wages", "categories": ["Employment law"],
+            "tags": ["wages", "workers"], "source_urls": ["https://example.com/law"],
+        },
+        "quality_report": {"score": 88, "maximum": 100, "target": 70},
+    }
+    ApprovalMailer().send_daily_brief("company-1", {
+        "control": "waiting_approval", "spent": 1, "remaining": 99, "results": [],
+    }, [{"id": "approval-content", "proposal": content_proposal, "review": review}], {
+        "enabled": True, "approvers": ["owner@example.com"], "sender_name": "G&K",
+    })
+    body = str(sent[0])
+    assert "Complete article" in body
+    assert "Telekt SEO QA" in body
+    assert "alert(1)" not in body
+
+
 def test_mailer_uses_selected_write_only_smtp_connection(tmp_path: Path, monkeypatch):
     sent = []
 

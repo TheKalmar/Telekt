@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import html
 import os
+import re
 import smtplib
 import time
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from urllib.parse import quote, urlparse
 from digital_company.integration_connectors import secret_name
 from digital_company.models import TaskProposal
 from digital_company.runtime_secrets import get_secret
+from digital_company.content_rendering import render_content_review, sanitize_article_html
 
 
 @dataclass(frozen=True)
@@ -143,17 +145,18 @@ class ApprovalMailer:
                 review = item.get("review") or {}
                 token = approval_token(company_id, item["id"], recipient, expires)
                 url = f"{transport.public_url}/approval/{quote(company_id)}/{quote(item['id'])}?email={quote(recipient)}&expires={expires}&token={token}"
-                review_text = str(review.get("content", ""))[:12_000]
+                review_source = str(
+                    (review.get("content_package") or {}).get("html_content")
+                    or review.get("content", "")
+                )[:100_000]
+                review_text = html.unescape(re.sub(
+                    r"<[^>]+>", " ", sanitize_article_html(review_source),
+                ))
                 plain.append(
                     f"- {proposal.title}: {url}" +
                     (f"\n\nDRAFT FOR REVIEW\n{review_text}" if review_text else "")
                 )
-                review_html = (
-                    '<div style="margin:14px 0;padding:14px;background:#111923;border:1px solid #34445a;'
-                    'border-radius:8px"><b>Prepared draft</b><pre style="white-space:pre-wrap;word-break:break-word;'
-                    'font:12px/1.5 monospace;color:#cbd5e1">' + html.escape(review_text) + '</pre></div>'
-                    if review_text else ""
-                )
+                review_html = render_content_review(review)
                 cards.append(
                     f'<div style="background:#0d1219;padding:16px;border-radius:10px;margin:12px 0">'
                     f'<b>{html.escape(proposal.title)}</b><p>{html.escape(proposal.objective)}</p>'

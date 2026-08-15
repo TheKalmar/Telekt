@@ -102,7 +102,7 @@ SPECIALIST_INSTRUCTIONS = {
     "product": "You are a pragmatic product manager. Produce a narrow PRD with ICP, pain, workflow, acceptance criteria, non-goals, pricing hypothesis, and measurable validation test.",
     "development": "You are an MVP developer. Produce one self-contained HTML application as artifact_content. It must be functional without a build step, with clear UI and embedded JavaScript. Return artifact_path as mvp/index.html.",
     "qa": "You are an adversarial QA lead. Inspect the supplied company state and artifact context, list concrete checks, failures, risks, and a go/no-go recommendation.",
-    "growth": """You are an ethical growth and content strategist. For PREPARE_OUTREACH, create targeting, research, drafts, and a validation plan only; do not claim messages were sent or money was spent. EXTERNAL_OUTREACH means actual sending and requires approval. For CREATE_CONTENT_DRAFT, use the latest research and authoritative sources to return one complete Markdown artifact under content/drafts/<short-slug>.md. Include an executive topic rationale, search intent, target keywords without fabricated volume, SEO title, meta description, suggested slug, H1/H2 structure, readable final article, FAQ, internal-link suggestions, CTA, jurisdiction/legal-review notes, and a Sources section. The artifact must be ready for owner review but never described as published.""",
+    "growth": """You are an ethical growth and content strategist. For PREPARE_OUTREACH, create targeting, research, drafts, and a validation plan only; do not claim messages were sent or money was spent. EXTERNAL_OUTREACH means actual sending and requires approval. For CREATE_CONTENT_DRAFT, return a complete content_package: clean reader-facing title without workflow prefixes; stable ASCII slug; focus and secondary keywords; SEO title; meta description; excerpt; at least one specific category and two useful tags; complete semantic HTML article with H1/H2 sections, FAQ and CTA; internal-link suggestions; jurisdiction/legal-review notes; at least two direct authoritative source URLs; and a featured-image prompt, accessible alt text and filename. Never fabricate search volume, legislation, deadlines, sources, internal URLs or AIOSEO scores. Follow active_agent.playbook as durable owner policy. Also mirror html_content to artifact_content and use content/drafts/<slug>.html as artifact_path. The package must be ready for owner review but never described as published.""",
     "ceo": "You are an executive analyst. Summarize the stopping decision and unresolved risks.",
 }
 
@@ -462,5 +462,32 @@ class AgentEngine:
                     evidence=result.evidence,
                     sources=sorted(valid_sources),
                     recommendation="Repeat research with web search and return direct, verifiable URLs.",
+                )
+        if proposal.action == ActionType.CREATE_CONTENT_DRAFT and result.status == "completed":
+            if not result.content_package:
+                return SpecialistResult(
+                    status="failed",
+                    summary="Content output failed the contract: the structured content package is missing.",
+                    evidence=result.evidence,
+                    sources=result.sources,
+                    recommendation="Create the full SEO package before saving anything to WordPress.",
+                )
+            from digital_company.content_quality import score_content
+            minimum_words = int((agent_context or {}).get("config", {}).get("minimum_word_count", 700))
+            report = score_content(result.content_package, minimum_words)
+            target = int((agent_context or {}).get("config", {}).get("seo_target_score", 70))
+            result.quality_report = {**report, "target": target, "passed": report["score"] >= target}
+            result.artifact_path = f"content/drafts/{result.content_package.slug}.html"
+            result.artifact_content = result.content_package.html_content
+            result.sources = list(dict.fromkeys([*result.sources, *result.content_package.source_urls]))
+            if report["score"] < target:
+                return SpecialistResult(
+                    status="failed",
+                    summary=f"Content failed Telekt SEO QA ({report['score']}/{report['maximum']}; target {target}).",
+                    evidence=[*result.evidence, "Missing checks: " + ", ".join(report["issues"])],
+                    sources=result.sources,
+                    content_package=result.content_package,
+                    quality_report=result.quality_report,
+                    recommendation="Revise the content package and repeat deterministic QA before WordPress.",
                 )
         return result

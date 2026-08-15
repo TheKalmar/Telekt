@@ -49,7 +49,8 @@ AGENT_TYPES = [
         "default_token_limit": 150_000,
         "default_spend_limit_eur": 15,
         "suggested_plugins": [
-            "web-research", "workspace-content", "wordpress-content", "email-communication",
+            "web-research", "workspace-content", "wordpress-content",
+            "featured-image-generation", "email-communication",
         ],
         "allowed_actions": [
             "research_content", "create_content_draft", "save_content_draft",
@@ -65,6 +66,8 @@ AGENT_TYPES = [
                 "content_scope": {"type": "string"},
                 "brand_voice": {"type": "string", "default": "professional and clear"},
                 "require_official_sources": {"type": "boolean", "default": True},
+                "seo_target_score": {"type": "integer", "default": 70, "minimum": 0, "maximum": 100},
+                "minimum_word_count": {"type": "integer", "default": 700, "minimum": 300, "maximum": 5000},
             },
             "additionalProperties": False,
         },
@@ -95,10 +98,17 @@ def validate_agent_config(agent_type: str, config: dict) -> dict:
         if name not in normalized:
             continue
         value = normalized[name]
+        if rules.get("type") == "integer" and isinstance(value, str) and value.strip().isdigit():
+            value = normalized[name] = int(value)
         if rules.get("type") == "string" and not isinstance(value, str):
             raise ValueError(f"Agent field {name} must be a string")
         if rules.get("type") == "boolean" and not isinstance(value, bool):
             raise ValueError(f"Agent field {name} must be true or false")
+        if rules.get("type") == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"Agent field {name} must be an integer")
+            if value < rules.get("minimum", value) or value > rules.get("maximum", value):
+                raise ValueError(f"Agent field {name} is outside the supported range")
         if "enum" in rules and value not in rules["enum"]:
             raise ValueError(f"Agent field {name} has an unsupported value")
     missing = [

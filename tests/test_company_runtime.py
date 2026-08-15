@@ -56,7 +56,7 @@ def test_brief_service_batches_and_audits_one_delivery():
     assert mailer.calls[0][1]["remaining"] == 88
     assert store.events == [(
         "stakeholder.notification_sent",
-        {"channel": "daily_ceo_brief", "recipients": 1},
+        {"channel": "daily_ceo_brief", "recipients": 1, "approval_ids": ["approval-1"]},
     )]
 
 
