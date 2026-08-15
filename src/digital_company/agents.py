@@ -19,6 +19,7 @@ from agents import (
 )
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
+from digital_company.errors import BudgetLimitError
 from digital_company.model_adapters import ModelAdapterFactory
 from digital_company.models import (
     ActionType, CompanySnapshot, SpecialistResult, TaskProposal, TaskProposalDraft,
@@ -281,14 +282,16 @@ class AgentEngine:
                 "agent_id": agent_id, "role": role, "remaining_tokens": remaining_tokens,
                 "required_reserve": token_reserve,
             })
-            raise RuntimeError(
+            raise BudgetLimitError(
                 f"Agent token limit cannot safely fund another call ({remaining_tokens} remaining)"
             )
         reserve = float(os.getenv("CLOUD_CALL_RESERVE_EUR", "0.05"))
         budget_reader = getattr(self, "remaining_budget", None)
         if provider != "local" and budget_reader and budget_reader() < reserve:
             self.reporter("budget.cloud_call_blocked", {"role": role, "required_reserve": reserve})
-            raise RuntimeError(f"Cloud call blocked: less than {reserve:.2f} budget remains")
+            raise BudgetLimitError(
+                f"Cloud call blocked: less than {reserve:.2f} budget remains"
+            )
         self.reporter("model.started", {
             "run_id": run_id, "role": role, "provider": provider, "agent_id": agent_id,
         })
@@ -359,7 +362,9 @@ class AgentEngine:
         )):
             if budget_reader and budget_reader() < reserve:
                 self.reporter("budget.cloud_call_blocked", {"role": role, "required_reserve": reserve})
-                raise RuntimeError(f"Cloud fallback blocked: less than {reserve:.2f} budget remains")
+                raise BudgetLimitError(
+                    f"Cloud fallback blocked: less than {reserve:.2f} budget remains"
+                )
             self.reporter("model.cloud_fallback", {
                 "run_id": run_id, "role": role, "reason": type(last_error).__name__,
             })

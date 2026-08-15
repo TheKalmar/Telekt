@@ -13,6 +13,7 @@ from temporalio.worker import Worker
 
 from digital_company.company_runtime import StakeholderBriefService, apply_orchestration_result
 from digital_company.email_service import ApprovalMailer
+from digital_company.errors import BudgetLimitError
 from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.registry import CompanyRegistry
 from digital_company.temporal_gateway import ensure_agent_workflow, ensure_workflow
@@ -36,7 +37,9 @@ def is_non_retryable_activity_error(exc: Exception) -> bool:
     remaining ModelBehaviorError is therefore not a transport outage and must
     not make Temporal repeat the entire paid model activity.
     """
-    return isinstance(exc, (KeyError, PermissionError, ValueError, ModelBehaviorError))
+    return isinstance(exc, (
+        KeyError, PermissionError, ValueError, ModelBehaviorError, BudgetLimitError,
+    ))
 
 
 @activity.defn(name="advance_company")
@@ -192,6 +195,19 @@ def _finalize_agent_activity_failure(
     try:
         with portfolio.store_for(company_id) as store:
             detail = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, BudgetLimitError):
+                result = {
+                    "status": "stopped", "cycles": 0, "reason": "agent_budget_limit",
+                    "detail": str(exc), "agent_id": agent_id,
+                }
+                store.complete_activity(execution_key, result)
+                store.complete_agent_run_by_execution(execution_key, "stopped", detail)
+                store.set_agent_status(agent_id, "stopped")
+                store.audit("budget.agent_limit_reached", {
+                    "agent_id": agent_id, "execution_key": execution_key,
+                    "attempts": attempts, "detail": str(exc),
+                })
+                return result
             result = store.fail_activity(execution_key, detail)
             store.fail_agent_run_by_execution(execution_key, detail)
             store.set_agent_status(agent_id, "error")

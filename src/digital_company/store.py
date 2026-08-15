@@ -517,12 +517,18 @@ class CompanyStore:
         self.audit("agent.run_" + status, {"run_id": run_id, "error": error})
 
     def fail_agent_run_by_execution(self, execution_key: str, error: str) -> None:
+        self.complete_agent_run_by_execution(execution_key, "failed", error)
+
+    def complete_agent_run_by_execution(
+        self, execution_key: str, status: str, error: str | None = None,
+    ) -> None:
+        """Close the one idempotent agent run owned by an activity execution."""
         row = self.db.execute(
             "SELECT id FROM agent_runs WHERE execution_key=? AND status='running'",
             (execution_key,),
         ).fetchone()
         if row:
-            self.complete_agent_run(row["id"], "failed", error)
+            self.complete_agent_run(row["id"], status, error)
 
     def list_capability_plugins(self) -> list[dict]:
         result = []

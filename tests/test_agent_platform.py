@@ -52,6 +52,21 @@ def test_agents_have_independent_models_limits_and_lifecycle(tmp_path: Path):
         store.get_agent("legacy-ceo")
 
 
+def test_agent_run_can_stop_cleanly_when_budget_guard_blocks(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent())
+    execution_key = "agent-budget-execution"
+    run_id = store.begin_agent_run(agent["id"], execution_key)
+
+    store.complete_agent_run_by_execution(
+        execution_key, "stopped", "BudgetLimitError: reserve unavailable",
+    )
+
+    current = store.get_agent(agent["id"])
+    assert current["last_run"]["id"] == run_id
+    assert current["last_run"]["status"] == "stopped"
+
+
 def test_first_explicit_agent_retires_only_unused_legacy_projection(tmp_path: Path):
     store = initialized_store(tmp_path)
     assert store.get_agent("legacy-ceo")["status"] == "stopped"

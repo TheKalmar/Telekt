@@ -383,8 +383,14 @@ def set_agent_status(agent_id: str, status: str):
                 connection = require_agent_model_connection(
                     current["model_connection_id"], verify_model=True,
                 )
-                if current["token_limit"] is not None and store.agent_remaining_tokens(agent_id) <= 0:
-                    raise HTTPException(409, "Agent token limit has been reached")
+                token_reserve = max(1, int(os.getenv("AGENT_CALL_TOKEN_RESERVE", "1000")))
+                remaining_tokens = store.agent_remaining_tokens(agent_id)
+                if remaining_tokens is not None and remaining_tokens < token_reserve:
+                    raise HTTPException(409, {
+                        "message": "Agent token limit cannot fund another model call",
+                        "remaining_tokens": remaining_tokens,
+                        "required_reserve": token_reserve,
+                    })
                 if (
                     connection["location"] == "cloud"
                     and current["spend_limit_eur"] is not None
