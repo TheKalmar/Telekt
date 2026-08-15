@@ -1,5 +1,10 @@
 # Architecture Refactor Working Notes
 
+> Historical refactor log: the later company/agent/plugin split and per-agent
+> Temporal design are documented in `docs/multi-agent-platform.md` and
+> `docs/architecture.md`. References below to one CEO/company loop describe the
+> compatibility architecture retained for migrated POC companies.
+
 This file is the durable working memory for the repository-wide architecture
 review. It records observed behavior, assumptions, decisions, completed work,
 and remaining debt so later changes do not depend on chat history.

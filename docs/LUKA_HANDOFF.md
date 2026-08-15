@@ -6,12 +6,17 @@ the subsystem being changed.
 
 ## 1. What this branch contains
 
-Use branch `codex/usage-budget-accounting`. It contains the complete current
+Use branch `codex/multi-agent-platform`. It contains the complete current
 POC history, including:
 
-- multi-company portfolio and per-company goals, budgets, settings, and state;
-- autonomous CEO/specialist decision loop with versioned per-company policy checks;
-- local, hybrid, and remote model-connection routing;
+- company profiles separated from digital employee configuration;
+- independently runnable typed agent instances with per-agent model, token/€
+  limits, plugins, direct chat, usage, tasks, attention queue, and run history;
+- reusable capability plugins plus separately configured API/mail connections;
+- durable concurrent `AgentLoopWorkflowV1` Temporal workflows;
+- idempotent WordPress REST draft/publish support for content agents;
+- autonomous legacy CEO/specialist loop with versioned company policy checks;
+- provider-neutral local and remote model connections;
 - durable polling worker, approvals, email approvals, and stakeholder chat;
 - build/buy/integrate/manual strategy and platform capability records;
 - isolated persistent Chromium runtime and manual browser cockpit;
@@ -23,7 +28,7 @@ POC history, including:
 - deterministic autonomy reliability scenarios and operator recovery from committed state.
 
 This is a POC, not production software. The durable overlay now uses PostgreSQL
-for company and portfolio state plus recovery-safe Temporal V4 workflows. The
+for company and portfolio state plus recovery-safe per-agent Temporal workflows. The
 lightweight polling worker and SQLite backend remain development fallbacks.
 
 ## 2. Clone and select the correct branch
@@ -32,7 +37,7 @@ lightweight polling worker and SQLite backend remain development fallbacks.
 git clone https://github.com/TheKalmar/Telekt.git
 Set-Location Telekt
 git fetch origin
-git switch --track origin/codex/usage-budget-accounting
+git switch --track origin/codex/multi-agent-platform
 Copy-Item .env.example .env.local
 ```
 
@@ -70,9 +75,9 @@ Then start Telekt without downloading another model:
 .\scripts\up.ps1 -Mode Existing -Build
 ```
 
-Open `http://127.0.0.1:8421`, pause the selected company, open **Model settings**,
-press **Refresh local models**, and select the exact tag reported by `ollama list`.
-The setting is per company, so different companies can use different local models.
+Open `http://127.0.0.1:8421`, use **Configuration → Models** to create/select the
+local connection, then assign it to an agent in **Configuration → Agents**.
+Different agents in the same company can use different models.
 
 Good starting classes are 7B-14B instruct/reasoning models that reliably return
 JSON. Available RAM/VRAM matters more than the brand name. Start with an 8B Q4
@@ -121,17 +126,16 @@ Start without Ollama:
 .\scripts\up.ps1 -Mode Cloud -Build
 ```
 
-Choose **Cloud only** in Model settings. The key is injected at container runtime;
-it is not copied into an image or stored in company state.
+Create or edit a remote model connection and assign it to the desired agent. The
+key is injected at container runtime or stored write-only in the local secret
+vault; it is not copied into an image or stored in company state.
 
 ### D. Hybrid
 
-Configure both a ready local model connection and a remote connection, start with
-`-Mode Existing` or `-Mode Bundled`, then choose **Hybrid**. CEO, Development,
-and evidence-backed Research use the remote connection; Platform, Operations, Product, QA, and
-Growth use the chosen local model. Research receives hosted web search and must
-return direct sources. Computer Use is always a cloud capability and requires its own
-approved `browser_operate` task.
+Configure both a local and a remote connection, then assign the appropriate one
+to each agent. A CEO can use the stronger remote connection while routine
+content or operations agents use local/cheaper models. Computer Use remains a
+governed cloud capability and requires its own approved `browser_operate` task.
 
 ## 4. Verify the installation
 
@@ -142,10 +146,10 @@ Invoke-RestMethod http://127.0.0.1:8421/api/local-model/models
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Expected core services are `app`, `worker`, `browser-runtime`, and
-`execution-runtime`; bundled mode also runs `ollama` and the one-shot
-`ollama-init`. PostgreSQL/Temporal overlays add their infrastructure services.
-The current suite has 115 tests.
+Expected core services are `app`, `worker`, `browser-runtime`,
+`execution-runtime`, `postgres`, `temporal`, and `temporal-ui`; bundled mode also
+runs `ollama` and the one-shot `ollama-init`. `scripts/up.ps1` includes the free
+self-hosted infrastructure overlay by default. The current suite has 142 tests.
 
 The execution runtime has no published host port. Verify it through:
 
@@ -166,12 +170,13 @@ py -m venv .venv
 ## 5. How the execution loop works
 
 ```text
-stakeholder goal/directive
-  -> CEO returns one typed TaskProposal
+company facts + one agent's mandate/plugins/directive
+  -> that agent returns one typed TaskProposal
   -> Governor allows, denies, or requests approval
-  -> specialist or governed runtime executes
-  -> result, evidence, cost estimate, and audit events persist
-  -> CEO observes the new canonical snapshot and chooses the next task
+  -> plugin authorization and connection capabilities are enforced
+  -> specialist, API plugin, browser, or governed runtime executes
+  -> result, evidence, agent usage, and audit events persist
+  -> only that agent's durable workflow chooses the next task
 ```
 
 The model never grants itself permission. `Governor`, the orchestrator, storage
@@ -191,12 +196,15 @@ Pause/Stop are cooperative and take effect between model calls/browser actions.
 | Path | Responsibility |
 |---|---|
 | `src/digital_company/agents.py` | CEO and specialist prompts, Agents SDK, model routing |
+| `src/digital_company/agent_templates.py` | Typed agent forms, defaults, mandates, and allowed actions |
+| `src/digital_company/capability_plugins.py` | Reusable plugin definitions and deterministic grants |
 | `src/digital_company/models.py` | Typed contracts at the probabilistic/deterministic boundary |
 | `src/digital_company/policy.py` | Deterministic authorization Governor |
 | `src/digital_company/execution_runtime.py` | Internal Git checkpoint and structured-command boundary |
 | `src/digital_company/execution_client.py` | Worker-to-runtime fixed-host client |
 | `src/digital_company/orchestrator.py` | Observe-decide-authorize-execute-record loop |
-| `src/digital_company/store.py` | Canonical per-company SQLite state and audit projections |
+| `src/digital_company/wordpress_plugin.py` | Idempotent WordPress REST drafts and governed publication |
+| `src/digital_company/store.py` | PostgreSQL/SQLite-compatible canonical state and audit projections |
 | `src/digital_company/worker.py` | Background polling and company leases |
 | `src/digital_company/web.py` | FastAPI control plane and browser proxy |
 | `src/digital_company/browser_runtime.py` | Isolated Playwright/Chromium process |
@@ -216,7 +224,7 @@ or setup command changes.
 ## 7. Safe development workflow
 
 ```powershell
-git switch codex/usage-budget-accounting
+git switch codex/multi-agent-platform
 git pull --ff-only
 git switch -c luka/<short-feature-name>
 ```
@@ -238,11 +246,13 @@ state, browser profiles, and downloaded models.
 
 Highest-value next engineering steps:
 
-1. Add an end-to-end Browser Mission fixture/site and replayable Computer Use evals.
-2. Persist a resumable mission conversation instead of ending a paused mission.
+1. Configure a dedicated G&K WordPress user/Application Password and attach the
+   connection described in `docs/multi-agent-platform.md`; do not use a personal admin.
+2. Implement provider-specific per-agent SMTP sending on top of the new SMTP
+   connection profile; the current approval mail transport is still company-level.
 3. Add authentication and tenant authorization before any remote deployment.
 4. Add production PostgreSQL/Temporal backup and restore drills.
-5. Add real provider connectors with idempotency: Shopify OAuth/catalog drafts first.
+5. Add real provider plugins with idempotency: Shopify OAuth/catalog drafts first.
 6. Reconcile recorded token estimates with provider invoices and add tool-call pricing.
 
 Do not build autonomous CAPTCHA solving, silent account creation, contract signing,
@@ -250,9 +260,10 @@ payment submission, or unrestricted browser/shell access.
 
 ## 9. Read next
 
-1. [Architecture](architecture.md)
-2. [Developer guide](developer-guide.md)
-3. [Model and Docker setup](model-setup.md)
-4. [Browser missions and human takeover](browser-handoffs.md)
-5. [Operations](operations.md)
-6. [Known limitations](known-limitations.md)
+1. [Multi-agent platform](multi-agent-platform.md)
+2. [Architecture](architecture.md)
+3. [Developer guide](developer-guide.md)
+4. [Model and Docker setup](model-setup.md)
+5. [PostgreSQL and Temporal](postgres-temporal.md)
+6. [Browser missions and human takeover](browser-handoffs.md)
+7. [Known limitations](known-limitations.md)

@@ -8,8 +8,11 @@ Cloud and needs no Temporal account.
 Keep the overlays that match the chosen local model and email setup:
 
 ```powershell
-docker compose -f compose.yaml -f compose.local.yaml -f compose.email.yaml -f compose.infrastructure.yaml up -d --build
+.\scripts\up.ps1 -Mode Bundled -Mail -Build
 ```
+
+The script includes `compose.infrastructure.yaml` by default. Add
+`-Lightweight` only when intentionally testing the legacy SQLite/polling path.
 
 Open Telekt at `http://127.0.0.1:8421` and Temporal UI at
 `http://127.0.0.1:8080`. PostgreSQL listens on `127.0.0.1:5432` and Temporal
@@ -20,14 +23,15 @@ gRPC on `127.0.0.1:7233` by default.
 - PostgreSQL schema `telekt` is reserved for canonical application state.
 - Temporal creates and owns separate internal databases. Application code must
   never use Temporal tables as company memory.
-- `CompanyLoopWorkflowV4` schedules durable cycles on the isolated
-  `digital-company-v4` task queue. LLM calls, PostgreSQL access, email, browser
-  work, and filesystem changes run only inside Activities.
+- `AgentLoopWorkflowV1` owns the independent lifecycle for every configured
+  agent. The legacy `CompanyLoopWorkflowV4` remains registered so pre-migration
+  single-loop companies can be recovered. LLM calls, PostgreSQL access, email,
+  browser work, and filesystem changes run only inside Activities.
 - The original polling worker is replaced by `digital-company-temporal-worker`
   only when `compose.infrastructure.yaml` is included.
-- Start, pause, stop, approvals, handoffs, and stakeholder directives wake the
-  workflow through durable Temporal signals. Waiting companies do not poll the
-  database. An hourly durable timer only checks whether a daily brief is due.
+- Agent start, pause, stop, approvals, handoffs, and direct stakeholder
+  directives wake the target workflow through durable Temporal signals.
+  Waiting agents do not poll the database.
 - PostgreSQL is canonical for company business records when the infrastructure
   overlay is enabled. SQLite company files remain rollback/import sources.
 
@@ -59,15 +63,14 @@ for the lightweight SQLite-only stack.
 
 ## Workflow version cutover
 
-The recovery-safe implementation uses workflow type `CompanyLoopWorkflowV4`,
-workflow ID `company-loop-v4-<company-id>`, and task queue
-`digital-company-v4`. These identities are intentional: V3 histories cannot be
-replayed after changing activity heartbeat and timeout command attributes.
-Legacy histories may remain visible in Temporal UI for audit, but no current
-worker polls their task queue.
+The multi-agent implementation uses workflow type `AgentLoopWorkflowV1`, a
+workflow ID derived from both company and agent, and task queue
+`digital-company-v4`. Stable per-agent identities prevent one agent from
+claiming another agent's task or activity execution key. The V4 company workflow
+is a compatibility path for existing single-loop histories.
 
-Each company cycle receives a monotonic execution key. PostgreSQL checkpoints
-the key, frozen proposal, owned task, attempt count, and final result. Temporal
+Each agent cycle receives a monotonic, agent-scoped execution key. PostgreSQL
+checkpoints the key, agent, frozen proposal, owned task, attempt count, and final result. Temporal
 may retry the activity up to three times: unfinished work resumes the same task,
 while a committed result is returned from the cache if the worker died before
 acknowledging it. This prevents duplicate task and ledger records. External API

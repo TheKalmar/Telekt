@@ -11,8 +11,12 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
+RUN python -m pip install --upgrade pip && \
+    python -m pip install "pydantic>=2.10" "fastapi>=0.115" \
+      "uvicorn>=0.34" "python-multipart>=0.0.20"
+
 COPY src ./src
-RUN python -m pip install .
+RUN python -m pip install . --no-deps
 
 RUN groupadd --system company && \
     useradd --system --gid company --home-dir /workspaces company && \

@@ -57,6 +57,52 @@
       "footer":"Lokalni kontrolni centar · trajno PostgreSQL stanje · deterministička kontrola dozvola"
     }
   };
+  Object.assign(catalogs.en, {
+    "view.overview.description":"Agents, company state and the most important controls.",
+    "view.decisions.description":"Approvals, human takeover and communication for all agents.",
+    "view.configuration.description":"Company, agents, models, plugins and connections.",
+    "panel.chat":"Company broadcast",
+    "handoff.ceoWaiting":"An agent is paused on this exact checkpoint",
+    "handoff.incompleteInstructions":"The agent did not provide precise enough instructions. Report this as blocked and request an exact setup runbook.",
+    "handoff.returnTitle":"Return result to the agent",
+    "handoff.blockedTitle":"Explain the blocker to the agent",
+    "handoff.blockedHelp":"Explain exactly what prevented completion and what the agent should try instead.",
+    "handoff.resumeCeo":"Send result and resume agent",
+    "handoff.sendBlocker":"Send blocker to agent",
+    "browser.panelHint":"When an agent asks for a browser step, its card opens the exact page here.",
+    "chat.placeholder":"Send context or a directive to every agent in this company...",
+    "recovery.body":"The agent loop stopped after exhausting safe retries. Resume from committed state so that agent can reconsider the failure.",
+    "agent.workforce":"Digital employees","agent.workforceBody":"Each agent has an independent model, limits, plugins and lifecycle.","agent.add":"+ Add agent","agent.edit":"Edit","agent.details":"Details","agent.none":"This company has no digital agents yet. Add the first one under Configuration → Agents.",
+    "agent.count":"agents","agent.active":"active","agent.attention":"need attention","agent.model":"Model","agent.tokens":"Tokens","agent.cost":"Cost","agent.autonomy":"Autonomy","agent.approvals":"approvals","agent.handoffs":"handoffs","agent.lastRun":"Last run","agent.neverRun":"never run","agent.noPlugins":"No plugins","agent.start":"Start","agent.pause":"Pause","agent.stop":"Stop","agent.chat":"Chat","agent.plugins":"Plugins",
+    "agent.catalog":"Capability plugins","agent.catalogBody":"Define a capability once, then grant it to different agents with separate permissions and connections.","agent.assigned":"agent(s)","agent.tools":"Tools","agent.connections":"Connections","agent.noneValue":"none",
+    "agent.addTitle":"Add agent","agent.editTitle":"Edit agent","agent.editorBody":"The model, limits and mandate belong only to this agent.","agent.name":"Name","agent.type":"Agent type","agent.role":"Role","agent.purpose":"Purpose","agent.instructions":"Agent-specific instructions","agent.modelConnection":"Model connection","agent.tokenLimit":"Token limit","agent.spendLimit":"Model spend limit EUR","agent.setupRequired":"setup required","agent.suggestedPlugins":"Suggested plugins","agent.cancel":"Cancel","agent.save":"Save agent","agent.close":"Close",
+    "agent.pluginTitle":"Agent plugins","agent.pluginBody":"Grant only the permissions this agent actually needs.","agent.enabled":"enabled","agent.notInstalled":"not installed","agent.configure":"Configure","agent.install":"Install","agent.disable":"Disable","agent.disableConfirm":"Disable this plugin for the selected agent?","agent.pluginConfigure":"Configure plugin","agent.pluginSchema":"Configuration is validated against the plugin schema.","agent.pluginConnection":"API / service connection","agent.browserFallback":"Browser fallback · no API connection","agent.noConnection":"No connection · external execution unavailable","agent.readyConnections":"Only ready compatible connections are shown.","agent.noReadyConnection":"No ready compatible connection exists yet.","agent.createConnection":"Create connection","agent.noPluginFields":"This plugin has no configuration fields.","agent.saveGrant":"Save plugin grant",
+    "agent.chatTitle":"Stakeholder chat","agent.chatBody":"A directive interrupts only this agent; company policy still applies.","agent.message":"Message","agent.messagePlaceholder":"Change priority, answer a question, or provide context.","agent.directive":"Directive","agent.question":"Question","agent.send":"Send to agent","agent.loading":"Loading…","agent.noMessages":"No messages for this agent yet.","agent.direct":"DIRECT","agent.company":"COMPANY","agent.response":"AGENT RESPONSE"
+    ,"config.companyTab":"Company","config.agentsTab":"Agents","config.pluginsTab":"Plugins","config.connectionsTab":"Connections","config.legacySkillsTab":"Legacy skills","config.companyProfile":"Company profile","config.companyProfileBody":"Identity, industry, market, jurisdiction, website and context shared by every agent.","config.editCompany":"Edit company","config.newCompany":"New company","config.organization":"Organization","config.organizationBody":"Agents have independent models, limits, plugins and lifecycles.","config.manageAgents":"Manage agents","config.modelConnections":"Model connections","config.modelConnectionsBody":"Manage adapter technology, endpoints, arbitrary model IDs and routing.","config.configureRouting":"Configure routing"
+  });
+  Object.assign(catalogs.sr, {
+    "view.overview.description":"Agenti, stanje kompanije i najvažnije kontrole.",
+    "view.decisions.description":"Approvali, ljudsko preuzimanje i komunikacija za sve agente.",
+    "view.configuration.description":"Firma, agenti, modeli, pluginovi i konekcije.",
+    "panel.chat":"Poruka cijeloj firmi",
+    "handoff.ceoWaiting":"Agent je pauziran tačno na ovom koraku",
+    "handoff.incompleteInstructions":"Agent nije dao dovoljno precizne instrukcije. Prijavi blokadu i traži tačan tehnički postupak.",
+    "handoff.returnTitle":"Vrati rezultat agentu",
+    "handoff.blockedTitle":"Objasni blokadu agentu",
+    "handoff.blockedHelp":"Objasni tačno šta je spriječilo završetak i šta agent treba pokušati umjesto toga.",
+    "handoff.resumeCeo":"Pošalji rezultat i nastavi agenta",
+    "handoff.sendBlocker":"Pošalji blokadu agentu",
+    "browser.panelHint":"Kada agent zatraži browser korak, njegova kartica ovdje otvara tačnu stranicu.",
+    "chat.placeholder":"Pošalji kontekst ili direktivu svim agentima u firmi...",
+    "recovery.body":"Agentov loop je stao nakon sigurnih retry pokušaja. Nastavi od potvrđenog stanja da agent razmotri grešku.",
+    "agent.workforce":"Digitalni zaposlenici","agent.workforceBody":"Svaki agent ima nezavisan model, limite, pluginove i životni ciklus.","agent.add":"+ Dodaj agenta","agent.edit":"Uredi","agent.details":"Detalji","agent.none":"Firma još nema digitalnih agenata. Dodaj prvog u Konfiguracija → Agenti.",
+    "agent.count":"agenata","agent.active":"aktivno","agent.attention":"traži pažnju","agent.model":"Model","agent.tokens":"Tokeni","agent.cost":"Trošak","agent.autonomy":"Autonomija","agent.approvals":"approvala","agent.handoffs":"intervencija","agent.lastRun":"Zadnje izvršenje","agent.neverRun":"nije pokretan","agent.noPlugins":"Nema pluginova","agent.start":"Pokreni","agent.pause":"Pauziraj","agent.stop":"Zaustavi","agent.chat":"Chat","agent.plugins":"Pluginovi",
+    "agent.catalog":"Pluginovi sposobnosti","agent.catalogBody":"Sposobnost se definiše jednom, pa dodjeljuje različitim agentima sa zasebnim dozvolama i konekcijama.","agent.assigned":"agent(a)","agent.tools":"Alati","agent.connections":"Konekcije","agent.noneValue":"nema",
+    "agent.addTitle":"Dodaj agenta","agent.editTitle":"Uredi agenta","agent.editorBody":"Model, limiti i mandat pripadaju samo ovom agentu.","agent.name":"Ime","agent.type":"Vrsta agenta","agent.role":"Uloga","agent.purpose":"Svrha","agent.instructions":"Posebne instrukcije agenta","agent.modelConnection":"Konekcija modela","agent.tokenLimit":"Limit tokena","agent.spendLimit":"Limit troška modela u EUR","agent.setupRequired":"potrebno podešavanje","agent.suggestedPlugins":"Predloženi pluginovi","agent.cancel":"Otkaži","agent.save":"Sačuvaj agenta","agent.close":"Zatvori",
+    "agent.pluginTitle":"Pluginovi agenta","agent.pluginBody":"Dodijeli samo dozvole koje su ovom agentu stvarno potrebne.","agent.enabled":"omogućen","agent.notInstalled":"nije instaliran","agent.configure":"Podesi","agent.install":"Instaliraj","agent.disable":"Onemogući","agent.disableConfirm":"Onemogućiti ovaj plugin izabranom agentu?","agent.pluginConfigure":"Podesi plugin","agent.pluginSchema":"Konfiguracija se provjerava prema šemi plugina.","agent.pluginConnection":"API / servisna konekcija","agent.browserFallback":"Browser način · bez API konekcije","agent.noConnection":"Nema konekcije · vanjsko izvršenje nije dostupno","agent.readyConnections":"Prikazane su samo spremne kompatibilne konekcije.","agent.noReadyConnection":"Još nema spremne kompatibilne konekcije.","agent.createConnection":"Kreiraj konekciju","agent.noPluginFields":"Ovaj plugin nema konfiguracionih polja.","agent.saveGrant":"Sačuvaj plugin",
+    "agent.chatTitle":"Stakeholder chat","agent.chatBody":"Direktiva prekida samo ovog agenta; pravila firme i dalje važe.","agent.message":"Poruka","agent.messagePlaceholder":"Promijeni prioritet, odgovori na pitanje ili dodaj kontekst.","agent.directive":"Direktiva","agent.question":"Pitanje","agent.send":"Pošalji agentu","agent.loading":"Učitavam…","agent.noMessages":"Ovaj agent još nema poruka.","agent.direct":"DIREKTNO","agent.company":"FIRMA","agent.response":"ODGOVOR AGENTA"
+    ,"config.companyTab":"Firma","config.agentsTab":"Agenti","config.pluginsTab":"Pluginovi","config.connectionsTab":"Konekcije","config.legacySkillsTab":"Legacy skillovi","config.companyProfile":"Profil firme","config.companyProfileBody":"Identitet, djelatnost, tržište, jurisdikcija, web i kontekst koji dijele svi agenti.","config.editCompany":"Uredi firmu","config.newCompany":"Nova firma","config.organization":"Organizacija","config.organizationBody":"Agenti imaju nezavisne modele, limite, pluginove i životne cikluse.","config.manageAgents":"Upravljaj agentima","config.modelConnections":"Konekcije modela","config.modelConnectionsBody":"Podesi tehnologiju adaptera, endpoint, proizvoljan model ID i routing.","config.configureRouting":"Podesi routing"
+  });
   const labels = {en:"English",sr:"Srpski"};
   let language = localStorage.getItem(STORAGE_KEY) || (navigator.language.toLowerCase().startsWith("sr") ? "sr" : "en");
   if (!catalogs[language]) language = "en";

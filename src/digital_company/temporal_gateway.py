@@ -13,7 +13,7 @@ import os
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
-from digital_company.temporal_workflow import CompanyLoopWorkflow, TASK_QUEUE
+from digital_company.temporal_workflow import AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE
 
 
 class TemporalCommandError(RuntimeError):
@@ -30,6 +30,10 @@ def workflow_id(company_id: str) -> str:
     return f"company-loop-v4-{company_id}"
 
 
+def agent_workflow_id(company_id: str, agent_id: str) -> str:
+    return f"agent-loop-v1-{company_id}-{agent_id}"
+
+
 async def ensure_workflow(client: Client, company_id: str):
     """Start the company workflow once and return its stable handle."""
     try:
@@ -42,6 +46,21 @@ async def ensure_workflow(client: Client, company_id: str):
     except WorkflowAlreadyStartedError:
         pass
     return client.get_workflow_handle(workflow_id(company_id))
+
+
+async def ensure_agent_workflow(client: Client, company_id: str, agent_id: str):
+    """Start exactly one stable Temporal workflow for this agent instance."""
+    identity = agent_workflow_id(company_id, agent_id)
+    try:
+        await client.start_workflow(
+            AgentLoopWorkflow.run,
+            {"company_id": company_id, "agent_id": agent_id},
+            id=identity,
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        pass
+    return client.get_workflow_handle(identity)
 
 
 async def _signal(company_id: str, signal_name: str, reason: str) -> None:
@@ -67,5 +86,31 @@ def signal_company(company_id: str, signal_name: str, reason: str) -> bool:
     except Exception as exc:
         raise TemporalCommandError(
             f"Temporal command {signal_name!r} failed: {type(exc).__name__}"
+        ) from exc
+    return True
+
+
+async def _signal_agent(
+    company_id: str, agent_id: str, signal_name: str, reason: str,
+) -> None:
+    client = await Client.connect(
+        os.environ["TEMPORAL_ADDRESS"],
+        namespace=os.getenv("TEMPORAL_NAMESPACE", "default"),
+    )
+    handle = await ensure_agent_workflow(client, company_id, agent_id)
+    await handle.signal(signal_name, reason)
+
+
+def signal_agent(
+    company_id: str, agent_id: str, signal_name: str, reason: str,
+) -> bool:
+    """Durably control one agent without changing any sibling agent."""
+    if not enabled():
+        return False
+    try:
+        asyncio.run(_signal_agent(company_id, agent_id, signal_name, reason))
+    except Exception as exc:
+        raise TemporalCommandError(
+            f"Temporal agent command {signal_name!r} failed: {type(exc).__name__}"
         ) from exc
     return True

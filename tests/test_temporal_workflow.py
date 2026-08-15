@@ -2,7 +2,9 @@ import asyncio
 
 from digital_company import temporal_gateway, web
 from digital_company.temporal_worker import _apply_result_state
-from digital_company.temporal_workflow import CompanyLoopWorkflow, TASK_QUEUE, waits_for_external_signal
+from digital_company.temporal_workflow import (
+    AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE, waits_for_external_signal,
+)
 
 
 def test_company_workflow_signals_are_restartable():
@@ -41,11 +43,25 @@ def test_waiting_results_require_a_signal_but_completed_cycle_does_not():
 def test_temporal_gateway_is_optional_without_infrastructure(monkeypatch):
     monkeypatch.delenv("TEMPORAL_ADDRESS", raising=False)
     assert temporal_gateway.signal_company("company-1", "start", "test") is False
+    assert temporal_gateway.signal_agent("company-1", "agent-1", "start", "test") is False
 
 
 def test_v4_workflow_id_does_not_replay_pre_heartbeat_history():
     assert temporal_gateway.workflow_id("abc") == "company-loop-v4-abc"
     assert TASK_QUEUE == "digital-company-v4"
+    assert temporal_gateway.agent_workflow_id("abc", "writer") == "agent-loop-v1-abc-writer"
+
+
+def test_agent_workflow_has_independent_restartable_lifecycle():
+    workflow = AgentLoopWorkflow()
+    asyncio.run(workflow.start("content_start"))
+    assert workflow.state()["running"] is True
+    asyncio.run(workflow.pause("review"))
+    assert workflow.state()["paused"] is True
+    asyncio.run(workflow.resume("continue"))
+    assert workflow.state()["running"] is True
+    asyncio.run(workflow.stop("owner_stop"))
+    assert workflow.state()["last_status"] == "stopped"
 
 
 class FakeStore:

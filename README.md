@@ -1,6 +1,11 @@
-# Digital AI Company
+# Telekt — Digital AI Company
 
-A proof of concept for a portfolio of autonomous digital companies. A stakeholder creates a company with a goal, budget, profile, constraints, and success criteria. A CEO agent selects the next job, specialist agents execute internal work, a deterministic Governor enforces authority boundaries, and PostgreSQL stores durable company and portfolio state in the infrastructure stack.
+Telekt is a control plane for a portfolio of digital companies. Organization
+facts are independent from digital employees: after creating a company, the
+owner adds any number of typed agent instances. Every agent has its own mandate,
+model connection, token and model-spend limits, reusable capability-plugin
+grants, lifecycle, durable Temporal workflow, run history, and direct
+stakeholder chat.
 
 An opt-in free self-hosted infrastructure overlay now runs PostgreSQL, Temporal,
 Temporal UI, and the durable Temporal company worker. See
@@ -8,8 +13,10 @@ Temporal UI, and the durable Temporal company worker. See
 signal-driven company scheduling; SQLite remains available as a lightweight
 development and import fallback.
 
-Agents use a versioned, role- and action-scoped Skill Registry. See
-[`docs/agent-skills.md`](docs/agent-skills.md).
+Read [Multi-agent company platform](docs/multi-agent-platform.md) before changing
+company, agent, plugin, connection, or WordPress behavior. The older versioned
+Skill Registry remains available for prompt/evidence procedures; capability
+plugins are the enforceable runtime authority layer.
 
 The control-plane UI supports English and Serbian through an extensible
 translation catalog. See [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
@@ -19,8 +26,14 @@ This repository proves the control loop and governance model. It is not yet a pr
 ## What is implemented
 
 - Multi-company portfolio with isolated state and artifacts
-- CEO, Research, Product, Development, QA, and Growth agent roles
-- Local, hybrid, and cloud model routing
+- Company creation independent from agent creation
+- Independently runnable typed agents with per-agent model, token and € limits
+- Reusable typed capability plugins and per-agent least-privilege grants
+- Provider-neutral model and integration connections with write-only credentials
+- Concurrent durable per-agent Temporal workflows and recovery keys
+- Per-agent stakeholder chat, tasks, approvals, handoffs, runs, and usage
+- Content & SEO agent template and idempotent WordPress REST draft/publish plugin
+- Local and cloud model connections assignable independently to each agent
 - Deterministic allow / approval / deny policy
 - Durable tasks, decisions, approvals, budget ledger, chat, and audit history
 - Stakeholder directives that supersede stale approvals
@@ -43,19 +56,16 @@ This repository proves the control loop and governance model. It is not yet a pr
 Browser control plane
         |
         v
-FastAPI API ---- Portfolio registry
-        |              |
-        |              +---- PostgreSQL company state
-        |              +---- Isolated artifact workspaces
-        |
-        +---- Temporal signal ---- CompanyLoopWorkflowV4
-                                      |
-                                      v
-                               CompanyOrchestrator activity
-        |
-        +---- AgentEngine (local / hybrid / cloud)
-        +---- Governor (deterministic policy)
-        +---- CompanyStore (durable state + audit)
+FastAPI API ---- Company ---- Agent instances ---- Plugin grants ---- Connections
+        |              |             |                                      |
+        |              +-------------+---- PostgreSQL canonical state -------+
+        |                            |
+        +---- Temporal signal -------+---- AgentLoopWorkflowV1 per agent
+                                             |
+                                             v
+                                      CompanyOrchestrator activity
+                                             |
+                         AgentEngine + Governor + capability enforcement
 ```
 
 See [Architecture](docs/architecture.md) for the full system description.
@@ -65,7 +75,7 @@ See [Architecture](docs/architecture.md) for the full system description.
 - Windows, Linux, or macOS
 - Python 3.11+
 - A credential for the selected remote connection when that transport requires one
-- Ollama plus `deepseek-company:8b` for local or hybrid mode
+- Ollama plus a configured model for agents assigned to a local connection
 
 The local model configuration is in [config/Modelfile.deepseek-company](config/Modelfile.deepseek-company).
 
@@ -73,10 +83,11 @@ The local model configuration is in [config/Modelfile.deepseek-company](config/M
 
 ### Docker (recommended)
 
-Docker Compose runs the control plane, browser runtime, internal Git execution runtime,
-Ollama, the customized local model, and persistent volumes for company state,
-execution workspaces, and model files. No OpenAI key is required
-when a company uses Local mode.
+Docker Compose runs the control plane, browser runtime, internal Git execution
+runtime, PostgreSQL, free self-hosted Temporal, and optional Ollama/email
+services. No OpenAI key is required when an agent uses a local connection.
+`scripts/up.ps1` includes the durable infrastructure by default; use
+`-Lightweight` only for legacy SQLite/polling development.
 
 Bundled Ollama with the default DeepSeek-R1 8B model on CPU:
 
@@ -124,9 +135,10 @@ For cloud or hybrid mode, copy `.env.example` to `.env.local` and set
 `OPENAI_API_KEY`. `scripts/up.ps1` loads `.env.local` when present; the secret is
 neither copied into the image nor committed to Git.
 
-Use **Model settings** in Mission control to select Local, Hybrid, or Cloud and
-choose any model reported by the configured Ollama server. Settings are stored
-per company.
+Use **Configuration → Models** to create provider-neutral model connections.
+Then choose the connection on each agent under **Configuration → Agents**. An
+agent can be configured while a credential/model is unavailable; Start performs
+the readiness check.
 
 ### Native Python
 
@@ -162,22 +174,20 @@ Start the control plane:
 
 Open [http://127.0.0.1:8421](http://127.0.0.1:8421). The readiness endpoint is `GET /health`.
 
-## Model modes
+## Per-agent model routing
 
-| Mode | CEO | Development | Research | Product / QA / Growth | Intended use |
-|---|---|---|---|---|---|
-| Local | Selected local connection | Selected local connection | Offline only | Selected local connection | Free workflow testing and simple work |
-| Hybrid | Selected remote connection | Selected remote connection | Remote; hosted search when supported | Selected local connection | Evidence-backed strategy with controlled remote cost |
-| Cloud | Selected remote connection | Selected remote connection | Remote; hosted search when supported | Selected remote connection | Highest quality |
-
-Mode changes apply to future cycles and are rejected while a company is running. Local mode disables OpenAI trace export.
+Model vendors and model IDs are data, not hardcoded UI choices. Create local or
+remote connection profiles through supported adapter technologies, then assign
+one to each agent. For example, a CEO may use a stronger remote model while a
+Content agent uses a cheaper remote or local model. Token and estimated API-cost
+ceilings are enforced per agent.
 
 ## Runtime controls
 
-- **Start / Resume** starts a background loop for the selected company.
-- **Pause** stops before the next atomic agent step.
-- **Stop** also stops before the next atomic agent step.
-- **Stakeholder directive** becomes priority CEO context and supersedes stale pending approvals.
+- **Start / Pause / Stop** on an agent card signals only that agent's workflow.
+- Multiple agents may run concurrently inside one company.
+- **Agent chat directive** becomes priority context for that agent and
+  supersedes only its stale pending approvals/handoffs.
 - **Stakeholder question** requests a response without invalidating the current plan.
 
 Pause and stop are cooperative. An in-flight model request or database write is allowed to finish.
@@ -203,7 +213,9 @@ An intentional live run uses one model call per eval case and writes the detaile
 
 ```text
 src/digital_company/
-  agents.py          Agent routing, execution, retries, and evidence gates
+  agent_templates.py Typed agent setup schemas and allowed-action boundaries
+  capability_plugins.py Reusable plugin catalog, config, and permission mapping
+  agents.py          Per-agent model execution, limits, retries, and evidence gates
   model_adapters.py  Connection-profile to Agents SDK adapter factory
   api_models.py      Validated HTTP request contracts
   company_runtime.py Shared worker state and stakeholder-brief services
@@ -212,6 +224,7 @@ src/digital_company/
   preflight.py       Runtime readiness rules and connection checks
   models.py          Typed agent/application contracts
   orchestrator.py    Autonomous control loop
+  wordpress_plugin.py Idempotent governed WordPress REST execution
   workspace.py       Confined artifact writes and deterministic validation
   browser_runtime.py Isolated Playwright/Chromium session service
   browser_client.py  Shared internal browser-runtime HTTP boundary
@@ -260,4 +273,4 @@ Read these in order:
 
 ## Security warning
 
-The Governor is the authorization boundary. Do not move external side effects into agent prompts or specialist code. A model may propose an action, but deterministic application code must authorize and execute it. Production deployments also need authentication, tenant authorization, encrypted secret storage, PostgreSQL, a durable workflow engine, and an isolated execution sandbox.
+The Governor is the authorization boundary. Do not move external side effects into agent prompts or specialist code. A model may propose an action, but deterministic application code must authorize and execute it. Production deployments also need authentication, tenant authorization, encrypted secret storage, backup/restore operations, and a per-job execution sandbox stronger than the current isolated runtime.

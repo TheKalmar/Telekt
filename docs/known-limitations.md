@@ -4,13 +4,12 @@ This document is intentionally candid so a new developer does not mistake POC be
 
 ## Workflow durability
 
-The infrastructure overlay uses a signal-driven Temporal workflow per company,
-including durable pause/start/stop, approval, handoff, stakeholder-message
-signals, hourly brief timers, and startup recovery. V4 gives every company cycle
-a stable execution key, frozen task checkpoint, cached result, and up to three
-Temporal attempts. The lightweight stack still ships the legacy SQLite polling
-worker as a development fallback. External connectors still require their own
-provider-level idempotency contracts.
+The infrastructure overlay uses a signal-driven Temporal workflow per agent,
+including durable pause/start/stop, approval, handoff, direct-message signals,
+and startup recovery. AgentLoopWorkflowV1 gives every agent cycle a scoped
+execution key, frozen task checkpoint, cached result, and up to three Temporal
+attempts. The V4 company workflow and SQLite polling worker remain legacy
+fallbacks. External connectors still require provider-level idempotency.
 
 Structured specialist failures are stored separately from completed work and
 are included in the CEO's next canonical snapshot. The recovery control resumes
@@ -32,12 +31,13 @@ backups, restore drills, and encryption-at-rest configuration remain open.
 - The server is safe only when bound to localhost in a trusted environment.
 - There is no CSRF protection.
 - Generated HTML is stored and can be opened locally; it must be treated as untrusted code.
-- Execution is not sandboxed.
+- The execution runtime is container/network isolated, but it is not yet a fresh per-job VM/container sandbox.
 - The audit log is mutable by anyone with database access.
 
 ## Model routing
 
-- Hybrid routing is static, not complexity-aware.
+- Explicit agents choose one configured model connection; automated
+  complexity-aware model selection is not implemented.
 - Local-to-cloud fallback is explicit and disabled by default. A configurable
   minimum budget reserve blocks new cloud calls, but this is not a prepaid or
   transactional reservation at the provider.
@@ -73,13 +73,14 @@ control-plane origin.
 
 ## Platform integrations
 
-The CEO can evaluate build/buy/integrate/manual paths, request a platform, and
-reason over durable capability readiness. Provider-neutral HTTP, OAuth and
-webhook profiles now store capability grants, write-only credential references,
-and stable idempotency keys for prepared operations. Adapter dispatch,
-OAuth exchanges, API health verification, catalog reads, draft creation,
-publication, incoming webhooks, and supplier marketplace connectors are not
-implemented yet.
+An agent can evaluate build/buy/integrate/manual paths, request a platform, and
+reason over durable capability readiness. Provider-neutral HTTP, SMTP, OAuth,
+and webhook profiles store capability grants, write-only credential references,
+and stable idempotency keys for prepared operations. WordPress REST draft
+creation and publication are implemented with grant/capability checks.
+Agent-specific SMTP dispatch, OAuth exchanges, generic adapter dispatch, API
+health verification, catalog operations, incoming webhooks, and supplier
+marketplace connectors are not implemented yet.
 
 ## Browser and outsourcing
 
@@ -96,7 +97,7 @@ human-only; bypass behavior is out of scope.
 
 ## Concurrency
 
-Temporal owns company-cycle scheduling in the infrastructure overlay. The old
+Temporal owns independent agent-cycle scheduling in the infrastructure overlay. The old
 lease implementation remains only for the lightweight polling-worker fallback
 and must not be horizontally scaled.
 

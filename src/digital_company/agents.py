@@ -82,15 +82,26 @@ explicit blocked signal. The orchestrator will stop the company in waiting_appro
 Use PREPARE_OUTREACH for internal lead research, targeting, drafts, and campaign assets. Use EXTERNAL_OUTREACH
 only when a message will actually be transmitted outside the company.
 """
+CEO_INSTRUCTIONS += """
+When profile.workflow_type is content_seo, follow the owner's configured content workflow instead of inventing a
+generic startup workflow. Use RESEARCH_CONTENT for search demand, intent, competitor gaps and verified official
+sources; use CREATE_CONTENT_DRAFT to produce a complete reviewable Markdown draft; use SAVE_CONTENT_DRAFT to put
+the latest completed draft into the configured publishing_url as an unpublished WordPress draft; use
+PUBLISH_CONTENT only after that exact draft exists and is ready for the owner's final publication decision.
+Creating, editing, previewing and saving an unpublished draft are routine reversible work and must not be presented
+as stakeholder approvals. Login, CAPTCHA and 2FA remain one precise human handoff. Publication is one batched human
+approval containing the actual draft, SEO rationale and sources. Never create approvals merely to inspect an editor,
+open Posts, view a draft, perform QA, or repeat an existing login handoff.
+"""
 
 SPECIALIST_INSTRUCTIONS = {
-    "research": """You are a skeptical B2B market researcher. You must use web search before drawing market conclusions. Produce a concise opportunity brief that separates verified facts, inference, and assumptions. Put at least two distinct direct HTTP(S) source URLs in the sources field and connect every important claim to one of them in evidence. Prefer primary sources, official product/pricing pages, public datasets, and direct customer language. Never invent a source, statistic, quote, interview, customer reaction, or completed experiment. If credible evidence is unavailable, return failed rather than filling gaps with plausible prose.""",
+    "research": """You are a skeptical market and search researcher. You must use web search before drawing conclusions. Produce a concise opportunity brief that separates verified facts, inference, and assumptions. Put at least two distinct direct HTTP(S) source URLs in the sources field and connect every important claim to one of them in evidence. Prefer primary sources, official legislation and government sources, public datasets, official product/pricing pages, and direct user language. For legal content, verify every law, deadline and procedure against authoritative sources and explicitly flag jurisdiction and uncertainty. Assess search demand, intent, competition, local relevance and commercial value without inventing search volumes. Never invent a source, statistic, quote, interview, customer reaction, or completed experiment. If credible evidence is unavailable, return failed rather than filling gaps with plausible prose.""",
     "platform": "You are a platform strategy lead. Compare build, buy, integrate, and manual validation using total cost, setup time, API capability, lock-in, operational burden, and reversibility. Recommend one path and list the minimum human setup and permissions. Never claim access already exists.",
     "operations": "You are a resourceful operations lead. Design browser missions, human handoffs, and contractor sourcing plans. Produce exact URLs, bounded steps, success evidence, fallback routes, and risks. Never claim a login, CAPTCHA, 2FA, outreach, agreement, or payment was completed.",
     "product": "You are a pragmatic product manager. Produce a narrow PRD with ICP, pain, workflow, acceptance criteria, non-goals, pricing hypothesis, and measurable validation test.",
     "development": "You are an MVP developer. Produce one self-contained HTML application as artifact_content. It must be functional without a build step, with clear UI and embedded JavaScript. Return artifact_path as mvp/index.html.",
     "qa": "You are an adversarial QA lead. Inspect the supplied company state and artifact context, list concrete checks, failures, risks, and a go/no-go recommendation.",
-    "growth": "You are an ethical B2B growth lead. For PREPARE_OUTREACH, create targeting, research, drafts, and a validation plan only; do not claim messages were sent or money was spent. EXTERNAL_OUTREACH means actual sending and requires approval.",
+    "growth": """You are an ethical growth and content strategist. For PREPARE_OUTREACH, create targeting, research, drafts, and a validation plan only; do not claim messages were sent or money was spent. EXTERNAL_OUTREACH means actual sending and requires approval. For CREATE_CONTENT_DRAFT, use the latest research and authoritative sources to return one complete Markdown artifact under content/drafts/<short-slug>.md. Include an executive topic rationale, search intent, target keywords without fabricated volume, SEO title, meta description, suggested slug, H1/H2 structure, readable final article, FAQ, internal-link suggestions, CTA, jurisdiction/legal-review notes, and a Sources section. The artifact must be ready for owner review but never described as published.""",
     "ceo": "You are an executive analyst. Summarize the stopping decision and unresolved risks.",
 }
 
@@ -113,6 +124,9 @@ class AgentEngine:
                   local_connection: dict | None = None, cloud_connection: dict | None = None,
                   reporter: Callable[[str, dict], None] | None = None,
                   remaining_budget: Callable[[], float] | None = None,
+                  remaining_tokens: Callable[[], int | None] | None = None,
+                  agent_id: str | None = None,
+                  instance_instructions: str = "",
                   adapter_factory: ModelAdapterFactory | None = None) -> None:
         adapter_factory = adapter_factory or ModelAdapterFactory()
         self.cloud_provider = (cloud_connection or {}).get("name", cloud_provider)
@@ -126,6 +140,8 @@ class AgentEngine:
         self.allow_cloud_fallback = allow_cloud_fallback
         self.reporter = reporter or (lambda _event, _payload: None)
         self.remaining_budget = remaining_budget
+        self.remaining_tokens = remaining_tokens
+        self.agent_id = agent_id
         self.max_turns = int(os.getenv("AGENT_MAX_TURNS", "8"))
         self.structured_retries = int(os.getenv("STRUCTURED_OUTPUT_RETRIES", "1"))
         local_binding = adapter_factory.build(
@@ -143,11 +159,19 @@ class AgentEngine:
         ))
         set_tracing_disabled(mode == "local" or not cloud_hosted_tools)
         ceo_local = mode == "local"
+        scoped_ceo_instructions = CEO_INSTRUCTIONS + (
+            "\n\nAgent-instance mandate (higher priority than generic role preferences):\n" +
+            instance_instructions.strip()
+            if instance_instructions.strip() else ""
+        )
         self.ceo = self._agent(
-            "CEO", CEO_INSTRUCTIONS, TaskProposalDraft if ceo_local else TaskProposal,
+            "CEO" if not agent_id else "Agent planner", scoped_ceo_instructions,
+            TaskProposalDraft if ceo_local else TaskProposal,
             ceo_local, retry_settings,
         )
-        self.ceo_fallback = self._agent("CEO fallback", CEO_INSTRUCTIONS, TaskProposal, False, retry_settings) if ceo_local else None
+        self.ceo_fallback = self._agent(
+            "CEO fallback", scoped_ceo_instructions, TaskProposal, False, retry_settings
+        ) if ceo_local else None
         self.specialists = {}
         self.specialist_fallbacks = {}
         for name, instructions in SPECIALIST_INSTRUCTIONS.items():
@@ -186,12 +210,26 @@ class AgentEngine:
         started = time.monotonic()
         run_id = str(uuid4())
         provider = "local" if agent.model is self.local_model else self.cloud_provider
+        agent_id = getattr(self, "agent_id", None)
+        token_reader = getattr(self, "remaining_tokens", None)
+        remaining_tokens = token_reader() if token_reader else None
+        token_reserve = max(1, int(os.getenv("AGENT_CALL_TOKEN_RESERVE", "1000")))
+        if remaining_tokens is not None and remaining_tokens < token_reserve:
+            self.reporter("budget.agent_tokens_blocked", {
+                "agent_id": agent_id, "role": role, "remaining_tokens": remaining_tokens,
+                "required_reserve": token_reserve,
+            })
+            raise RuntimeError(
+                f"Agent token limit cannot safely fund another call ({remaining_tokens} remaining)"
+            )
         reserve = float(os.getenv("CLOUD_CALL_RESERVE_EUR", "0.05"))
         budget_reader = getattr(self, "remaining_budget", None)
         if provider != "local" and budget_reader and budget_reader() < reserve:
             self.reporter("budget.cloud_call_blocked", {"role": role, "required_reserve": reserve})
             raise RuntimeError(f"Cloud call blocked: less than {reserve:.2f} budget remains")
-        self.reporter("model.started", {"run_id": run_id, "role": role, "provider": provider})
+        self.reporter("model.started", {
+            "run_id": run_id, "role": role, "provider": provider, "agent_id": agent_id,
+        })
         last_error = None
         for repair_attempt in range(self.structured_retries + 1):
             try:
@@ -199,11 +237,13 @@ class AgentEngine:
                 usage = usage_payload(run_result, run_id=run_id, provider=provider,
                                       model=self._model_id(agent))
                 if usage:
+                    usage["agent_id"] = agent_id
                     self.reporter("model.usage", usage)
                 result = run_result.final_output
                 self.reporter("model.succeeded", {
                     "role": role, "provider": provider, "repair_attempt": repair_attempt,
                     "run_id": run_id,
+                    "agent_id": agent_id,
                     "latency_ms": round((time.monotonic() - started) * 1000),
                 })
                 return result
@@ -244,6 +284,7 @@ class AgentEngine:
                 usage = usage_payload(run_result, run_id=run_id + ":fallback", provider="cloud_fallback",
                                       model=self._model_id(fallback))
                 if usage:
+                    usage["agent_id"] = agent_id
                     self.reporter("model.usage", usage)
                 output = run_result.final_output
                 self.reporter("model.succeeded", {
@@ -271,7 +312,7 @@ class AgentEngine:
         model = getattr(agent, "model", "unknown")
         return str(getattr(model, "model", model))
 
-    def decide(self, snapshot: CompanySnapshot) -> TaskProposal:
+    def decide(self, snapshot: CompanySnapshot, agent_context: dict | None = None) -> TaskProposal:
         """Ask the CEO to select exactly one next task from canonical state."""
         context = snapshot.model_dump(mode="json")
         # The CEO only needs routing metadata to select a skill. Full skill
@@ -280,6 +321,7 @@ class AgentEngine:
             {key: skill.get(key) for key in ("id", "name", "roles", "actions", "status")}
             for skill in context.get("skills", [])
         ]
+        context["active_agent"] = agent_context
         prompt = "Current canonical company state:\n" + json.dumps(context, separators=(",", ":"))
         draft = self._run(self.ceo, self.ceo_fallback, prompt, "ceo")
         return TaskProposal.model_validate(draft.model_dump())
@@ -290,6 +332,8 @@ class AgentEngine:
         snapshot: CompanySnapshot,
         artifact_context: dict | None = None,
         skill_context: list[dict] | None = None,
+        agent_context: dict | None = None,
+        plugin_context: list[dict] | None = None,
     ) -> SpecialistResult:
         """Execute an approved internal task with the selected specialist."""
         selected = self.specialists[proposal.specialist]
@@ -305,12 +349,14 @@ class AgentEngine:
             "company_state": snapshot.model_dump(mode="json"),
             "artifact_context": artifact_context,
             "assigned_skills": skill_context or [],
+            "active_agent": agent_context,
+            "granted_plugins": plugin_context or [],
         }, indent=2)
         result = self._run(
             selected, self.specialist_fallbacks[proposal.specialist],
             prompt, proposal.specialist,
         )
-        if proposal.action == ActionType.RESEARCH_MARKET:
+        if proposal.action in {ActionType.RESEARCH_MARKET, ActionType.RESEARCH_CONTENT}:
             valid_sources = {
                 value for value in result.sources
                 if value.startswith("https://") or value.startswith("http://")

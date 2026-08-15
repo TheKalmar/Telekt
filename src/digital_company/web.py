@@ -19,8 +19,11 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from digital_company.api_models import (
     ApprovalDecisionIn,
+    AgentConfigIn,
+    AgentPluginGrantIn,
     BrowserActionIn,
     BrowserSessionIn,
+    CompanyBriefIn,
     CompanyCreateIn,
     EmailSettingsIn,
     HandoffDecisionIn,
@@ -40,7 +43,7 @@ from digital_company.browser_client import (
 from digital_company.registry import CompanyRegistry
 from digital_company.store import CompanyStore
 from digital_company.email_service import verify_approval_token
-from digital_company.temporal_gateway import TemporalCommandError, signal_company
+from digital_company.temporal_gateway import TemporalCommandError, signal_agent, signal_company
 from digital_company.workspace import WorkspaceRuntime
 from digital_company.runtime_secrets import apply_runtime_secrets, save_secret
 from digital_company.runtime_secrets import get_secret
@@ -56,11 +59,12 @@ from digital_company.integration_connectors import (
     ADAPTERS as INTEGRATION_ADAPTERS,
     secret_name as integration_secret_name,
 )
+from digital_company.agent_templates import AGENT_TYPES
 
 
 ROOT = Path.cwd()
 STATIC_DIR = Path(__file__).parent / "static"
-FRONTEND_JS_ASSETS = {"ui-core.js", "settings-ui.js", "browser-ui.js"}
+FRONTEND_JS_ASSETS = {"ui-core.js", "agent-ui.js", "settings-ui.js", "browser-ui.js"}
 load_dotenv(ROOT / ".env.local")
 apply_runtime_secrets()
 STATE_DIR = Path(os.getenv("COMPANY_DATA_DIR", str(ROOT / ".company"))).expanduser().resolve()
@@ -113,6 +117,44 @@ def signal_temporal(company_id: str, signal_name: str, reason: str) -> bool:
         raise HTTPException(503, str(exc)) from exc
 
 
+def signal_agent_temporal(
+    company_id: str, agent_id: str, signal_name: str, reason: str,
+) -> bool:
+    try:
+        return signal_agent(company_id, agent_id, signal_name, reason)
+    except TemporalCommandError as exc:
+        with store_scope(company_id) as store:
+            store.audit("temporal.agent_signal_failed", {
+                "agent_id": agent_id, "signal": signal_name,
+                "reason": reason, "error": str(exc),
+            })
+        raise HTTPException(503, str(exc)) from exc
+
+
+def require_agent_model_connection(connection_id: str, verify_model: bool = False) -> dict:
+    """Resolve a model profile and, only for Start, enforce runtime readiness.
+
+    Agent configuration must remain editable while a credential or local model is
+    temporarily unavailable.  ``verify_model`` is therefore the lifecycle gate:
+    create/update validates identity only, while Start performs the complete
+    credential and transport check without making a paid inference.
+    """
+    settings = None
+    with store_scope() as store:
+        settings = store.get_settings()
+    connections = ModelConnectionRegistry().ensure_defaults(
+        settings["local_model"], settings["cloud_model"],
+    )
+    connection = next((item for item in connections if item["id"] == connection_id), None)
+    if not connection:
+        raise HTTPException(400, "Selected model connection does not exist")
+    if verify_model:
+        ready, detail = connection_ready(connection, verify_model=True)
+        if not ready:
+            raise HTTPException(409, detail)
+    return connection
+
+
 def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
     """Evaluate whether the selected company can safely start its configured loop."""
     settings = store.get_settings()
@@ -157,7 +199,10 @@ def index():
 @app.get("/assets/i18n.js", include_in_schema=False)
 def i18n_catalog():
     """Serve the zero-build UI translation catalog."""
-    return FileResponse(STATIC_DIR / "i18n.js", media_type="text/javascript")
+    return FileResponse(
+        STATIC_DIR / "i18n.js", media_type="text/javascript",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.get("/assets/telekt-logo.svg", include_in_schema=False)
@@ -295,6 +340,104 @@ def skills():
         return {"skills": store.list_skills()}
 
 
+@app.get("/api/agents")
+def agents():
+    with store_scope() as store:
+        return {"agents": store.list_agents()}
+
+
+@app.get("/api/agent-types")
+def agent_types():
+    return {"agent_types": AGENT_TYPES}
+
+
+@app.post("/api/agents")
+def create_agent(payload: AgentConfigIn):
+    require_agent_model_connection(payload.model_connection_id, verify_model=False)
+    with store_scope() as store:
+        return store.create_agent(payload.model_dump())
+
+
+@app.put("/api/agents/{agent_id}")
+def update_agent(agent_id: str, payload: AgentConfigIn):
+    require_agent_model_connection(payload.model_connection_id, verify_model=False)
+    try:
+        with store_scope() as store:
+            return store.update_agent(agent_id, payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(404, "Agent not found") from exc
+
+
+@app.post("/api/agents/{agent_id}/{status}")
+def set_agent_status(agent_id: str, status: str):
+    if status not in {"running", "paused", "stopped"}:
+        raise HTTPException(400, "Unknown agent lifecycle command")
+    company_id = registry.active_id()
+    try:
+        with store_scope(company_id) as store:
+            current = store.get_agent(agent_id)
+            if status == "running":
+                connection = require_agent_model_connection(
+                    current["model_connection_id"], verify_model=True,
+                )
+                if current["token_limit"] is not None and store.agent_remaining_tokens(agent_id) <= 0:
+                    raise HTTPException(409, "Agent token limit has been reached")
+                if (
+                    connection["location"] == "cloud"
+                    and current["spend_limit_eur"] is not None
+                    and store.agent_remaining_budget(agent_id) <= 0
+                ):
+                    raise HTTPException(409, "Agent model-spend limit has been reached")
+            result = store.set_agent_status(agent_id, status)
+    except KeyError as exc:
+        raise HTTPException(404, "Agent not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    command = {"running": "start", "paused": "pause", "stopped": "stop"}[status]
+    try:
+        accepted = signal_agent_temporal(
+            company_id, agent_id, command, f"operator_{command}",
+        )
+    except HTTPException:
+        with store_scope(company_id) as store:
+            store.set_agent_status(agent_id, "error")
+        raise
+    if status == "running" and not accepted:
+        with store_scope(company_id) as store:
+            store.set_agent_status(agent_id, "stopped")
+        raise HTTPException(
+            409, "Independent agents require the Temporal worker; start the durable Docker stack",
+        )
+    return result
+
+
+@app.get("/api/capability-plugins")
+def capability_plugins():
+    with store_scope() as store:
+        return {"plugins": store.list_capability_plugins()}
+
+
+@app.put("/api/agents/{agent_id}/plugins/{plugin_id}")
+def grant_agent_plugin(agent_id: str, plugin_id: str, payload: AgentPluginGrantIn):
+    try:
+        with store_scope() as store:
+            return store.grant_agent_plugin(agent_id, plugin_id, payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(404, "Agent or plugin not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/agents/{agent_id}/plugins/{plugin_id}")
+def revoke_agent_plugin(agent_id: str, plugin_id: str):
+    try:
+        with store_scope() as store:
+            store.revoke_agent_plugin(agent_id, plugin_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Agent plugin grant not found") from exc
+    return {"status": "disabled"}
+
+
 @app.put("/api/skills/{skill_id}/{status}")
 def set_skill_status(skill_id: str, status: str):
     try:
@@ -336,6 +479,12 @@ def download_artifact(artifact_path: str):
 def create_company(payload: CompanyCreateIn):
     profile = payload.model_dump()
     profile["currency"] = profile["currency"].upper()
+    website_url = profile["website_url"].strip()
+    if website_url:
+        parsed = urlparse(website_url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise HTTPException(400, "Company website must be a public HTTPS URL")
+    profile["website_url"] = website_url
     return registry.create(profile)
 
 
@@ -345,6 +494,40 @@ def select_company(company_id: str):
         return registry.select(company_id)
     except KeyError as exc:
         raise HTTPException(404, "Company not found") from exc
+
+
+@app.put("/api/company-profile")
+def update_company_profile(payload: CompanyBriefIn):
+    """Update organization facts without coupling them to any agent or plugin."""
+    company_id = registry.active_id()
+    website_url = payload.website_url.strip()
+    if website_url:
+        parsed = urlparse(website_url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise HTTPException(400, "Company website must be a public HTTPS URL")
+    with store_scope(company_id) as store:
+        current = store.get_profile()
+    updated = {
+        **current,
+        "name": payload.name.strip(),
+        "company_type": payload.company_type.strip() or "Company",
+        "industry": payload.industry.strip(),
+        "website_url": website_url,
+        "jurisdiction": payload.jurisdiction.strip(),
+        "concept": payload.concept.strip(),
+        "goal": payload.goal.strip(),
+        "description": payload.description.strip(),
+    }
+    registry.update_profile(company_id, updated)
+    with store_scope(company_id) as store:
+        reset = (
+            store.reset_attention_queue("Owner replaced the operating brief")
+            if payload.reset_pending_work else {"approvals": 0, "handoffs": 0}
+        )
+        result = {
+            "profile": store.get_profile(), "reset": reset, "control": store.get_control(),
+        }
+    return result
 
 
 @app.post("/api/control/{action}")
@@ -380,6 +563,42 @@ def message(payload: MessageIn):
             store.set_control("running", "Stakeholder directive queued for worker")
             signal_temporal(company_id, "wake", "stakeholder_directive")
         return {"id": message_id, "status": "pending"}
+
+
+@app.get("/api/agents/{agent_id}/messages")
+def agent_messages(agent_id: str):
+    try:
+        with store_scope() as store:
+            store.get_agent(agent_id)
+            messages = store.snapshot(agent_id).stakeholder_messages
+    except KeyError as exc:
+        raise HTTPException(404, "Agent not found") from exc
+    return {"messages": messages}
+
+
+@app.post("/api/agents/{agent_id}/messages")
+def agent_message(agent_id: str, payload: MessageIn):
+    """Send one directive/question to one agent without interrupting siblings."""
+    company_id = registry.active_id()
+    try:
+        with store_scope(company_id) as store:
+            agent = store.get_agent(agent_id)
+            message_id = store.add_stakeholder_message(
+                payload.content.strip(), payload.kind, agent_id=agent_id,
+            )
+            should_wake = (
+                payload.kind == "directive"
+                and agent["status"] in {"running", "paused", "waiting_approval", "waiting_human", "error"}
+            )
+            if should_wake:
+                store.set_agent_status(agent_id, "running")
+    except KeyError as exc:
+        raise HTTPException(404, "Agent not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if should_wake:
+        signal_agent_temporal(company_id, agent_id, "wake", "stakeholder_directive")
+    return {"id": message_id, "status": "pending", "agent_id": agent_id}
 
 
 @app.post("/api/settings/model-mode")
@@ -735,14 +954,20 @@ def approval(approval_id: str, decision: str, payload: ApprovalDecisionIn):
             if decision == "approve":
                 result = store.approve(approval_id, payload.comment)
             elif decision == "reject":
-                store.reject(approval_id, payload.comment)
-                result = {"status": "rejected"}
+                agent_id = store.reject(approval_id, payload.comment)
+                result = {"status": "rejected", "agent_id": agent_id}
             else:
                 raise HTTPException(400, "Unknown decision")
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
     if result["status"] != "pending":
-        signal_temporal(registry.active_id(), "wake", f"approval_{decision}")
+        company_id = registry.active_id()
+        if result.get("agent_id"):
+            signal_agent_temporal(
+                company_id, result["agent_id"], "wake", f"approval_{decision}",
+            )
+        else:
+            signal_temporal(company_id, "wake", f"approval_{decision}")
     return result
 
 
@@ -753,12 +978,18 @@ def handoff(handoff_id: str, decision: str, payload: HandoffDecisionIn):
         raise HTTPException(400, "Unknown handoff decision")
     try:
         with store_scope() as store:
-            store.resolve_handoff(handoff_id, payload.outcome, decision == "complete")
+            agent_id = store.resolve_handoff(
+                handoff_id, payload.outcome, decision == "complete",
+            )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(404, str(exc)) from exc
-    signal_temporal(registry.active_id(), "wake", f"handoff_{decision}")
+    company_id = registry.active_id()
+    if agent_id:
+        signal_agent_temporal(company_id, agent_id, "wake", f"handoff_{decision}")
+    else:
+        signal_temporal(company_id, "wake", f"handoff_{decision}")
     return {"status": "completed" if decision == "complete" else "cancelled"}
 
 
@@ -811,15 +1042,23 @@ async def email_approval_decision(company_id: str, approval_id: str, request: Re
                         f"{result['required_approvals']}). Waiting for the remaining approver(s)."
                     )
             elif decision == "reject":
-                store.reject(approval_id, comment, email)
-                result = {"status": "rejected"}
+                agent_id = store.reject(approval_id, comment, email)
+                result = {"status": "rejected", "agent_id": agent_id}
                 message = "Declined. The CEO will reconsider using your reason."
             else:
                 raise ValueError("Choose Approve or Decline")
     except (RuntimeError, ValueError) as exc:
         return HTMLResponse(approval_page(company_id, approval_id, email, expires, token, str(exc)), status_code=400)
     if result["status"] != "pending":
-        await asyncio.to_thread(signal_temporal, company_id, "wake", f"email_approval_{decision}")
+        if result.get("agent_id"):
+            await asyncio.to_thread(
+                signal_agent_temporal, company_id, result["agent_id"], "wake",
+                f"email_approval_{decision}",
+            )
+        else:
+            await asyncio.to_thread(
+                signal_temporal, company_id, "wake", f"email_approval_{decision}",
+            )
     return approval_page(company_id, approval_id, email, expires, token, message)
 
 

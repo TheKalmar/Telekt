@@ -3,6 +3,7 @@ param(
     [string]$Mode = "Bundled",
     [switch]$Gpu,
     [switch]$Mail,
+    [switch]$Lightweight,
     [switch]$Build
 )
 
@@ -25,6 +26,12 @@ if ($Gpu -and $Mode -eq "Bundled") {
 if ($Mail) {
     $composeArgs += @("-f", "compose.email.yaml")
 }
+if (-not $Lightweight) {
+    # Independent agents require durable per-agent Temporal workflows and the
+    # PostgreSQL canonical store. Keep the SQLite/polling stack as an explicit
+    # lightweight developer fallback, not the default installation path.
+    $composeArgs += @("-f", "compose.infrastructure.yaml")
+}
 $composeArgs += @("up", "-d")
 if ($Build) {
     $composeArgs += "--build"
@@ -37,6 +44,12 @@ if ($LASTEXITCODE -ne 0) {
 
 $publishedPort = if ($env:PORT) { $env:PORT } else { "8421" }
 Write-Host "Digital Company is starting at http://127.0.0.1:$publishedPort"
+if (-not $Lightweight) {
+    Write-Host "Durable multi-agent infrastructure: PostgreSQL + self-hosted Temporal (no cloud fee)."
+    Write-Host "Temporal UI: http://127.0.0.1:8080"
+} else {
+    Write-Host "Lightweight SQLite/polling mode enabled; independent agent Start requires the durable stack."
+}
 if ($Mode -eq "Bundled") {
     Write-Host "Bundled Ollama is enabled. Follow model setup with: docker compose -f compose.yaml -f compose.local.yaml logs -f ollama-init"
 } elseif ($Mode -eq "Existing") {

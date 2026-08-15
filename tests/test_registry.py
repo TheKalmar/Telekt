@@ -25,6 +25,14 @@ def test_companies_have_isolated_state_and_can_be_selected(tmp_path: Path):
     assert registry.active_id() == first["id"]
 
 
+def test_new_company_does_not_implicitly_hire_a_ceo(tmp_path: Path):
+    registry = CompanyRegistry(tmp_path / ".company")
+    company = registry.create(company_payload("Agent-free company"))
+
+    with registry.store_for(company["id"]) as store:
+        assert store.list_agents() == []
+
+
 def test_empty_registry_can_be_listed(tmp_path: Path):
     registry = CompanyRegistry(tmp_path / ".company")
     assert registry.list() == []

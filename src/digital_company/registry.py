@@ -303,7 +303,10 @@ class CompanyRegistry:
             db_path, database_url if self.is_postgres else None,
             company_id if self.is_postgres else None,
         ) as store:
-            store.initialize(profile["goal"], float(profile["budget"]), profile)
+            store.initialize(
+                profile["goal"], float(profile.get("budget") or 0), profile,
+                bootstrap_legacy_agent=False,
+            )
         now = utc_now()
         if self.is_postgres:
             self.db.execute(
@@ -311,7 +314,7 @@ class CompanyRegistry:
                 "profile,runtime_state,db_path,artifacts_path,created_at,updated_at) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'stopped',%s,%s,%s,%s)",
                 (company_id, company_id, profile["name"], profile["company_type"], profile["concept"],
-                 profile["goal"], float(profile["budget"]), json.dumps(profile), str(db_path),
+                 profile["goal"], float(profile.get("budget") or 0), json.dumps(profile), str(db_path),
                  str(artifacts_path), now, now),
             )
             self.db.execute("UPDATE telekt.registry_settings SET active_company_id=%s WHERE id=1", (company_id,))
@@ -375,6 +378,33 @@ class CompanyRegistry:
         self.db.execute(query, (company_id,))
         self.db.commit()
         return company
+
+    def update_profile(self, company_id: str, profile: dict) -> dict:
+        """Synchronize the canonical brief with portfolio switcher metadata."""
+        self.get(company_id)
+        with self.store_for(company_id) as store:
+            updated = store.update_profile(profile)
+        now = utc_now()
+        if self.is_postgres:
+            self.db.execute(
+                "UPDATE telekt.companies SET name=%s,company_type=%s,concept=%s,goal=%s,"
+                "profile=%s,updated_at=%s WHERE source_id=%s OR id::text=%s",
+                (
+                    updated["name"], updated.get("company_type", "Company"),
+                    updated["concept"], updated["goal"], json.dumps(updated, ensure_ascii=False),
+                    now, company_id, company_id,
+                ),
+            )
+        else:
+            self.db.execute(
+                "UPDATE companies SET name=?,company_type=?,concept=?,updated_at=? WHERE id=?",
+                (
+                    updated["name"], updated.get("company_type", "Company"),
+                    updated["concept"], now, company_id,
+                ),
+            )
+        self.db.commit()
+        return updated
 
     def store_for(self, company_id: str | None = None) -> CompanyStore:
         """Open the selected or explicitly requested company's state store."""

@@ -168,3 +168,132 @@ class CompanyLoopWorkflow:
             "last_status": self._last_status,
             "last_wake_reason": self._last_wake_reason,
         })
+
+
+@workflow.defn(name="AgentLoopWorkflowV1")
+class AgentLoopWorkflow:
+    """One durable, independently controlled loop for one configured agent.
+
+    Company workflows remain for backward compatibility. New agent instances
+    never share their running flag, sequence, approval wait, or retry identity
+    with another agent in the same organization.
+    """
+
+    def __init__(self) -> None:
+        self._running = False
+        self._paused = False
+        self._shutdown = False
+        self._cycles = 0
+        self._sequence = 0
+        self._run_cycles = 0
+        self._last_status = "idle"
+        self._last_wake_reason = "workflow_created"
+
+    @workflow.signal
+    async def start(self, reason: str = "operator_start") -> None:
+        self._running = True
+        self._paused = False
+        self._last_wake_reason = reason
+
+    @workflow.signal
+    async def pause(self, reason: str = "operator_pause") -> None:
+        self._running = False
+        self._paused = True
+        self._last_status = "paused"
+        self._last_wake_reason = reason
+
+    @workflow.signal
+    async def resume(self, reason: str = "operator_resume") -> None:
+        await self.start(reason)
+
+    @workflow.signal
+    async def wake(self, reason: str = "external_event") -> None:
+        await self.start(reason)
+
+    @workflow.signal
+    async def stop(self, reason: str = "operator_stop") -> None:
+        self._running = False
+        self._paused = False
+        self._last_status = "stopped"
+        self._last_wake_reason = reason
+
+    @workflow.signal
+    async def shutdown(self, reason: str = "agent_deleted") -> None:
+        self._shutdown = True
+        self._running = False
+        self._last_wake_reason = reason
+
+    @workflow.query
+    def state(self) -> dict:
+        return {
+            "running": self._running,
+            "paused": self._paused,
+            "shutdown": self._shutdown,
+            "cycles": self._cycles,
+            "last_status": self._last_status,
+            "last_wake_reason": self._last_wake_reason,
+        }
+
+    @workflow.run
+    async def run(self, input_value: dict) -> dict:
+        company_id = input_value["company_id"]
+        agent_id = input_value["agent_id"]
+        self._running = bool(input_value.get("running", False))
+        self._sequence = int(input_value.get("execution_sequence", 0))
+        self._cycles = int(input_value.get("cycles", 0))
+        self._last_status = str(input_value.get("last_status", "idle"))
+        self._last_wake_reason = str(input_value.get("last_wake_reason", "workflow_created"))
+
+        while not self._shutdown:
+            if not self._running or self._paused:
+                await workflow.wait_condition(
+                    lambda: (self._running and not self._paused) or self._shutdown,
+                )
+                if self._shutdown:
+                    break
+
+            result = await workflow.execute_activity(
+                "advance_agent",
+                {
+                    "company_id": company_id,
+                    "agent_id": agent_id,
+                    "execution_key": (
+                        f"{company_id}:agent:{agent_id}:execution:{self._sequence + 1}"
+                    ),
+                },
+                start_to_close_timeout=timedelta(minutes=10),
+                schedule_to_start_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=35),
+                heartbeat_timeout=timedelta(seconds=45),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=5),
+                    maximum_interval=timedelta(minutes=1),
+                ),
+            )
+            self._cycles += 1
+            self._run_cycles += 1
+            self._sequence += 1
+            self._last_status = str(result.get("status", "unknown"))
+            if waits_for_external_signal(self._last_status):
+                self._running = False
+            else:
+                await workflow.sleep(1)
+
+            info = workflow.info()
+            if (
+                self._run_cycles >= RUN_CYCLE_LIMIT
+                or info.get_current_history_length() >= HISTORY_EVENT_LIMIT
+                or info.is_continue_as_new_suggested()
+            ):
+                workflow.continue_as_new({
+                    "company_id": company_id,
+                    "agent_id": agent_id,
+                    "running": self._running and not self._paused,
+                    "execution_sequence": self._sequence,
+                    "cycles": self._cycles,
+                    "last_status": self._last_status,
+                    "last_wake_reason": self._last_wake_reason,
+                })
+
+        return {"status": "shutdown", "cycles": self._cycles}

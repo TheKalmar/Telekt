@@ -70,30 +70,109 @@ Example body:
 {
   "name": "Northstar Commerce",
   "company_type": "eCommerce",
+  "industry": "Retail",
+  "website_url": "https://northstar.example",
+  "jurisdiction": "European Union",
   "concept": "A niche store for remote-work equipment",
   "description": "Existing supplier relationships in the EU",
   "goal": "Validate demand and reach the first profitable sales",
   "budget": 1500,
-  "currency": "EUR",
-  "target_market": "Remote workers in the EU",
-  "customer_type": "B2C",
-  "time_horizon_days": 60,
-  "risk_tolerance": "medium",
-  "autonomy_level": "balanced",
-  "constraints": ["Approval before spending money"],
-  "success_criteria": ["Validated product category", "First ten orders"]
+  "currency": "EUR"
 }
 ```
+
+`budget` is optional company capital, not an AI inference allowance. A new
+company contains no implicit CEO or other agent.
 
 ### `POST /api/companies/{company_id}/select`
 
 Selects the company used by endpoints that operate on the active company.
 
+## Independent agents
+
+### `GET /api/agent-types`
+
+Returns built-in typed agent templates and their setup fields, defaults,
+suggested plugins, and allowed action boundaries.
+
+### `GET /api/agents`
+
+Lists the active company's independent agents with lifecycle, model connection,
+limits, metered usage, run history, attention counts, and plugin grants.
+
+### `POST /api/agents`
+
+Creates a stopped agent. The selected model connection may be configured before
+its credential/model is ready; Start is the authoritative readiness boundary.
+
+```json
+{
+  "name": "Content & SEO",
+  "agent_type": "content_seo",
+  "role": "content and SEO strategist",
+  "purpose": "Grow qualified organic visibility",
+  "instructions": "Verify legal claims against official sources.",
+  "model_connection_id": "cloud-default",
+  "autonomy_mode": "governed",
+  "token_limit": 150000,
+  "spend_limit_eur": 10,
+  "schedule": {},
+  "config": {
+    "content_language": "sr-Latn",
+    "target_audience": "Legal-service clients in BiH",
+    "content_scope": "Employment, commercial and civil law",
+    "brand_voice": "professional and clear",
+    "require_official_sources": true
+  }
+}
+```
+
+`PUT /api/agents/{agent_id}` updates configuration without resetting usage or
+run history. `POST /api/agents/{agent_id}/running`, `/paused`, and `/stopped`
+signal only that agent's `AgentLoopWorkflowV1`.
+
+### Agent chat
+
+- `GET /api/agents/{agent_id}/messages` lists direct and company-wide context.
+- `POST /api/agents/{agent_id}/messages` sends a `directive` or `question` to
+  one agent. A directive supersedes only that agent's stale attention items.
+
+## Capability plugins
+
+### `GET /api/capability-plugins`
+
+Returns trusted reusable plugin definitions with typed configuration fields,
+tools, connection kinds, declared permissions, and instructions. Definitions
+never contain tenant credentials.
+
+### `PUT /api/agents/{agent_id}/plugins/{plugin_id}`
+
+Creates or updates one least-privilege grant:
+
+```json
+{
+  "connection_id": "gk-wordpress",
+  "permissions": ["read_posts", "write_drafts"],
+  "config": {
+    "site_url": "https://gkadvokati.com",
+    "posts_url": "https://gkadvokati.com/wp-admin/post-new.php",
+    "review_email": "owner@example.com",
+    "default_post_status": "draft"
+  }
+}
+```
+
+The backend rejects undeclared permissions, incompatible adapters, missing
+connection capabilities, non-ready connections, and invalid config. `DELETE`
+on the same route disables the grant without deleting its audit history.
+
 ## Runtime
 
 ### `POST /api/control/start`
 
-Sets the active company to `running` and starts its background loop. Duplicate starts are suppressed by a per-company process lock.
+Starts the legacy company loop retained for migrated POC companies. New work
+uses the per-agent lifecycle endpoints above. Duplicate starts are suppressed
+by durable workflow identity.
 
 ### `POST /api/control/pause`
 
@@ -194,7 +273,7 @@ only as present/missing.
 
 ### `POST /api/integration-connections`
 
-Creates or updates an arbitrary HTTP, OAuth, or webhook connection with a
+Creates or updates an arbitrary HTTP, SMTP, OAuth, or webhook connection with a
 provider label, endpoint, explicit capability set, non-secret adapter config and
 write-only `credentials` object. Omitting credentials while editing preserves
 their existing vault values.

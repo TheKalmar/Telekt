@@ -15,6 +15,9 @@ from digital_company.store import CompanyStore
 from digital_company.workspace import WorkspaceRuntime
 from digital_company.model_connections import ModelConnectionRegistry
 from digital_company.execution_client import ExecutionRuntimeClient
+from digital_company.capability_plugins import authorize_action
+from digital_company.agent_templates import action_is_allowed
+from digital_company.wordpress_plugin import WordPressPluginRuntime
 
 
 class CompanyOrchestrator:
@@ -32,6 +35,7 @@ class CompanyOrchestrator:
         company_id: str | None = None,
         mailer: object | None = None,
         execution_key: str | None = None,
+        agent_id: str | None = None,
         *,
         governor: Governor | None = None,
         workspace: WorkspaceRuntime | None = None,
@@ -39,29 +43,88 @@ class CompanyOrchestrator:
         execution_runtime: ExecutionRuntimeClient | None = None,
     ):
         self.store = store
+        self.company_id = company_id
+        self.agent_id = agent_id
+        self.agent = store.get_agent(agent_id) if agent_id else None
+        self.plugins = store.list_agent_plugins(agent_id) if agent_id else []
         self.workspace = workspace or WorkspaceRuntime(artifacts_dir)
         settings = store.get_settings()
         connections = (model_connections or ModelConnectionRegistry()).ensure_defaults(
             settings["local_model"], settings["cloud_model"]
         )
         by_id = {item["id"]: item for item in connections}
+        selected_connection = by_id.get(self.agent["model_connection_id"]) if self.agent else None
+        if self.agent and (not selected_connection or not selected_connection.get("enabled", True)):
+            raise ValueError(
+                f"Agent model connection is missing or disabled: {self.agent['model_connection_id']}"
+            )
+        model_mode = selected_connection["location"] if selected_connection else settings["model_mode"]
+        local_connection = (
+            selected_connection if selected_connection and model_mode == "local"
+            else by_id.get(settings["local_connection_id"])
+        )
+        cloud_connection = (
+            selected_connection if selected_connection and model_mode == "cloud"
+            else by_id.get(settings["cloud_connection_id"])
+        )
         self.engine = engine or AgentEngine(
-            settings["model_mode"], settings["local_model"],
-            bool(settings["allow_cloud_fallback"]),
-            cloud_provider=settings["cloud_provider"], cloud_model_name=settings["cloud_model"],
-            local_connection=by_id.get(settings["local_connection_id"]),
-            cloud_connection=by_id.get(settings["cloud_connection_id"]),
+            model_mode, (selected_connection or {}).get("model", settings["local_model"]),
+            False if self.agent else bool(settings["allow_cloud_fallback"]),
+            cloud_provider=(selected_connection or {}).get("name", settings["cloud_provider"]),
+            cloud_model_name=(selected_connection or {}).get("model", settings["cloud_model"]),
+            local_connection=local_connection,
+            cloud_connection=cloud_connection,
             reporter=self._report,
-            remaining_budget=lambda: self.store.snapshot().remaining_budget_eur,
+            remaining_budget=(
+                (lambda: self.store.agent_remaining_budget(self.agent_id))
+                if self.agent_id else (lambda: self.store.snapshot().remaining_budget_eur)
+            ),
+            remaining_tokens=(
+                (lambda: self.store.agent_remaining_tokens(self.agent_id)) if self.agent_id else None
+            ),
+            agent_id=self.agent_id,
+            instance_instructions=self._instance_instructions(),
         )
         self.governor = governor or Governor(store.get_policy()["document"])
-        self.company_id = company_id
         self.execution_runtime = execution_runtime
         if self.execution_runtime is None and company_id and os.getenv("EXECUTION_RUNTIME_URL"):
             self.execution_runtime = ExecutionRuntimeClient()
         # ``mailer`` remains accepted for constructor compatibility. Stakeholder
         # notifications now belong to StakeholderBriefService, not orchestration.
         self.execution_key = execution_key
+
+    def _instance_instructions(self) -> str:
+        """Build a bounded mandate from the agent and its enabled plugin grants."""
+        if not self.agent:
+            return ""
+        plugin_lines = []
+        for grant in self.plugins:
+            plugin_lines.append(
+                f"- {grant['name']} ({grant['plugin_id']}): permissions={grant['permissions']}; "
+                f"configuration={grant['config']}; instructions={grant['definition'].get('instructions', '')}"
+            )
+        capabilities = "\n".join(plugin_lines) or "- No plugins are granted. Do not claim external access."
+        return (
+            f"Name: {self.agent['name']}\nType: {self.agent['agent_type']}\nRole: {self.agent['role']}\n"
+            f"Purpose: {self.agent['purpose']}\nInstructions: {self.agent['instructions']}\n"
+            f"Autonomy mode: {self.agent['autonomy_mode']}\nGranted capability plugins:\n{capabilities}\n"
+            "Stay inside this mandate. A configured URL or connection reference is not proof that login or "
+            "credentials are ready. Use only granted permissions, and request one precise human checkpoint "
+            "only when no useful autonomous work remains."
+        )
+
+    def _agent_context(self) -> dict | None:
+        if not self.agent:
+            return None
+        return {
+            key: self.agent[key] for key in (
+                "id", "name", "role", "purpose", "instructions", "autonomy_mode",
+                "agent_type", "token_limit", "spend_limit_eur", "config",
+            )
+        }
+
+    def _control_state(self) -> str:
+        return self.store.get_agent(self.agent_id)["status"] if self.agent_id else self.store.get_control()["state"]
 
     def _report(self, event: str, payload: dict) -> None:
         if event == "model.usage":
@@ -75,9 +138,9 @@ class CompanyOrchestrator:
         An in-flight model request or database write is allowed to finish safely.
         """
         for cycle in range(1, max_cycles + 1):
-            control = self.store.get_control()
-            if control["state"] in {"paused", "stopped"}:
-                return {"status": control["state"], "cycles": cycle - 1}
+            control_state = self._control_state()
+            if control_state in {"paused", "stopped", "error"}:
+                return {"status": control_state, "cycles": cycle - 1}
 
             recovered = self.store.recover_activity_task(self.execution_key) if self.execution_key else None
             if recovered:
@@ -90,15 +153,18 @@ class CompanyOrchestrator:
                 self._execute_specialist(task_id, proposal)
                 return {"status": "recovered_task_completed", "cycles": cycle, "task_id": task_id}
 
-            approved = self.store.claim_approved_task()
+            approved = self.store.claim_approved_task(self.agent_id)
             if approved:
                 task_id, proposal = approved
                 if self.execution_key:
                     self.store.link_activity_task(self.execution_key, task_id, proposal)
                 return self._execute_claimed(task_id, proposal, cycle)
 
-            snapshot = self.store.snapshot()
-            proposal = self.engine.decide(snapshot)
+            snapshot = self.store.snapshot(self.agent_id)
+            proposal = (
+                self.engine.decide(snapshot, self._agent_context())
+                if self.agent_id else self.engine.decide(snapshot)
+            )
             # A stakeholder response becomes durable before the proposed task is
             # evaluated, so the UI can show how the CEO handled the intervention.
             self.store.address_messages(
@@ -106,7 +172,29 @@ class CompanyOrchestrator:
                 proposal.stakeholder_response,
             )
             policy = self.governor.evaluate(proposal, snapshot.remaining_budget_eur)
-            task_id = self.store.create_task(proposal, "proposed", self.execution_key)
+            task_id = self.store.create_task(
+                proposal, "proposed", self.execution_key, agent_id=self.agent_id,
+            )
+
+            if self.agent_id:
+                if not action_is_allowed(self.agent["agent_type"], proposal.action.value):
+                    self.store.set_task_status(task_id, "denied")
+                    self.store.audit("agent.scope_denied", {
+                        "agent_id": self.agent_id, "task_id": task_id,
+                        "agent_type": self.agent["agent_type"],
+                        "action": proposal.action.value,
+                    })
+                    continue
+                plugin_allowed, plugin_reason = authorize_action(
+                    proposal.action.value, self.plugins,
+                )
+                if not plugin_allowed:
+                    self.store.set_task_status(task_id, "denied")
+                    self.store.audit("agent.plugin_denied", {
+                        "agent_id": self.agent_id, "task_id": task_id,
+                        "action": proposal.action.value, "reason": plugin_reason,
+                    })
+                    continue
 
             if policy.outcome == "deny":
                 self.store.set_task_status(task_id, "denied")
@@ -119,7 +207,7 @@ class CompanyOrchestrator:
                     "handoff_id": handoff_id, "task": proposal.model_dump(mode="json"),
                 }
             if policy.outcome == "require_approval":
-                if self.store.has_pending_equivalent_approval(proposal):
+                if self.store.has_pending_equivalent_approval(proposal, self.agent_id):
                     self.store.set_task_status(task_id, "superseded")
                     self.store.audit("company.blocked_by_pending_approval", {"task_id": task_id})
                     return {"status": "waiting_for_approval", "cycles": cycle,
@@ -140,19 +228,38 @@ class CompanyOrchestrator:
                 self.store.set_task_status(task_id, "stopped")
                 return {"status": "stopped", "cycles": cycle, "reason": proposal.rationale}
 
+            if proposal.action in {
+                ActionType.BROWSER_OPERATE,
+                ActionType.SAVE_CONTENT_DRAFT,
+                ActionType.PUBLISH_CONTENT,
+            }:
+                return self._execute_browser_mission(task_id, proposal, cycle)
+
             self._execute_specialist(task_id, proposal, snapshot)
 
         return {"status": "cycle_limit_reached", "cycles": max_cycles}
 
     def _execute_claimed(self, task_id: str, proposal, cycle: int) -> dict:
         """Execute one human-approved frozen proposal without asking the CEO again."""
-        snapshot = self.store.snapshot()
+        snapshot = self.store.snapshot(self.agent_id)
         policy = self.governor.evaluate(proposal, snapshot.remaining_budget_eur)
+        if self.agent_id:
+            if not action_is_allowed(self.agent["agent_type"], proposal.action.value):
+                self.store.fail_task(task_id, "Action is outside the configured agent type")
+                return {"status": "failed", "cycles": cycle, "task_id": task_id}
+            plugin_allowed, plugin_reason = authorize_action(proposal.action.value, self.plugins)
+            if not plugin_allowed:
+                self.store.fail_task(task_id, "Plugin grant was revoked: " + plugin_reason)
+                return {"status": "failed", "cycles": cycle, "task_id": task_id}
         if policy.outcome == "deny":
             self.store.fail_task(task_id, "Approved task no longer passes policy: " + policy.reason)
             return {"status": "failed", "cycles": cycle, "task_id": task_id}
         try:
-            if proposal.action == ActionType.BROWSER_OPERATE:
+            if proposal.action in {
+                ActionType.BROWSER_OPERATE,
+                ActionType.SAVE_CONTENT_DRAFT,
+                ActionType.PUBLISH_CONTENT,
+            }:
                 return self._execute_browser_mission(task_id, proposal, cycle)
             self._execute_specialist(task_id, proposal, snapshot)
         except Exception as exc:
@@ -162,41 +269,77 @@ class CompanyOrchestrator:
 
     def _execute_specialist(self, task_id: str, proposal, snapshot=None) -> None:
         """Resolve capabilities and run the one shared specialist execution path."""
-        snapshot = snapshot or self.store.snapshot()
+        snapshot = snapshot or self.store.snapshot(self.agent_id)
         skills = self.store.resolve_skills(
             proposal.skill_ids, proposal.specialist, proposal.action.value, strict=False,
         )
         self.store.audit("skills.assigned", {
             "task_id": task_id, "skill_ids": [skill["id"] for skill in skills],
         })
-        result = self.engine.execute(
-            proposal, snapshot, self._artifact_context(proposal.specialist), skills,
-        )
+        if self.agent_id:
+            result = self.engine.execute(
+                proposal, snapshot, self._artifact_context(proposal.specialist), skills,
+                self._agent_context(), self.plugins,
+            )
+        else:
+            result = self.engine.execute(
+                proposal, snapshot, self._artifact_context(proposal.specialist), skills,
+            )
         self._persist_result(task_id, proposal, result)
 
     def _execute_browser_mission(self, task_id: str, proposal, cycle: int) -> dict:
         """Run an approved mission, but create a fresh handoff for any human checkpoint."""
+        wordpress_grant = next((
+            item for item in self.plugins
+            if item["plugin_id"] == "wordpress-content"
+            and item["status"] == "enabled"
+            and item.get("connection_id")
+        ), None)
+        if (
+            wordpress_grant
+            and proposal.action in {ActionType.SAVE_CONTENT_DRAFT, ActionType.PUBLISH_CONTENT}
+        ):
+            return self._execute_wordpress_api(
+                task_id, proposal, cycle, wordpress_grant,
+            )
         hostname = urlparse(proposal.handoff_url).hostname
         if not hostname:
             raise RuntimeError("Browser mission has no valid starting hostname")
         allowed_domains = list(dict.fromkeys([
             hostname, *(proposal.handoff_allowed_domains or []),
         ]))
-        browser_runtime_request("PUT", f"/sessions/{self.company_id}", {
+        mutation_scope = (
+            "draft" if proposal.action == ActionType.SAVE_CONTENT_DRAFT
+            else "publish" if proposal.action == ActionType.PUBLISH_CONTENT
+            else "read"
+        )
+        session_id = self.company_id if not self.agent_id else f"{self.company_id}--{self.agent_id}"
+        browser_runtime_request("PUT", f"/sessions/{session_id}", {
             "url": proposal.handoff_url, "allowed_domains": allowed_domains,
+            "mutation_scope": mutation_scope,
         })
         max_steps = max(1, min(30, int(__import__("os").getenv("COMPUTER_USE_MAX_STEPS", "12"))))
         self.store.audit("browser.mission_started", {
             "task_id": task_id, "objective": proposal.objective,
             "allowed_domains": allowed_domains, "max_steps": max_steps,
         })
+        objective = proposal.objective
+        if proposal.action in {ActionType.SAVE_CONTENT_DRAFT, ActionType.PUBLISH_CONTENT}:
+            draft = self.store.latest_content_draft(self.agent_id)
+            if not draft:
+                raise RuntimeError("No completed content draft exists in the company workspace")
+            objective = (
+                f"{proposal.objective}\n\nUse this exact prepared draft ({draft['path']}):\n\n"
+                f"{draft['content']}"
+            )
         outcome = BrowserMissionRunner(
             reporter=lambda event, payload: self.store.audit(event, {"task_id": task_id, **payload}),
-            control_state=lambda: self.store.get_control()["state"],
+            control_state=self._control_state,
         ).run(
-            self.company_id,
-            proposal.objective,
+            session_id,
+            objective,
             max_steps=max_steps,
+            mutation_scope=mutation_scope,
         )
         if outcome.status in {"waiting_human", "blocked"}:
             handoff = proposal.model_copy(update={
@@ -226,6 +369,46 @@ class CompanyOrchestrator:
         self._persist_result(task_id, proposal, result)
         return {"status": "approved_task_completed", "cycles": cycle, "task_id": task_id,
                 "mission_status": outcome.status}
+
+    def _execute_wordpress_api(
+        self, task_id: str, proposal, cycle: int, grant: dict,
+    ) -> dict:
+        """Use a granted REST connection before considering browser automation."""
+        draft = self.store.latest_content_draft(self.agent_id)
+        if not draft:
+            raise RuntimeError("No completed content draft exists for this agent")
+        runtime = WordPressPluginRuntime(
+            self.store, grant, self.execution_key or f"task:{task_id}",
+        )
+        if proposal.action == ActionType.SAVE_CONTENT_DRAFT:
+            response = runtime.save_draft(draft)
+            summary = f"Saved WordPress draft {response.get('post_id')}"
+            recommendation = "Review the unpublished WordPress draft before requesting publication"
+        else:
+            response = runtime.publish(draft)
+            summary = f"Published WordPress post {response.get('post_id')}"
+            recommendation = "Monitor indexing, search visibility, and user response"
+        evidence = [
+            f"WordPress REST status={response.get('status')}; slug={response.get('slug')}",
+            f"Source content task={response.get('source_task_id')}",
+        ]
+        if response.get("link"):
+            evidence.append("WordPress post URL: " + response["link"])
+        self._persist_result(task_id, proposal, SpecialistResult(
+            status="completed", summary=summary, evidence=evidence,
+            sources=[response["link"]] if response.get("link") else [],
+            recommendation=recommendation,
+        ))
+        self.store.audit("plugin.wordpress_executed", {
+            "agent_id": self.agent_id, "task_id": task_id,
+            "connection_id": grant["connection_id"],
+            "action": proposal.action.value, "post_id": response.get("post_id"),
+            "cached": response.get("cached", False),
+        })
+        return {
+            "status": "approved_task_completed", "cycles": cycle,
+            "task_id": task_id, "plugin": "wordpress-content",
+        }
 
     def _persist_result(self, task_id: str, proposal, result) -> None:
         """Persist a specialist result and confine any model-provided artifact path."""

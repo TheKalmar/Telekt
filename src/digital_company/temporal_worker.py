@@ -14,8 +14,8 @@ from digital_company.company_runtime import StakeholderBriefService, apply_orche
 from digital_company.email_service import ApprovalMailer
 from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.registry import CompanyRegistry
-from digital_company.temporal_gateway import ensure_workflow
-from digital_company.temporal_workflow import CompanyLoopWorkflow, TASK_QUEUE
+from digital_company.temporal_gateway import ensure_agent_workflow, ensure_workflow
+from digital_company.temporal_workflow import AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE
 from digital_company.runtime_secrets import apply_runtime_secrets
 
 
@@ -53,6 +53,30 @@ async def advance_company(input_value: str | dict) -> dict:
         return await asyncio.to_thread(
             _finalize_activity_failure, company_id, execution_key, exc,
             activity.info().attempt,
+        )
+
+
+@activity.defn(name="advance_agent")
+async def advance_agent(input_value: dict) -> dict:
+    """Run one bounded cycle for exactly one independently configured agent."""
+    company_id = input_value["company_id"]
+    agent_id = input_value["agent_id"]
+    execution_key = input_value["execution_key"]
+    try:
+        return await _to_thread_with_heartbeat(
+            _advance_agent_sync, company_id, agent_id, execution_key,
+        )
+    except (KeyError, PermissionError, ValueError) as exc:
+        return await asyncio.to_thread(
+            _finalize_agent_activity_failure,
+            company_id, agent_id, execution_key, exc, activity.info().attempt,
+        )
+    except Exception as exc:
+        if activity.info().attempt < 3:
+            raise
+        return await asyncio.to_thread(
+            _finalize_agent_activity_failure,
+            company_id, agent_id, execution_key, exc, activity.info().attempt,
         )
 
 
@@ -111,6 +135,74 @@ def _advance_company_sync(company_id: str, execution_key: str | None = None) -> 
         portfolio.close()
 
 
+def _advance_agent_sync(company_id: str, agent_id: str, execution_key: str) -> dict:
+    """Own idempotency and lifecycle projection around one agent cycle."""
+    apply_runtime_secrets()
+    portfolio = registry()
+    try:
+        with portfolio.store_for(company_id) as store:
+            cached = store.begin_activity(execution_key, agent_id=agent_id)
+            if cached is not None:
+                return cached
+            agent = store.get_agent(agent_id)
+            if agent["status"] != "running":
+                result = {"status": agent["status"], "cycles": 0, "agent_id": agent_id}
+                store.complete_activity(execution_key, result)
+                return result
+            run_id = store.begin_agent_run(agent_id, execution_key)
+            result = CompanyOrchestrator(
+                store,
+                portfolio.artifacts_for(company_id),
+                company_id=company_id,
+                agent_id=agent_id,
+                execution_key=execution_key,
+            ).run(max_cycles=1)
+            status = result.get("status", "unknown")
+            if status == "waiting_for_approval":
+                store.set_agent_status(agent_id, "waiting_approval")
+                run_status = "waiting"
+            elif status == "waiting_for_human":
+                store.set_agent_status(agent_id, "waiting_human")
+                run_status = "waiting"
+            elif status in {"stopped", "paused"}:
+                store.set_agent_status(agent_id, status)
+                run_status = status
+            elif status in {"failed", "error"}:
+                store.set_agent_status(agent_id, "error")
+                run_status = "failed"
+            else:
+                run_status = "completed"
+            store.complete_agent_run(run_id, run_status, result.get("error"))
+            result["agent_id"] = agent_id
+            store.complete_activity(execution_key, result)
+            return result
+    finally:
+        portfolio.close()
+
+
+def _finalize_agent_activity_failure(
+    company_id: str,
+    agent_id: str,
+    execution_key: str,
+    exc: Exception,
+    attempts: int = 3,
+) -> dict:
+    portfolio = registry()
+    try:
+        with portfolio.store_for(company_id) as store:
+            detail = f"{type(exc).__name__}: {exc}"
+            result = store.fail_activity(execution_key, detail)
+            store.fail_agent_run_by_execution(execution_key, detail)
+            store.set_agent_status(agent_id, "error")
+            store.audit("temporal.agent_activity_failed", {
+                "activity": "advance_agent", "agent_id": agent_id,
+                "execution_key": execution_key, "attempts": attempts, "error": detail,
+            })
+            return {**result, "agent_id": agent_id}
+    finally:
+        portfolio.close()
+
+
 @activity.defn(name="send_company_brief")
 async def send_company_brief(company_id: str) -> dict:
     """Send at most one stakeholder brief per configured contact interval."""
@@ -140,6 +232,16 @@ async def reconcile_workflows(client: Client) -> None:
         handle = await ensure_workflow(client, company["id"])
         if company["runtime"] == "running":
             await handle.signal("start", "worker_startup_recovery")
+        company_registry = registry()
+        try:
+            with company_registry.store_for(company["id"]) as store:
+                agents = store.list_agents()
+        finally:
+            company_registry.close()
+        for agent in agents:
+            agent_handle = await ensure_agent_workflow(client, company["id"], agent["id"])
+            if agent["status"] == "running":
+                await agent_handle.signal("start", "worker_startup_recovery")
 
 
 async def heartbeat_loop() -> None:
@@ -161,8 +263,8 @@ async def run_worker() -> None:
     async with Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[CompanyLoopWorkflow],
-        activities=[advance_company, send_company_brief],
+        workflows=[CompanyLoopWorkflow, AgentLoopWorkflow],
+        activities=[advance_company, advance_agent, send_company_brief],
     ):
         await reconcile_workflows(client)
         await heartbeat_loop()

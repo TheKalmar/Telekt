@@ -136,3 +136,22 @@ def test_connector_operation_rejects_capability_escalation_and_key_reuse(tmp_pat
         assert "different integration operation" in str(exc)
     else:
         raise AssertionError("Idempotency-key reuse with changed input must fail")
+
+
+def test_smtp_is_a_provider_neutral_mailbox_connection(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("COMPANY_DATA_DIR", str(tmp_path / "runtime-data"))
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Send governed email", 0)
+    save_secret(secret_name("content-mailbox", "username"), "content@example.com")
+    save_secret(secret_name("content-mailbox", "password"), "app-password")
+
+    connection = store.upsert_integration_connection({
+        "id": "content-mailbox", "name": "Content mailbox", "adapter": "smtp",
+        "provider": "Mail provider", "location": "cloud",
+        "base_url": "smtps://smtp.example.com:465",
+        "capabilities": ["email.send", "email.draft"], "config": {}, "enabled": True,
+    })
+
+    assert connection["status"] == "ready"
+    assert connection["adapter"] == "smtp"
+    assert connection["secret_status"] == {"username": True, "password": True}

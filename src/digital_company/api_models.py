@@ -116,31 +116,53 @@ class IntegrationOperationIn(BaseModel):
 
 
 class CompanyCreateIn(BaseModel):
-    """Validated company creation form with safe, editable defaults."""
+    """Organization facts only; digital employees are created separately."""
 
     name: str = Field(min_length=2, max_length=100)
-    company_type: str = Field(default="SaaS", max_length=60)
-    concept: str = Field(min_length=3, max_length=1000)
-    description: str = Field(default="", max_length=2000)
-    goal: str = Field(
-        default="Validate the concept, build an MVP, and find a path to profitability",
-        max_length=2000,
-    )
-    budget: float = Field(default=1000, gt=0)
+    company_type: str = Field(default="Company", max_length=60)
+    industry: str = Field(default="", max_length=200)
+    website_url: str = Field(default="", max_length=2000)
+    jurisdiction: str = Field(default="", max_length=500)
+    concept: str = Field(min_length=3, max_length=12_000)
+    description: str = Field(default="", max_length=20_000)
+    goal: str = Field(min_length=3, max_length=12_000)
+    budget: float | None = Field(default=None, gt=0)
     currency: str = Field(default="EUR", min_length=3, max_length=3)
-    target_market: str = Field(default="Small and medium businesses", max_length=500)
-    customer_type: str = Field(default="B2B", max_length=30)
-    time_horizon_days: int = Field(default=30, ge=1, le=3650)
-    risk_tolerance: str = "medium"
-    autonomy_level: str = "balanced"
-    constraints: list[str] = Field(default_factory=lambda: [
-        "Approval before external communication",
-        "Approval before spending money",
-        "Approval before production deployment",
-        "Never sign contracts",
-    ])
-    success_criteria: list[str] = Field(default_factory=lambda: [
-        "Evidence-backed problem selection",
-        "Functional MVP",
-        "Clear human decision point",
-    ])
+
+
+class CompanyBriefIn(BaseModel):
+    """Organization facts shared by all agents; agent capabilities live elsewhere."""
+
+    name: str = Field(min_length=2, max_length=100)
+    company_type: str = Field(default="Company", max_length=60)
+    industry: str = Field(default="", max_length=200)
+    website_url: str = Field(default="", max_length=2000)
+    jurisdiction: str = Field(default="", max_length=500)
+    concept: str = Field(min_length=3, max_length=12_000)
+    goal: str = Field(min_length=3, max_length=12_000)
+    description: str = Field(default="", max_length=20_000)
+    reset_pending_work: bool = True
+
+
+class AgentConfigIn(BaseModel):
+    """One independently runnable digital employee."""
+
+    name: str = Field(min_length=2, max_length=100)
+    agent_type: str = Field(default="custom", pattern=r"^[a-z][a-z0-9_]{1,40}$")
+    role: str = Field(min_length=2, max_length=80, pattern=r"^[a-zA-Z0-9 _-]+$")
+    purpose: str = Field(min_length=3, max_length=4000)
+    instructions: str = Field(default="", max_length=20_000)
+    model_connection_id: str = Field(min_length=1, max_length=100)
+    autonomy_mode: str = Field(default="governed", pattern="^(supervised|governed|autonomous)$")
+    token_limit: int | None = Field(default=None, ge=1, le=1_000_000_000)
+    spend_limit_eur: float | None = Field(default=None, ge=0, le=1_000_000_000)
+    schedule: dict = Field(default_factory=dict)
+    config: dict = Field(default_factory=dict)
+
+
+class AgentPluginGrantIn(BaseModel):
+    """Typed plugin configuration and least-privilege grant for one agent."""
+
+    connection_id: str | None = Field(default=None, max_length=100)
+    permissions: list[str] = Field(default_factory=list, max_length=100)
+    config: dict = Field(default_factory=dict)

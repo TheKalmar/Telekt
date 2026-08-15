@@ -8,6 +8,16 @@ from urllib.parse import urlparse
 
 
 ADAPTERS = {
+    "smtp": {
+        "label": "SMTP mailbox",
+        "credential_fields": ["username", "password"],
+        "supports_idempotency_header": False,
+    },
+    "http_basic": {
+        "label": "HTTP API · Basic authentication",
+        "credential_fields": ["username", "password"],
+        "supports_idempotency_header": False,
+    },
     "http_bearer": {
         "label": "HTTP API · Bearer token",
         "credential_fields": ["token"],
@@ -56,7 +66,11 @@ def validate_connection(value: dict) -> dict:
     if location not in {"local", "cloud"}:
         raise ValueError("Connection location must be local or cloud")
     parsed = urlparse(base_url)
-    allowed_schemes = {"http", "https"} if location == "local" else {"https"}
+    allowed_schemes = (
+        {"smtp", "smtps"} if adapter == "smtp"
+        else {"http", "https"} if location == "local"
+        else {"https"}
+    )
     if parsed.scheme not in allowed_schemes or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Connection base URL is invalid for its location")
     capabilities = list(dict.fromkeys(str(item).strip() for item in value.get("capabilities", [])))

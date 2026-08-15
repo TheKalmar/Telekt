@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS runtime_control (
 CREATE TABLE IF NOT EXISTS stakeholder_messages (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
   status TEXT NOT NULL, response TEXT, created_at TEXT NOT NULL,
-  addressed_at TEXT
+  addressed_at TEXT, agent_id TEXT
 );
 CREATE TABLE IF NOT EXISTS runtime_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1), model_mode TEXT NOT NULL,
@@ -95,6 +95,31 @@ CREATE TABLE IF NOT EXISTS activity_executions (
   task_id TEXT, result_json TEXT, attempt_count INTEGER NOT NULL,
   started_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_instances (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL,
+  agent_type TEXT NOT NULL DEFAULT 'custom',
+  purpose TEXT NOT NULL, instructions TEXT NOT NULL,
+  model_connection_id TEXT NOT NULL, status TEXT NOT NULL,
+  autonomy_mode TEXT NOT NULL, token_limit INTEGER,
+  spend_limit_eur REAL, schedule_json TEXT NOT NULL, config_json TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS capability_plugins (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL,
+  description TEXT NOT NULL, definition_json TEXT NOT NULL,
+  status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_plugin_grants (
+  agent_id TEXT NOT NULL, plugin_id TEXT NOT NULL, connection_id TEXT,
+  permissions_json TEXT NOT NULL, config_json TEXT NOT NULL,
+  status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY(agent_id, plugin_id)
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, status TEXT NOT NULL,
+  trigger_type TEXT NOT NULL, execution_key TEXT,
+  started_at TEXT NOT NULL, completed_at TEXT, error TEXT
+);
 CREATE INDEX IF NOT EXISTS tasks_status_created ON tasks(status, created_at);
 CREATE INDEX IF NOT EXISTS approvals_status_created ON approvals(status, created_at);
 CREATE INDEX IF NOT EXISTS approvals_task ON approvals(task_id);
@@ -103,6 +128,9 @@ CREATE INDEX IF NOT EXISTS audit_events_time ON audit_events(created_at);
 CREATE INDEX IF NOT EXISTS stakeholder_messages_status ON stakeholder_messages(status, created_at);
 CREATE INDEX IF NOT EXISTS handoffs_status_created ON human_handoffs(status, created_at);
 CREATE INDEX IF NOT EXISTS activities_status_updated ON activity_executions(status, updated_at);
+CREATE INDEX IF NOT EXISTS agent_instances_status ON agent_instances(status, updated_at);
+CREATE INDEX IF NOT EXISTS agent_plugin_grants_agent ON agent_plugin_grants(agent_id, status);
+CREATE INDEX IF NOT EXISTS agent_runs_agent_started ON agent_runs(agent_id, started_at);
 """
 
 
@@ -113,6 +141,9 @@ SCHEMA_VERSIONS = (
     (4, "Skill and platform capability registry"),
     (5, "Provider-neutral integration connections"),
     (6, "Versioned policy and approval quorum"),
+    (7, "Multi-agent instances and reusable capability plugins"),
+    (8, "Typed agent templates and scoped runtime context"),
+    (9, "Agent-scoped stakeholder messages and intervention queues"),
 )
 
 
@@ -149,6 +180,12 @@ def migrate_company_database(db, now: str) -> None:
         db, "runtime_settings", "cloud_connection_id",
         "TEXT NOT NULL DEFAULT 'cloud-default'",
     )
+    _add_column(db, "tasks", "agent_id", "TEXT")
+    _add_column(db, "ledger", "agent_id", "TEXT")
+    _add_column(db, "model_usage", "agent_id", "TEXT")
+    _add_column(db, "activity_executions", "agent_id", "TEXT")
+    _add_column(db, "agent_instances", "agent_type", "TEXT NOT NULL DEFAULT 'custom'")
+    _add_column(db, "stakeholder_messages", "agent_id", "TEXT")
     db.execute(
         "INSERT OR IGNORE INTO runtime_control(id,state,detail,updated_at) "
         "VALUES(1,'stopped','Ready',?)",

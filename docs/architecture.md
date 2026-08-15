@@ -11,13 +11,13 @@ In the opt-in durable stack, Temporal owns workflow history and retry timing;
 PostgreSQL is canonical company and portfolio state in the infrastructure stack.
 
 ```text
-Observe canonical state
+Observe company facts + one agent's state
         |
         v
-CEO proposes one typed task
+Typed agent proposes one typed task
         |
         v
-Governor evaluates policy and budget
+Agent scope, plugin grants, and Governor evaluate authority
         |
         +---- deny ----------> audit and reconsider
         +---- approval ------> persist exact payload and pause
@@ -39,14 +39,15 @@ This separation makes the probabilistic reasoning layer replaceable and keeps au
 `web.py` exposes a FastAPI server and serves the single-page dashboard. It owns portfolio selection, runtime controls, stakeholder chat, approvals, and model-mode settings. It persists operator intent but never executes an agent cycle inside an HTTP process.
 
 With `compose.infrastructure.yaml`, `temporal_worker.py` runs as the execution
-service. One `CompanyLoopWorkflowV4` exists per company. API handlers persist
-operator intent and signal the workflow; approvals, handoffs, and stakeholder
-directives also signal it. A waiting workflow consumes no model calls and does
-not poll company state. `worker.py` remains only as the lightweight SQLite
-development fallback when Temporal is not configured.
+service. One `AgentLoopWorkflowV1` exists per independently configured agent.
+API handlers persist operator intent and signal only the target workflow;
+approvals, handoffs, and direct stakeholder directives do the same. A waiting
+workflow consumes no model calls and does not poll company state. The V4 company
+workflow remains a migration path for legacy single-loop companies, while
+`worker.py` is only the lightweight SQLite development fallback.
 
-Every V4 company cycle has a stable execution key stored with its frozen task
-and result. Temporal can retry a crashed activity without creating another task,
+Every agent cycle has a stable agent-scoped execution key stored with its frozen
+task and result. Temporal can retry a crashed activity without creating another task,
 charging the ledger twice, or advancing past a result whose database commit
 succeeded before the Temporal acknowledgement.
 
@@ -71,6 +72,19 @@ inside Docker or another machine.
 
 Business data never lives in the registry. This prevents normal queries from mixing state between companies.
 
+### Company, agent, plugin, and connection boundaries
+
+Creating a company persists organization facts but creates no digital employee.
+`agent_instances` holds independently runnable employees, including typed setup,
+model connection, token/model-spend limits, lifecycle, and schedule. Reusable
+definitions in `capability_plugins` declare tools, configuration schema,
+permissions, and compatible transport adapters. `agent_plugin_grants` assigns a
+least-privilege subset and optional `integration_connection` to one agent.
+
+The deterministic runtime checks agent-type actions, plugin permission, and
+connection capability before executing. Prompt text may describe a capability
+but cannot grant it. See [Multi-agent platform](multi-agent-platform.md).
+
 ### Company store
 
 `store.py` is the canonical persistence facade for one company. Schema bootstrap
@@ -78,12 +92,13 @@ lives in `company_schema.py`, while `operations_projection.py` turns queried
 facts and audit events into the operations read model. The store persists:
 
 - company goal and profile;
+- agent instances, plugin grants, lifecycle, and run history;
 - tasks and specialist results;
 - approvals with frozen proposal payloads;
 - append-only budget ledger entries;
 - runtime control state;
 - model routing settings;
-- stakeholder messages and CEO responses;
+- company-wide and agent-scoped stakeholder messages/responses;
 - audit events.
 - integration capability records containing non-secret configuration, requested permissions, and secret-presence flags.
 - resumable human handoffs with a URL, bounded instructions, required return evidence, and outcome.
@@ -92,19 +107,16 @@ facts and audit events into the operations read model. The store persists:
 
 ### Agent engine
 
-`agents.py` defines one CEO and role-specific specialists using OpenAI Agents SDK
-structured outputs. `model_adapters.py` owns construction of SDK model adapters
-from transport-oriented connection profiles.
+`agents.py` runs typed agent instances and specialist execution using OpenAI
+Agents SDK structured outputs. `agent_templates.py` defines type-specific setup
+and action boundaries. `model_adapters.py` constructs SDK adapters from
+transport-oriented connection profiles.
 
 The CEO returns `TaskProposal`. Specialists return `SpecialistResult`. Pydantic validation is the boundary between model text and application logic.
 
-Role routing is currently static, while concrete model IDs and transports are
-data-driven:
-
-- local: all roles use the selected local connection;
-- hybrid: CEO, Development, and Research use the selected remote connection;
-  other specialists use the selected local connection;
-- cloud: all roles use the selected remote connection.
+Every explicit agent selects its own connection, so one company can concurrently
+run a strong remote CEO and cheaper local Content/Operations agents. Legacy
+company loops retain the former local/hybrid/cloud role routing for migration.
 
 Connection profiles select Responses API, OpenAI-compatible Chat Completions, or
 LiteLLM technology. Hosted web search is enabled only when the chosen adapter
@@ -135,11 +147,17 @@ remaining budget are non-configurable denials. See [Company policy](company-poli
 
 ### Orchestrator
 
-`orchestrator.py` performs the bounded control loop. It checks cooperative stop
-state, blocks on existing approvals, obtains one CEO proposal, records
+`orchestrator.py` performs the bounded control loop. It checks the target agent's
+cooperative state, claims only that agent's approvals, obtains one proposal, records
 stakeholder handling, evaluates policy, executes allowed specialist work,
 confines artifact paths, and records the result. Its governor, workspace, model
 connection registry, and agent engine are replaceable constructor boundaries.
+
+Before policy evaluation, explicit agents also pass an allowed-action check from
+their type and a permission check from `capability_plugins.py`. The WordPress
+plugin prefers a granted REST connection and uses idempotent draft/publish
+operations; without a connection it may use the isolated browser and stop for a
+human checkpoint.
 
 `company_runtime.py` owns behavior shared by Temporal and the lightweight
 worker: orchestration-result state projection and consolidated daily stakeholder
@@ -162,9 +180,10 @@ workspace and remove all network access. See `docs/execution-runtime.md`.
 
 ## Stakeholder intervention
 
-Stakeholder messages have two modes:
+Stakeholder messages have two modes and may target one agent:
 
-- A directive changes the plan. Pending approvals become `superseded` because their assumptions may now be stale.
+- A directive changes the plan. Pending work in the same target scope becomes
+  `superseded` because its assumptions may now be stale.
 - A question remains in context without superseding approvals.
 
 The CEO must include considered message IDs and a direct response in its typed proposal. The Governor still overrides stakeholder requests that exceed authority.
@@ -185,7 +204,7 @@ context. The dashboard remains available when email delivery fails.
 
 ## State transitions
 
-Runtime states are:
+Every agent has its own runtime state:
 
 ```text
 stopped -> running -> waiting_approval

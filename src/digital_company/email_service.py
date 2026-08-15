@@ -81,12 +81,32 @@ class ApprovalMailer:
             plain = []
             for item in approvals:
                 proposal = item["proposal"]
+                review = item.get("review") or {}
                 token = approval_token(company_id, item["id"], recipient, expires)
                 url = f"{public_url}/approval/{quote(company_id)}/{quote(item['id'])}?email={quote(recipient)}&expires={expires}&token={token}"
-                plain.append(f"- {proposal.title}: {url}")
-                cards.append(f'<div style="background:#0d1219;padding:16px;border-radius:10px;margin:12px 0"><b>{html.escape(proposal.title)}</b><p>{html.escape(proposal.objective)}</p><a style="color:#4ee3a1" href="{html.escape(url)}">Review decision</a></div>')
+                review_text = str(review.get("content", ""))[:12_000]
+                plain.append(
+                    f"- {proposal.title}: {url}" +
+                    (f"\n\nDRAFT FOR REVIEW\n{review_text}" if review_text else "")
+                )
+                review_html = (
+                    '<div style="margin:14px 0;padding:14px;background:#111923;border:1px solid #34445a;'
+                    'border-radius:8px"><b>Prepared draft</b><pre style="white-space:pre-wrap;word-break:break-word;'
+                    'font:12px/1.5 monospace;color:#cbd5e1">' + html.escape(review_text) + '</pre></div>'
+                    if review_text else ""
+                )
+                cards.append(
+                    f'<div style="background:#0d1219;padding:16px;border-radius:10px;margin:12px 0">'
+                    f'<b>{html.escape(proposal.title)}</b><p>{html.escape(proposal.objective)}</p>'
+                    f'{review_html}<a style="color:#4ee3a1" href="{html.escape(url)}">'
+                    'Review decision — approve, reject, or request changes</a></div>'
+                )
             msg = EmailMessage()
-            msg["Subject"] = f"Daily CEO brief: {settings['sender_name']}"
+            content_review = len(approvals) == 1 and approvals[0]["proposal"].action.value == "publish_content"
+            msg["Subject"] = (
+                f"Content ready for review: {approvals[0]['proposal'].title}"
+                if content_review else f"Daily CEO brief: {settings['sender_name']}"
+            )
             msg["From"] = f'{settings["sender_name"]} <{sender}>'
             msg["To"] = recipient
             result_text = "\n".join(f"- {title}" for title in summary["results"]) or "- No new completed work"

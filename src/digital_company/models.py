@@ -31,6 +31,10 @@ class ActionType(StrEnum):
     BUILD_MVP = "build_mvp"
     QA_MVP = "qa_mvp"
     PREPARE_OUTREACH = "prepare_outreach"
+    RESEARCH_CONTENT = "research_content"
+    CREATE_CONTENT_DRAFT = "create_content_draft"
+    SAVE_CONTENT_DRAFT = "save_content_draft"
+    PUBLISH_CONTENT = "publish_content"
     EXTERNAL_OUTREACH = "external_outreach"
     SPEND_MONEY = "spend_money"
     DEPLOY_PRODUCTION = "deploy_production"
@@ -99,6 +103,11 @@ class TaskProposal(TaskProposalDraft):
                 raise ValueError("Browser operations require browser execution_mode and a starting URL")
             if urlparse(self.handoff_url).scheme != "https":
                 raise ValueError("Browser operation URL must use https")
+        if self.action in {ActionType.SAVE_CONTENT_DRAFT, ActionType.PUBLISH_CONTENT}:
+            if self.execution_mode != "browser" or not self.handoff_url:
+                raise ValueError("WordPress content operations require browser execution_mode and a starting URL")
+            if urlparse(self.handoff_url).scheme != "https":
+                raise ValueError("WordPress content operation URL must use https")
         return self
 
 
@@ -131,6 +140,7 @@ class PolicyDocument(BaseModel):
         ActionType.DEPLOY_PRODUCTION,
         ActionType.REQUEST_PLATFORM_ACCESS,
         ActionType.PUBLISH_CATALOG,
+        ActionType.PUBLISH_CONTENT,
         ActionType.BROWSER_OPERATE,
         ActionType.NEGOTIATE_VENDOR,
         ActionType.HIRE_VENDOR,

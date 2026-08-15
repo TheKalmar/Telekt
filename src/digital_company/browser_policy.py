@@ -40,5 +40,19 @@ def contains_human_checkpoint(url: str, title: str, text: str) -> bool:
     markers = (
         "captcha", "recaptcha", "hcaptcha", "two-factor", "two factor", "2fa",
         "verification code", "verify your identity", "security challenge",
+        "wp-login.php", "log in to wordpress", "username or email address",
     )
     return any(marker in sample for marker in markers)
+
+
+def is_dangerous_draft_control(label: str) -> bool:
+    """Return whether a clicked control could make draft content public or transmit it."""
+    normalized = " ".join(label.lower().split())
+    blocked = (
+        "publish", "objavi", "schedule", "zakaži", "send", "pošalji",
+        "submit", "purchase", "buy now", "pay", "delete", "trash",
+    )
+    safe_draft = ("save draft", "sačuvaj nacrt", "preview", "pregled")
+    return not any(value in normalized for value in safe_draft) and any(
+        value in normalized for value in blocked
+    )

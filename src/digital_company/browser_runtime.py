@@ -11,7 +11,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from digital_company.browser_policy import contains_human_checkpoint, normalize_domain, validate_browser_url
+from digital_company.browser_policy import (
+    contains_human_checkpoint, is_dangerous_draft_control, normalize_domain,
+    validate_browser_url,
+)
 
 
 app = FastAPI(title="Digital Company Browser Runtime")
@@ -24,6 +27,7 @@ playwright = None
 class OpenSessionIn(BaseModel):
     url: str = Field(max_length=2000)
     allowed_domains: list[str] = Field(min_length=1, max_length=30)
+    mutation_scope: str = Field(default="read", pattern="^(read|draft|publish)$")
 
 
 class BrowserActionIn(BaseModel):
@@ -71,6 +75,7 @@ async def session_status(company_id: str) -> dict:
     return {
         "status": "open", "company_id": company_id, "url": page.url, "title": title,
         "allowed_domains": session["allowed_domains"],
+        "mutation_scope": session["mutation_scope"],
         "human_checkpoint": contains_human_checkpoint(page.url, title, text),
         "viewport": {"width": 1440, "height": 1000},
     }
@@ -106,7 +111,10 @@ async def open_session(company_id: str, payload: OpenSessionIn):
 
     await page.route("**/*", restrict)
     await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    sessions[company_id] = {"context": context, "page": page, "allowed_domains": allowed}
+    sessions[company_id] = {
+        "context": context, "page": page, "allowed_domains": allowed,
+        "mutation_scope": payload.mutation_scope,
+    }
     return await session_status(company_id)
 
 
@@ -130,6 +138,18 @@ async def action(company_id: str, payload: BrowserActionIn):
         raise HTTPException(404, "Browser session is closed")
     page = session["page"]
     if payload.kind in {"click", "double_click"} and payload.x is not None and payload.y is not None:
+        if session["mutation_scope"] == "draft":
+            label = await page.evaluate(
+                """([x,y]) => {
+                  const hit=document.elementFromPoint(x,y);
+                  const control=hit?.closest('button,a,[role="button"],input[type="submit"]')||hit;
+                  return [control?.innerText,control?.getAttribute?.('aria-label'),
+                          control?.getAttribute?.('title'),control?.value].filter(Boolean).join(' ');
+                }""",
+                [payload.x, payload.y],
+            )
+            if is_dangerous_draft_control(str(label or "")):
+                raise HTTPException(403, "Draft scope blocked a publish or transmission control")
         await page.mouse.click(payload.x, payload.y, click_count=2 if payload.kind == "double_click" else 1)
     elif payload.kind == "type" and payload.text is not None:
         await page.keyboard.type(payload.text)
