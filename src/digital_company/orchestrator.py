@@ -19,6 +19,7 @@ from digital_company.capability_plugins import authorize_action
 from digital_company.agent_templates import action_is_allowed
 from digital_company.wordpress_plugin import WordPressPluginRuntime
 from digital_company.image_generation import ImageGenerationRuntime
+from digital_company.errors import BudgetLimitError
 
 
 class CompanyOrchestrator:
@@ -444,7 +445,34 @@ class CompanyOrchestrator:
             return None
         if not self.model_connection:
             raise RuntimeError("Featured-image plugin needs the agent's model connection")
-        return ImageGenerationRuntime(self.model_connection, grant.get("config") or {})
+        config = grant.get("config") or {}
+        estimate = float(config.get("estimated_cost_eur", 0.25))
+
+        def budget_check(required: float) -> None:
+            remaining = self.store.agent_remaining_budget(self.agent_id)
+            if remaining < required:
+                raise BudgetLimitError(
+                    f"Featured image estimate EUR {required:.2f} exceeds the agent's "
+                    f"remaining model budget EUR {remaining:.2f}"
+                )
+
+        def record_usage() -> None:
+            rate = float(os.getenv("BILLING_USD_TO_BUDGET_RATE", "1.0"))
+            self.store.record_model_usage({
+                "run_id": f"image:{self.execution_key or self.agent_id}",
+                "provider": self.model_connection.get("name", "cloud image connection"),
+                "model": config.get("model", "gpt-image-2"),
+                "requests": 1, "input_tokens": 0, "cached_tokens": 0,
+                "output_tokens": 0, "reasoning_tokens": 0, "total_tokens": 0,
+                "estimated_usd": round(estimate / rate, 8) if rate else None,
+                "estimated_budget_cost": estimate,
+                "pricing_status": "configured_estimate", "agent_id": self.agent_id,
+            })
+
+        return ImageGenerationRuntime(
+            self.model_connection, config, budget_check=budget_check,
+            on_generated=record_usage,
+        )
 
     def _persist_result(self, task_id: str, proposal, result) -> None:
         """Persist a specialist result and confine any model-provided artifact path."""

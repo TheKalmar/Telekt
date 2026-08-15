@@ -14,13 +14,16 @@ from digital_company.runtime_secrets import get_secret
 class ImageGenerationRuntime:
     """Generate one bitmap without exposing provider credentials to company state."""
 
-    def __init__(self, connection: dict, config: dict) -> None:
+    def __init__(self, connection: dict, config: dict, budget_check=None, on_generated=None) -> None:
         if connection.get("location") != "cloud":
             raise RuntimeError("Featured-image generation requires a cloud image-capable connection")
         self.connection = connection
         self.config = config
+        self.budget_check = budget_check or (lambda _estimate: None)
+        self.on_generated = on_generated or (lambda: None)
 
     def generate(self, prompt: str) -> tuple[bytes, str]:
+        self.budget_check(float(self.config.get("estimated_cost_eur", 0.25)))
         base_url = (self.connection.get("base_url") or "https://api.openai.com/v1").rstrip("/")
         api_key = get_secret(f"MODEL_CONNECTION_{self.connection['id']}") or os.getenv("OPENAI_API_KEY", "")
         if not api_key:
@@ -57,4 +60,5 @@ class ImageGenerationRuntime:
             raise RuntimeError("Image provider returned no image data")
         if not data or len(data) > 15_000_000:
             raise RuntimeError("Generated image is empty or larger than 15 MB")
+        self.on_generated()
         return data, "image/png"

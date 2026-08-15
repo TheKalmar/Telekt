@@ -129,6 +129,10 @@ creates a new immutable playbook version; ordinary directives and questions do
 not silently become permanent rules. A publication approval email contains the
 complete sanitized article, SEO facts, taxonomy, sources, quality result,
 featured image, and WordPress preview link. Publishing remains approval-gated.
+The image plugin carries an operator-configured per-image cost estimate (EUR
+0.25 by default). Telekt checks the agent's remaining model-spend envelope
+before generation and records that estimate in model usage; it is explicitly an
+estimate, not a provider invoice.
 
 ## Current safety boundary
 

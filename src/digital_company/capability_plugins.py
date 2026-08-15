@@ -87,6 +87,9 @@ BUILTIN_PLUGINS = [
                     "default": "1536x1024",
                 },
                 "quality": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
+                "estimated_cost_eur": {
+                    "type": "number", "default": 0.25, "minimum": 0, "maximum": 10,
+                },
                 "brand_style": {"type": "string", "default": "professional editorial photography, no text, no logos"},
             },
             "additionalProperties": False,
@@ -166,6 +169,11 @@ def validate_plugin_config(definition: dict, config: dict) -> dict:
             value = normalized[name] = value.lower() == "true"
         if rules.get("type") == "integer" and isinstance(value, str) and value.strip().isdigit():
             value = normalized[name] = int(value)
+        if rules.get("type") == "number" and isinstance(value, str):
+            try:
+                value = normalized[name] = float(value)
+            except ValueError as exc:
+                raise ValueError(f"Plugin field {name} must be a number") from exc
         if rules.get("type") == "string" and not isinstance(value, str):
             raise ValueError(f"Plugin field {name} must be a string")
         if rules.get("type") == "boolean" and not isinstance(value, bool):
@@ -174,6 +182,11 @@ def validate_plugin_config(definition: dict, config: dict) -> dict:
             not isinstance(value, int) or isinstance(value, bool)
         ):
             raise ValueError(f"Plugin field {name} must be an integer")
+        if rules.get("type") == "number":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValueError(f"Plugin field {name} must be a number")
+            if value < rules.get("minimum", value) or value > rules.get("maximum", value):
+                raise ValueError(f"Plugin field {name} is outside the supported range")
         if "enum" in rules and value not in rules["enum"]:
             raise ValueError(f"Plugin field {name} has an unsupported value")
         if rules.get("format") == "uri":
