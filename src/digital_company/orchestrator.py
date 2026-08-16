@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from digital_company.agents import AgentEngine
 from digital_company.browser_client import browser_runtime_request
 from digital_company.computer_use import BrowserMissionRunner
-from digital_company.models import ActionType, SpecialistResult
+from digital_company.models import ActionType, SpecialistResult, TaskProposal
 from digital_company.policy import Governor
 from digital_company.store import CompanyStore
 from digital_company.workspace import WorkspaceRuntime
@@ -185,6 +185,8 @@ class CompanyOrchestrator:
         Pause/stop are cooperative: they are checked between atomic agent steps.
         An in-flight model request or database write is allowed to finish safely.
         """
+        if self.agent and self.agent["agent_type"] == "content_seo":
+            self.store.reconcile_content_work_items(self.agent_id)
         for cycle in range(1, max_cycles + 1):
             control_state = self._control_state()
             if control_state in {"paused", "stopped", "error"}:
@@ -213,6 +215,7 @@ class CompanyOrchestrator:
                 self.engine.decide(snapshot, self._agent_context())
                 if self.agent_id else self.engine.decide(snapshot)
             )
+            proposal = self._enforce_content_pipeline(proposal, snapshot)
             # A stakeholder response becomes durable before the proposed task is
             # evaluated, so the UI can show how the CEO handled the intervention.
             self.store.address_messages(
@@ -303,6 +306,140 @@ class CompanyOrchestrator:
             self._execute_specialist(task_id, proposal, snapshot)
 
         return {"status": "cycle_limit_reached", "cycles": max_cycles}
+
+    def _enforce_content_pipeline(self, proposal: TaskProposal, snapshot) -> TaskProposal:
+        """Replace a premature content-agent STOP with the next required stage.
+
+        Models choose *how* to perform useful work, but the durable queue owns
+        whether work is complete. This guard prevents a content agent from
+        sleeping after one article merely because the planner returned STOP.
+        It also keeps separate topics moving while publication reviews wait.
+        """
+        if not (self.agent and self.agent["agent_type"] == "content_seo"):
+            return proposal
+
+        if proposal.action == ActionType.RESEARCH_CONTENT:
+            excluded = list(dict.fromkeys(
+                " ".join(item["topic"].split())[:32]
+                for item in snapshot.work_queue
+            ))[-5:]
+            exclusion_text = "; ".join(excluded) or "none"
+            payload = proposal.model_dump(mode="json")
+            payload.update({
+                "objective": (
+                    "Choose one materially distinct topic. Never repeat: "
+                    f"{exclusion_text}. Verify it with official sources."
+                )[:200],
+                "skill_ids": ["content-seo"],
+                "required_capabilities": ["read_public_web"],
+                "execution_mode": "api",
+            })
+            return TaskProposal.model_validate(payload)
+
+        if proposal.action != ActionType.STOP:
+            return proposal
+
+        queue = [
+            item for item in snapshot.work_queue
+            if item["status"] not in {"published", "archived"}
+        ]
+        target = int((self.agent.get("config") or {}).get("active_topic_target", 5))
+        replacement: TaskProposal | None = None
+
+        if len(queue) < target and self._plugin_authorizes(ActionType.RESEARCH_CONTENT):
+            existing_topics = [item["topic"] for item in queue]
+            distinct_from = "; ".join(existing_topics[-5:]) or "no active topics"
+            replacement = TaskProposal(
+                action=ActionType.RESEARCH_CONTENT,
+                title=f"Research content opportunity {len(queue) + 1} of {target}",
+                objective=(
+                    "Find and verify one new high-value topic distinct from the active queue: "
+                    + distinct_from
+                )[:200],
+                rationale=f"The durable content queue has {len(queue)} of {target} active topics",
+                expected_evidence=[
+                    "Distinct search intent and business value",
+                    "At least two direct authoritative sources",
+                ],
+                estimated_cost_eur=0,
+                specialist="research",
+                stakeholder_response=(
+                    f"The pipeline is below target ({len(queue)}/{target}); "
+                    "I am continuing autonomously with a distinct topic."
+                ),
+                stakeholder_message_ids_considered=(
+                    proposal.stakeholder_message_ids_considered
+                ),
+                skill_ids=["content-seo"],
+                required_capabilities=["read_public_web"],
+                execution_mode="api",
+            )
+        elif len(queue) >= target:
+            stages = (
+                ({"changes_requested", "researched"}, ActionType.CREATE_CONTENT_DRAFT,
+                 "growth", "Create the complete reviewable content package", "api"),
+                ({"draft_ready"}, ActionType.SAVE_CONTENT_DRAFT,
+                 "operations", "Save the prepared package as an unpublished WordPress draft", "browser"),
+                ({"draft_saved"}, ActionType.PUBLISH_CONTENT,
+                 "operations", "Send the exact saved draft through owner review before publication", "browser"),
+            )
+            for statuses, action, specialist, objective, execution_mode in stages:
+                item = next((value for value in queue if value["status"] in statuses), None)
+                if not item or not self._plugin_authorizes(action):
+                    continue
+                handoff_url = self._wordpress_editor_url() if execution_mode == "browser" else None
+                if execution_mode == "browser" and not handoff_url:
+                    continue
+                replacement = TaskProposal(
+                    action=action,
+                    title=f"Advance content: {item['topic']}"[:120],
+                    objective=objective,
+                    rationale=(
+                        f"Topic {item['topic']} is at {item['status']} and has an autonomous next step"
+                    )[:200],
+                    expected_evidence=[
+                        "Topic-scoped result is stored",
+                        "The durable work item advances exactly one stage",
+                    ],
+                    estimated_cost_eur=0,
+                    specialist=specialist,
+                    stakeholder_response=(
+                        "I am advancing existing content work instead of stopping early."
+                    ),
+                    stakeholder_message_ids_considered=(
+                        proposal.stakeholder_message_ids_considered
+                    ),
+                    skill_ids=["content-seo"],
+                    work_item_id=item["id"],
+                    execution_mode=execution_mode,
+                    handoff_url=handoff_url,
+                )
+                break
+
+        if replacement:
+            self.store.audit("content.pipeline_stop_overridden", {
+                "agent_id": self.agent_id,
+                "active_topics": len(queue),
+                "target_topics": target,
+                "replacement_action": replacement.action.value,
+                "work_item_id": replacement.work_item_id,
+            })
+            return replacement
+        return proposal
+
+    def _plugin_authorizes(self, action: ActionType) -> bool:
+        """Return whether the current immutable plugin grant permits an action."""
+        allowed, _ = authorize_action(action.value, self.plugins)
+        return allowed
+
+    def _wordpress_editor_url(self) -> str | None:
+        """Return the configured HTTPS editor URL for typed content proposals."""
+        grant = next((
+            item for item in self.plugins
+            if item["plugin_id"] == "wordpress-content" and item["status"] == "enabled"
+        ), None)
+        url = ((grant or {}).get("config") or {}).get("posts_url")
+        return url if url and urlparse(url).scheme == "https" else None
 
     def _sleep_until_next_cadence(self, cycle: int, reason: str) -> dict:
         """Convert content-planner idleness into a restartable durable timer."""
@@ -595,9 +732,13 @@ class CompanyOrchestrator:
             return
         if proposal.action == ActionType.RESEARCH_CONTENT:
             self.store.create_content_work_item(
-                self.agent_id, task_id, proposal.title, result.summary,
+                self.agent_id, task_id, result.researched_topic or proposal.title, result.summary,
             )
         elif proposal.action == ActionType.CREATE_CONTENT_DRAFT:
+            if result.content_package:
+                self.store.rename_content_work_item(
+                    proposal.work_item_id, result.content_package.title,
+                )
             self.store.transition_content_work_item(
                 proposal.work_item_id, "draft_ready", task_id=task_id,
             )

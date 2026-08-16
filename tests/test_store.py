@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 
 from digital_company.store import CompanyStore
+from digital_company.models import ActionType, TaskProposal
 
 
 def test_company_budget_snapshot(tmp_path: Path):
@@ -87,3 +89,38 @@ def test_operations_projects_live_browser_mission(tmp_path: Path):
     assert mission["status"] == "running"
     assert mission["step"] == 2
     assert mission["last_action"]["kind"] == "click"
+
+
+def test_snapshot_compacts_completed_history_for_model_context(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Run a compact organization", 1000)
+    for index in range(30):
+        proposal = TaskProposal(
+            action=ActionType.RESEARCH_CONTENT, title=f"Topic {index}",
+            objective="Verify it", rationale="Maintain useful context",
+            expected_evidence=["Sources"], specialist="research",
+        )
+        task_id = store.create_task(proposal, "proposed")
+        store.db.execute(
+            "UPDATE tasks SET status='completed',result_json=?,completed_at=? WHERE id=?",
+            (json.dumps({
+                "status": "completed", "summary": "x" * 5000,
+                "evidence": ["e" * 1000] * 10,
+                "sources": [f"https://example.com/{value}" for value in range(12)],
+                "content_package": {
+                    "title": f"Topic {index}", "slug": f"topic-{index}",
+                    "html_content": "h" * 100_000,
+                },
+                "recommendation": "r" * 3000,
+            }), f"2026-01-{(index % 28) + 1:02d}T00:00:00+00:00", task_id),
+        )
+    store.db.commit()
+
+    snapshot = store.snapshot()
+
+    assert len(snapshot.completed_tasks) == 24
+    result = snapshot.completed_tasks[-1]["result"]
+    assert len(result["summary"]) == 2000
+    assert len(result["evidence"]) == 4
+    assert len(result["sources"]) == 8
+    assert "html_content" not in result["content_package"]

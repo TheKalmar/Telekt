@@ -22,6 +22,24 @@ def waits_for_external_signal(status: str) -> bool:
     return status in WAITING_STATUSES
 
 
+def agent_execution_key(
+    company_id: str,
+    agent_id: str,
+    sequence: int,
+    namespace: str | None = None,
+) -> str:
+    """Build an idempotency key that cannot collide across loop generations.
+
+    Legacy V2 histories did not carry a namespace. Keeping that exact format
+    when ``namespace`` is absent preserves deterministic replay, while all new
+    V3 workflow identities explicitly use the ``v3`` activity namespace.
+    """
+    prefix = f"{company_id}:agent:{agent_id}"
+    if namespace:
+        return f"{prefix}:{namespace}:execution:{sequence}"
+    return f"{prefix}:execution:{sequence}"
+
+
 @workflow.defn(name="CompanyLoopWorkflowV4")
 class CompanyLoopWorkflow:
     """Own durable scheduling while Activities own every side effect.
@@ -189,6 +207,7 @@ class AgentLoopWorkflow:
         self._last_status = "idle"
         self._last_wake_reason = "workflow_created"
         self._next_wake_at = None
+        self._execution_namespace = None
 
     @workflow.signal
     async def start(self, reason: str = "operator_start") -> None:
@@ -249,6 +268,7 @@ class AgentLoopWorkflow:
         self._last_status = str(input_value.get("last_status", "idle"))
         self._last_wake_reason = str(input_value.get("last_wake_reason", "workflow_created"))
         self._next_wake_at = input_value.get("next_wake_at")
+        self._execution_namespace = input_value.get("execution_namespace")
 
         while not self._shutdown:
             if not self._running or self._paused:
@@ -263,8 +283,11 @@ class AgentLoopWorkflow:
                 {
                     "company_id": company_id,
                     "agent_id": agent_id,
-                    "execution_key": (
-                        f"{company_id}:agent:{agent_id}:execution:{self._sequence + 1}"
+                    "execution_key": agent_execution_key(
+                        company_id,
+                        agent_id,
+                        self._sequence + 1,
+                        self._execution_namespace,
                     ),
                 },
                 start_to_close_timeout=timedelta(minutes=10),
@@ -309,7 +332,7 @@ class AgentLoopWorkflow:
                 or info.get_current_history_length() >= HISTORY_EVENT_LIMIT
                 or info.is_continue_as_new_suggested()
             ):
-                workflow.continue_as_new({
+                next_input = {
                     "company_id": company_id,
                     "agent_id": agent_id,
                     "running": self._running and not self._paused,
@@ -318,6 +341,11 @@ class AgentLoopWorkflow:
                     "last_status": self._last_status,
                     "last_wake_reason": self._last_wake_reason,
                     "next_wake_at": self._next_wake_at,
-                })
+                }
+                # Preserve the exact V2 Continue-As-New payload for legacy
+                # histories; only V3 identities carry the namespace field.
+                if self._execution_namespace:
+                    next_input["execution_namespace"] = self._execution_namespace
+                workflow.continue_as_new(next_input)
 
         return {"status": "shutdown", "cycles": self._cycles}

@@ -58,6 +58,7 @@
     }
   };
   Object.assign(catalogs.en, {
+    "operations.activeModel":"Active model call","operations.noActiveCall":"No model call right now","operations.queued":"queued for worker","operations.sleeping":"sleeping until","operations.waiting":"waiting for your decision",
     "view.overview.description":"Agents, company state and the most important controls.",
     "view.decisions.description":"Approvals, human takeover and communication for all agents.",
     "view.configuration.description":"Company, agents, models, plugins and connections.",
@@ -84,6 +85,7 @@
     "email.title":"Email approvals","email.subtitle":"Recipients receive individual signed, single-use review links.","email.notifications":"Notifications","email.disabled":"Disabled","email.enabled":"Enabled","email.senderName":"Sender display name","email.smtpConnection":"SMTP connection","email.fromAddress":"From email address","email.callbackUrl":"Public callback URL","email.approvers":"Approver emails (one per line)","email.howTitle":"How it works","email.howBody":"Telekt sends a draft or daily brief to these addresses. The link opens Telekt's approval page, so the callback must be a publicly reachable HTTPS URL. Localhost is allowed for Mailpit.","email.testRecipient":"Test recipient","email.transportTest":"Transport test","email.sendTest":"Send test email","email.newSmtp":"+ Configure SMTP connection","email.save":"Save email settings","email.envFallback":"Deployment .env fallback","email.chooseSmtp":"Choose an SMTP connection","email.credentialStored":"stored","email.credentialMissing":"missing","email.passwordHidden":"Passwords are never displayed.","email.envStatus":"Using the existing .env SMTP transport. A named SMTP connection is recommended for a clear company setup.","email.missingStatus":"SMTP is not configured. Click ‘Configure SMTP connection’.","email.testAddressRequired":"Enter the address that should receive the test.","email.testSending":"Saving settings and sending an inert test email…","email.testSent":"Test email sent to","email.testInert":"No approval action was performed.","email.smtpGmailHelp":"Gmail: use the full email address and a Google App Password, not the normal password. Mailpit: smtp://mailpit:1025, local, plain security, and no authentication."
   });
   Object.assign(catalogs.sr, {
+    "operations.activeModel":"Aktivan poziv modelu","operations.noActiveCall":"Trenutno nema poziva modelu","operations.queued":"zakazan kod workera","operations.sleeping":"spava do","operations.waiting":"čeka tvoju odluku",
     "view.overview.description":"Agenti, stanje kompanije i najvažnije kontrole.",
     "view.decisions.description":"Approvali, ljudsko preuzimanje i komunikacija za sve agente.",
     "view.configuration.description":"Firma, agenti, modeli, pluginovi i konekcije.",

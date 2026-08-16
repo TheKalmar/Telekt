@@ -3,7 +3,8 @@ import asyncio
 from digital_company import temporal_gateway, web
 from digital_company.temporal_worker import _apply_result_state
 from digital_company.temporal_workflow import (
-    AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE, waits_for_external_signal,
+    AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE, agent_execution_key,
+    waits_for_external_signal,
 )
 
 
@@ -46,10 +47,53 @@ def test_temporal_gateway_is_optional_without_infrastructure(monkeypatch):
     assert temporal_gateway.signal_agent("company-1", "agent-1", "start", "test") is False
 
 
-def test_v4_workflow_id_does_not_replay_pre_heartbeat_history():
+def test_workflow_ids_do_not_replay_incompatible_history():
     assert temporal_gateway.workflow_id("abc") == "company-loop-v4-abc"
     assert TASK_QUEUE == "digital-company-v4"
-    assert temporal_gateway.agent_workflow_id("abc", "writer") == "agent-loop-v2-abc-writer"
+    assert temporal_gateway.agent_workflow_id("abc", "writer") == "agent-loop-v3-abc-writer"
+    assert temporal_gateway.legacy_agent_workflow_id("abc", "writer") == "agent-loop-v2-abc-writer"
+
+
+def test_agent_activity_keys_are_namespaced_without_breaking_v2_replay():
+    legacy = agent_execution_key("company", "writer", 1)
+    current = agent_execution_key("company", "writer", 1, "v3")
+
+    assert legacy == "company:agent:writer:execution:1"
+    assert current == "company:agent:writer:v3:execution:1"
+    assert current != legacy
+
+
+def test_agent_gateway_starts_v3_namespace_and_retires_v2():
+    class Handle:
+        def __init__(self, workflow_id):
+            self.workflow_id = workflow_id
+            self.signals = []
+
+        async def signal(self, name, reason):
+            self.signals.append((name, reason))
+
+    class Client:
+        def __init__(self):
+            self.starts = []
+            self.handles = {}
+
+        async def start_workflow(self, run, payload, **options):
+            self.starts.append((run, payload, options))
+
+        def get_workflow_handle(self, workflow_id):
+            return self.handles.setdefault(workflow_id, Handle(workflow_id))
+
+    client = Client()
+    handle = asyncio.run(
+        temporal_gateway.ensure_agent_workflow(client, "company", "writer")
+    )
+
+    assert handle.workflow_id == "agent-loop-v3-company-writer"
+    assert client.starts[0][1]["execution_namespace"] == "v3"
+    assert client.starts[0][2]["id"] == "agent-loop-v3-company-writer"
+    assert client.handles["agent-loop-v2-company-writer"].signals == [
+        ("shutdown", "superseded_by_agent_loop_v3"),
+    ]
 
 
 def test_agent_workflow_has_independent_restartable_lifecycle():

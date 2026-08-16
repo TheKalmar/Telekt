@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -179,6 +180,88 @@ def test_content_topics_keep_independent_durable_pipeline_ids(tmp_path: Path):
     assert store.get_agent(agent["id"])["work_queue"]["active"] == 1
 
 
+def test_stale_model_work_item_id_is_rebound_to_eligible_topic(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent() | {
+        "agent_type": "content_seo",
+        "config": {
+            "content_language": "sr-Latn", "target_audience": "Banja Luka",
+            "content_scope": "Legal SEO",
+        },
+    })
+    research = TaskProposal(
+        action=ActionType.RESEARCH_CONTENT, title="First legal topic",
+        objective="Verify it", rationale="Fill queue",
+        expected_evidence=["Sources"], estimated_cost_eur=0, specialist="research",
+    )
+    first_task = store.create_task(research, "proposed", agent_id=agent["id"])
+    stale = store.create_content_work_item(
+        agent["id"], first_task, "First legal topic", "Already drafted",
+    )
+    store.transition_content_work_item(stale, "draft_saved")
+    second_task = store.create_task(research, "proposed", agent_id=agent["id"])
+    eligible = store.create_content_work_item(
+        agent["id"], second_task, "Second distinct topic", "Ready to draft",
+    )
+    draft = TaskProposal(
+        action=ActionType.CREATE_CONTENT_DRAFT, title="Draft second topic",
+        objective="Create the draft", rationale="Research is ready",
+        expected_evidence=["Complete package"], estimated_cost_eur=0,
+        specialist="growth", work_item_id=stale,
+    )
+    draft_task = store.create_task(draft, "proposed", agent_id=agent["id"])
+
+    rebound = store.resolve_content_work_item(agent["id"], draft_task, draft)
+
+    assert rebound.work_item_id == eligible
+
+
+def test_legacy_content_placeholders_are_named_and_deduplicated(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent() | {
+        "agent_type": "content_seo",
+        "config": {
+            "content_language": "sr-Latn", "target_audience": "Banja Luka",
+            "content_scope": "Legal SEO",
+        },
+    })
+    proposal = TaskProposal(
+        action=ActionType.RESEARCH_CONTENT, title="Generic research topic",
+        objective="Verify one topic", rationale="Fill the durable queue",
+        expected_evidence=["Official sources"], estimated_cost_eur=0,
+        specialist="research",
+    )
+    first_task = store.create_task(proposal, "proposed", agent_id=agent["id"])
+    first = store.create_content_work_item(
+        agent["id"], first_task, proposal.title, "Older complete topic",
+    )
+    draft_task = store.create_task(
+        proposal.model_copy(update={"action": ActionType.CREATE_CONTENT_DRAFT}),
+        "proposed", agent_id=agent["id"],
+    )
+    store.db.execute(
+        "UPDATE tasks SET result_json=? WHERE id=?",
+        (json.dumps({"content_package": {"title": "Actual legal topic"}}), draft_task),
+    )
+    store.transition_content_work_item(first, "draft_ready", task_id=draft_task)
+    store.transition_content_work_item(first, "draft_saved")
+
+    second_task = store.create_task(proposal, "proposed", agent_id=agent["id"])
+    second = store.create_content_work_item(
+        agent["id"], second_task,
+        "Actual legal topic with practical local guidance", "Repeated research",
+    )
+
+    repaired = store.reconcile_content_work_items(agent["id"])
+
+    items = {item["id"]: item for item in store.list_content_work_items(agent["id"])}
+    assert repaired["renamed"] == [first]
+    assert repaired["archived_duplicates"] == [second]
+    assert items[first]["topic"] == "Actual legal topic"
+    assert items[first]["status"] == "draft_saved"
+    assert items[second]["status"] == "archived"
+
+
 class StopEngine:
     def decide(self, snapshot, agent_context=None):
         return TaskProposal(
@@ -188,6 +271,41 @@ class StopEngine:
             specialist="ceo",
         )
 
+    def execute(self, proposal, *args, **kwargs):
+        return SpecialistResult(
+            status="completed",
+            summary="Verified a distinct local legal content opportunity",
+            evidence=["Two authoritative sources were checked"],
+            sources=["https://example.com/source-one", "https://example.com/source-two"],
+            recommendation="Create the complete content draft",
+        )
+
+
+def test_underfilled_content_queue_overrides_model_stop(tmp_path: Path):
+    store = initialized_store(tmp_path)
+    agent = store.create_agent(content_agent() | {
+        "agent_type": "content_seo",
+        "config": {
+            "content_language": "sr-Latn", "target_audience": "Banja Luka",
+            "content_scope": "Legal SEO", "active_topic_target": 5,
+        },
+    })
+    store.grant_agent_plugin(agent["id"], "web-research", {
+        "permissions": ["read_public_web"], "config": {},
+    })
+    store.set_agent_status(agent["id"], "running")
+
+    result = CompanyOrchestrator(
+        store, tmp_path / "artifacts", engine=StopEngine(), agent_id=agent["id"],
+    ).run(max_cycles=1)
+
+    assert result["status"] == "cycle_limit_reached"
+    assert store.get_agent(agent["id"])["status"] == "running"
+    queue = store.list_content_work_items(agent["id"])
+    assert len(queue) == 1
+    assert queue[0]["status"] == "researched"
+    assert store.snapshot(agent["id"]).completed_tasks[-1]["action"] == "research_content"
+
 
 def test_scheduled_content_stop_sleeps_instead_of_terminating(tmp_path: Path):
     store = initialized_store(tmp_path)
@@ -195,9 +313,24 @@ def test_scheduled_content_stop_sleeps_instead_of_terminating(tmp_path: Path):
         "agent_type": "content_seo",
         "config": {
             "content_language": "sr-Latn", "target_audience": "Banja Luka",
-            "content_scope": "Legal SEO", "wake_interval_minutes": 10,
+            "content_scope": "Legal SEO", "active_topic_target": 1,
+            "wake_interval_minutes": 10,
         },
     })
+    store.grant_agent_plugin(agent["id"], "web-research", {
+        "permissions": ["read_public_web"], "config": {},
+    })
+    research = TaskProposal(
+        action=ActionType.RESEARCH_CONTENT, title="Active review topic",
+        objective="Verify the topic", rationale="Maintain the queue",
+        expected_evidence=["Authoritative sources"], estimated_cost_eur=0,
+        specialist="research",
+    )
+    research_task = store.create_task(research, "proposed", agent_id=agent["id"])
+    work_id = store.create_content_work_item(
+        agent["id"], research_task, research.title, "Waiting for owner review",
+    )
+    store.transition_content_work_item(work_id, "awaiting_review")
     store.set_agent_status(agent["id"], "running")
 
     result = CompanyOrchestrator(

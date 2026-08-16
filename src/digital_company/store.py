@@ -33,6 +33,7 @@ from digital_company.integration_connectors import (
 )
 from digital_company.runtime_secrets import get_secret
 from digital_company.text_encoding import repair_text_encoding
+from digital_company.content_topics import topics_equivalent
 
 
 def utc_now() -> str:
@@ -205,17 +206,45 @@ class CompanyStore:
             raise RuntimeError("Company is not initialized. Run `digital-company init` first.")
         spent = float(self.db.execute("SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger").fetchone()["value"])
         spent += float(self.db.execute("SELECT COALESCE(SUM(estimated_budget_cost),0) AS value FROM model_usage").fetchone()["value"])
-        tasks = [dict(row) for row in self.db.execute(
+        completed_query = (
             "SELECT action,title,specialist,status,result_json,agent_id FROM tasks "
-            "WHERE status='completed' ORDER BY created_at"
-        )]
+            "WHERE status='completed'"
+        )
+        completed_params: tuple = ()
+        if agent_id:
+            completed_query += " AND (agent_id=? OR agent_id IS NULL)"
+            completed_params = (agent_id,)
+        completed_query += " ORDER BY created_at DESC LIMIT 24"
+        tasks = [dict(row) for row in self.db.execute(completed_query, completed_params)]
+        tasks.reverse()
         for task in tasks:
             if task["result_json"]:
-                result = json.loads(task.pop("result_json"))
-                if result.get("artifact_content"):
-                    result["artifact_content"] = "[stored artifact omitted from decision context]"
-                if (result.get("content_package") or {}).get("html_content"):
-                    result["content_package"]["html_content"] = "[stored content HTML omitted from decision context]"
+                raw = json.loads(task.pop("result_json"))
+                result = {
+                    "status": raw.get("status"),
+                    "summary": str(raw.get("summary") or "")[:2000],
+                    "evidence": [str(value)[:600] for value in (raw.get("evidence") or [])[-4:]],
+                    "sources": [str(value)[:1000] for value in (raw.get("sources") or [])[:8]],
+                    "researched_topic": raw.get("researched_topic"),
+                    "artifact_path": raw.get("artifact_path"),
+                    "recommendation": str(raw.get("recommendation") or "")[:1000],
+                    "quality_report": raw.get("quality_report"),
+                }
+                package = raw.get("content_package")
+                if isinstance(package, dict):
+                    result["content_package"] = {
+                        key: package.get(key) for key in (
+                            "title", "slug", "focus_keyword", "seo_title",
+                            "meta_description", "categories", "tags",
+                        )
+                    }
+                publication = raw.get("publication_state")
+                if isinstance(publication, dict):
+                    result["publication_state"] = {
+                        key: publication.get(key) for key in (
+                            "post_id", "status", "link", "slug", "source_task_id",
+                        )
+                    }
                 task["result"] = result
         failures = [dict(row) for row in self.db.execute(
             "SELECT id,action,title,specialist,status,result_json,completed_at FROM tasks "
@@ -641,11 +670,14 @@ class CompanyStore:
             if not row:
                 raise ValueError("Content work item does not belong to this agent")
             if row["status"] not in allowed:
-                raise ValueError(
-                    f"Content work item {row['id']} is {row['status']}; "
-                    f"{proposal.action.value} expects {sorted(allowed)}"
-                )
-        else:
+                self.audit("content.work_item_rebound", {
+                    "agent_id": agent_id, "task_id": task_id,
+                    "requested_work_item_id": row["id"],
+                    "requested_status": row["status"],
+                    "action": proposal.action.value,
+                })
+                row = None
+        if not row:
             placeholders = ",".join("?" for _ in allowed)
             row = self.db.execute(
                 f"SELECT id,status FROM content_work_items WHERE agent_id=? "
@@ -669,11 +701,14 @@ class CompanyStore:
     ) -> str:
         """Turn completed research into one independently reviewable content thread."""
         normalized = re.sub(r"\s+", " ", topic).strip()
-        existing = self.db.execute(
-            "SELECT id FROM content_work_items WHERE agent_id=? AND LOWER(topic)=LOWER(?) "
-            "AND status NOT IN ('published','archived') ORDER BY created_at LIMIT 1",
-            (agent_id, normalized),
-        ).fetchone()
+        existing = next((
+            row for row in self.db.execute(
+                "SELECT id,topic FROM content_work_items WHERE agent_id=? "
+                "AND status NOT IN ('published','archived') ORDER BY created_at",
+                (agent_id,),
+            )
+            if topics_equivalent(normalized, row["topic"])
+        ), None)
         if existing:
             work_item_id = existing["id"]
         else:
@@ -719,6 +754,82 @@ class CompanyStore:
         self.audit("content.work_item_" + status, {
             "work_item_id": work_item_id, "task_id": task_id, "approval_id": approval_id,
         })
+
+    def rename_content_work_item(self, work_item_id: str | None, topic: str) -> None:
+        """Replace a planning placeholder with the draft's reader-facing title."""
+        if not work_item_id:
+            return
+        normalized = re.sub(r"\s+", " ", topic).strip()
+        if not normalized:
+            return
+        self.db.execute(
+            "UPDATE content_work_items SET topic=?,updated_at=? WHERE id=?",
+            (normalized, utc_now(), work_item_id),
+        )
+        self.db.commit()
+        self.audit("content.work_item_named", {
+            "work_item_id": work_item_id, "topic": normalized,
+        })
+
+    def reconcile_content_work_items(self, agent_id: str) -> dict:
+        """Repair legacy placeholder titles and archive duplicate active topics.
+
+        Earlier agents used the planner task title as the topic identity. If a
+        complete draft later supplied a reader-facing title, use that canonical
+        value and keep only the most advanced active row for an exact duplicate.
+        """
+        rows = [dict(row) for row in self.db.execute(
+            "SELECT id,topic,status,draft_task_id,updated_at FROM content_work_items "
+            "WHERE agent_id=? AND status NOT IN ('published','archived')",
+            (agent_id,),
+        )]
+        renamed: list[str] = []
+        for item in rows:
+            if not item.get("draft_task_id"):
+                continue
+            task = self.db.execute(
+                "SELECT result_json FROM tasks WHERE id=?", (item["draft_task_id"],),
+            ).fetchone()
+            if not task or not task["result_json"]:
+                continue
+            try:
+                title = (json.loads(task["result_json"]).get("content_package") or {}).get("title")
+            except (TypeError, ValueError):
+                title = None
+            normalized = re.sub(r"\s+", " ", str(title or "")).strip()
+            if normalized and normalized != item["topic"]:
+                self.db.execute(
+                    "UPDATE content_work_items SET topic=?,updated_at=? WHERE id=?",
+                    (normalized, utc_now(), item["id"]),
+                )
+                item["topic"] = normalized
+                renamed.append(item["id"])
+
+        priority = {
+            "researched": 0, "draft_ready": 1, "changes_requested": 1,
+            "draft_saved": 2, "awaiting_review": 3, "approved": 4,
+        }
+        archived: list[str] = []
+        keepers: list[dict] = []
+        for item in sorted(
+            rows,
+            key=lambda value: (priority.get(value["status"], -1), value["updated_at"]),
+            reverse=True,
+        ):
+            if any(topics_equivalent(item["topic"], kept["topic"]) for kept in keepers):
+                self.db.execute(
+                    "UPDATE content_work_items SET status='archived',updated_at=? WHERE id=?",
+                    (utc_now(), item["id"]),
+                )
+                archived.append(item["id"])
+            else:
+                keepers.append(item)
+        self.db.commit()
+        if renamed or archived:
+            self.audit("content.work_queue_reconciled", {
+                "agent_id": agent_id, "renamed": renamed, "archived_duplicates": archived,
+            })
+        return {"renamed": renamed, "archived_duplicates": archived}
 
     def agent_remaining_budget(self, agent_id: str) -> float:
         """Return this agent's model-spend envelope, independent of company capital.

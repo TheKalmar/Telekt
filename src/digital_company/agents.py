@@ -20,6 +20,7 @@ from agents import (
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from digital_company.errors import BudgetLimitError
+from digital_company.content_topics import topics_equivalent
 from digital_company.model_adapters import ModelAdapterFactory
 from digital_company.models import (
     ActionType, CompanySnapshot, SpecialistResult, SpecialistResultDraft,
@@ -104,7 +105,7 @@ topic when the active queue is already at its configured target unless replacing
 """
 
 SPECIALIST_INSTRUCTIONS = {
-    "research": """You are a skeptical market and search researcher. You must use web search before drawing conclusions. Produce a concise opportunity brief that separates verified facts, inference, and assumptions. Put at least two distinct direct HTTP(S) source URLs in the sources field and connect every important claim to one of them in evidence. Prefer primary sources, official legislation and government sources, public datasets, official product/pricing pages, and direct user language. For legal content, verify every law, deadline and procedure against authoritative sources and explicitly flag jurisdiction and uncertainty. Assess search demand, intent, competition, local relevance and commercial value without inventing search volumes. Never invent a source, statistic, quote, interview, customer reaction, or completed experiment. If credible evidence is unavailable, return failed rather than filling gaps with plausible prose.""",
+    "research": """You are a skeptical market and search researcher. You must use web search before drawing conclusions. Produce a concise opportunity brief that separates verified facts, inference, and assumptions. Put at least two distinct direct HTTP(S) source URLs in the sources field and connect every important claim to one of them in evidence. Prefer primary sources, official legislation and government sources, public datasets, official product/pricing pages, and direct user language. For legal content, verify every law, deadline and procedure against authoritative sources and explicitly flag jurisdiction and uncertainty. Assess search demand, intent, competition, local relevance and commercial value without inventing search volumes. For RESEARCH_CONTENT, company_state is an exclusion/scope brief, not a list of candidate answers: actively search the web now across at least three materially different query families, choose the best verified opportunity outside the queue, and set researched_topic to one precise reader-facing topic. Never repeat any topic already present in company_state.work_queue, including archived items. Do not fail merely because the supplied context contains no alternative; discovering the alternative is your assigned work. Do not return a content_package during research; drafting belongs to CREATE_CONTENT_DRAFT. Never invent a source, statistic, quote, interview, customer reaction, or completed experiment. If credible evidence remains unavailable after real searches, return failed rather than filling gaps with plausible prose.""",
     "platform": "You are a platform strategy lead. Compare build, buy, integrate, and manual validation using total cost, setup time, API capability, lock-in, operational burden, and reversibility. Recommend one path and list the minimum human setup and permissions. Never claim access already exists.",
     "operations": "You are a resourceful operations lead. Design browser missions, human handoffs, and contractor sourcing plans. Produce exact URLs, bounded steps, success evidence, fallback routes, and risks. Never claim a login, CAPTCHA, 2FA, outreach, agreement, or payment was completed.",
     "product": "You are a pragmatic product manager. Produce a narrow PRD with ICP, pain, workflow, acceptance criteria, non-goals, pricing hypothesis, and measurable validation test.",
@@ -452,9 +453,25 @@ class AgentEngine:
                 evidence=["No external source was queried; fabricated market evidence is forbidden."],
                 recommendation="Switch this company to Hybrid or Cloud for evidence-backed research, then retry.",
             )
+        company_state = snapshot.model_dump(mode="json")
+        if proposal.action == ActionType.RESEARCH_CONTENT:
+            # Topic discovery must not anchor on large prior article bodies.
+            # The durable queue is the exclusion set; profile and agent config
+            # define scope, while fresh web search supplies candidate evidence.
+            company_state["completed_tasks"] = []
+            company_state["recent_evidence"] = []
+            company_state["recent_failures"] = [
+                {
+                    "summary": str((item.get("result") or {}).get("summary") or "")[:500],
+                    "recommendation": str(
+                        (item.get("result") or {}).get("recommendation") or ""
+                    )[:300],
+                }
+                for item in company_state.get("recent_failures", [])[-3:]
+            ]
         prompt = json.dumps({
             "assigned_task": proposal.model_dump(mode="json"),
-            "company_state": snapshot.model_dump(mode="json"),
+            "company_state": company_state,
             "artifact_context": artifact_context,
             "assigned_skills": skill_context or [],
             "active_agent": agent_context,
@@ -478,6 +495,35 @@ class AgentEngine:
                     sources=sorted(valid_sources),
                     recommendation="Repeat research with web search and return direct, verifiable URLs.",
                 )
+        if proposal.action == ActionType.RESEARCH_CONTENT and result.status == "completed":
+            topic = (result.researched_topic or "").strip()
+            existing_topics = [str(item.get("topic", "")) for item in snapshot.work_queue]
+            if not topic:
+                return SpecialistResult(
+                    status="failed",
+                    summary="Research output failed the topic gate: researched_topic is missing.",
+                    evidence=result.evidence,
+                    sources=result.sources,
+                    recommendation=(
+                        "Choose one precise topic that is absent from the durable work queue."
+                    ),
+                )
+            if any(topics_equivalent(topic, existing) for existing in existing_topics):
+                return SpecialistResult(
+                    status="failed",
+                    summary=f"Research output duplicated an existing topic: {topic}",
+                    evidence=result.evidence,
+                    sources=result.sources,
+                    researched_topic=topic,
+                    recommendation=(
+                        "Choose a materially different topic outside the durable work queue."
+                    ),
+                )
+            # Research must remain compact evidence. Any prematurely generated
+            # article is discarded so it cannot contaminate later planner state.
+            result.content_package = None
+            result.artifact_path = None
+            result.artifact_content = None
         if proposal.action == ActionType.CREATE_CONTENT_DRAFT and result.status == "completed":
             if not result.content_package:
                 return SpecialistResult(

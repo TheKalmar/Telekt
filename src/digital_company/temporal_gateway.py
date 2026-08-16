@@ -31,8 +31,14 @@ def workflow_id(company_id: str) -> str:
 
 
 def agent_workflow_id(company_id: str, agent_id: str) -> str:
-    # V2 adds durable scheduled sleep. Never replay V1 history against the new
-    # timer state machine; old stopped workflows remain inert audit history.
+    # V3 isolates activity idempotency keys from earlier agent-loop generations.
+    # V2 could replay completed V1 activity rows and appear running while doing
+    # no work because both generations started their sequence at one.
+    return f"agent-loop-v3-{company_id}-{agent_id}"
+
+
+def legacy_agent_workflow_id(company_id: str, agent_id: str) -> str:
+    """Return the superseded V2 identity retained only for safe shutdown."""
     return f"agent-loop-v2-{company_id}-{agent_id}"
 
 
@@ -56,13 +62,26 @@ async def ensure_agent_workflow(client: Client, company_id: str, agent_id: str):
     try:
         await client.start_workflow(
             AgentLoopWorkflow.run,
-            {"company_id": company_id, "agent_id": agent_id},
+            {
+                "company_id": company_id,
+                "agent_id": agent_id,
+                "execution_namespace": "v3",
+            },
             id=identity,
             task_queue=TASK_QUEUE,
         )
     except WorkflowAlreadyStartedError:
         pass
-    return client.get_workflow_handle(identity)
+    handle = client.get_workflow_handle(identity)
+    # A sleeping V2 loop could otherwise wake later and race the V3 owner. This
+    # migration signal is best-effort because many installations never created
+    # a V2 workflow for this agent.
+    try:
+        legacy = client.get_workflow_handle(legacy_agent_workflow_id(company_id, agent_id))
+        await legacy.signal("shutdown", "superseded_by_agent_loop_v3")
+    except Exception:
+        pass
+    return handle
 
 
 async def _signal(company_id: str, signal_name: str, reason: str) -> None:

@@ -162,6 +162,10 @@ class SpecialistResultDraft(BaseModel):
     summary: str
     evidence: list[str]
     sources: list[str] = Field(default_factory=list)
+    # Required semantically for RESEARCH_CONTENT. Keeping it nullable preserves
+    # one shared specialist transport schema; AgentEngine enforces the action-
+    # specific requirement before orchestration can create a durable topic.
+    researched_topic: str | None = Field(default=None, min_length=5, max_length=200)
     artifact_path: str | None = None
     artifact_content: str | None = None
     content_package: ContentPackage | None = None
