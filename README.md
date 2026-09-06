@@ -7,6 +7,11 @@ model connection, token and model-spend limits, reusable capability-plugin
 grants, lifecycle, durable Temporal workflow, run history, and direct
 stakeholder chat.
 
+**New here?** Read [the story of how an “AI company” turned into a durable,
+governed multi-agent platform](CASE_STUDY.md)—including the approval overload,
+structured-output failures, false-idle bug, and architectural changes that came
+from them.
+
 An opt-in free self-hosted infrastructure overlay now runs PostgreSQL, Temporal,
 Temporal UI, and the durable Temporal company worker. See
 [`docs/postgres-temporal.md`](docs/postgres-temporal.md). Temporal owns durable,
@@ -22,6 +27,14 @@ The control-plane UI supports English and Serbian through an extensible
 translation catalog. See [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
 
 This repository proves the control loop and governance model. It is not yet a production-ready autonomous business platform.
+
+## Open-source status
+
+The codebase is being prepared for public, open-source release. Contributor and
+security guidance are available in [CONTRIBUTING.md](CONTRIBUTING.md) and
+[SECURITY.md](SECURITY.md). A license still requires an explicit owner decision;
+see the [open-source readiness checklist](docs/open-source-readiness.md) before
+changing repository visibility.
 
 ## What is implemented
 
