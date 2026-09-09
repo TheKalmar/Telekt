@@ -20,6 +20,7 @@ development dependencies:
 
 ```powershell
 py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
@@ -47,4 +48,3 @@ changes.
 By submitting a contribution, you agree that it may be distributed under the
 license selected for this repository. Do not submit code or data you do not have
 the right to contribute.
-

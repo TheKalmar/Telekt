@@ -17,6 +17,7 @@ classifiers = [
 ]
 dependencies = [
   "openai-agents[litellm]>=0.8.0",
+  "litellm>=1.84.0,<2",
   "pydantic>=2.10",
   "python-dotenv>=1.0",
   "fastapi>=0.115",

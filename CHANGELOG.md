@@ -13,6 +13,7 @@ use semantic versioning after the first public release.
 - Pull-request and issue templates plus engineering-quality guidance.
 - Browser security headers, request correlation IDs, and regression tests for
   model, runtime, and provider URL boundaries.
+- A secure lower bound for the optional LiteLLM transport dependency.
 
 ### Changed
 
