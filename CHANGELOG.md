@@ -15,6 +15,7 @@ use semantic versioning after the first public release.
   model, runtime, and provider URL boundaries.
 - A secure lower bound for the optional LiteLLM transport dependency.
 - Apache License 2.0 and corresponding package metadata.
+- Public repository metadata, creator attribution, and security-reporting setup.
 
 ### Changed
 
@@ -22,6 +23,7 @@ use semantic versioning after the first public release.
 - English is the source and first-run interface language; Serbian remains an
   explicitly selected localization.
 - API request contracts reject unsupported enum values before execution.
+- Development now uses `main` as the single canonical branch.
 
 ## [0.1.0] - Unreleased
 

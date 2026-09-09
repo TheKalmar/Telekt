@@ -19,16 +19,16 @@ product remains explicitly experimental.
       catalog and language-processing rules
 - [x] Browser security headers and strict model/runtime URL validation
 - [x] Apache License 2.0 selected and added to repository and package metadata
+- [x] Current and historical commits scanned for common credential patterns
+- [x] Complete quality gate run from a clean GitHub Actions checkout
+- [x] Public version clearly marked as an alpha / proof of concept
 
-## Required before making the repository public
+## Required before a production release
 
-- [ ] Review current and historical commits for secrets and private customer data
-- [ ] Enable GitHub private vulnerability reporting
+- [x] Enable GitHub private vulnerability reporting
 - [ ] Confirm every bundled logo, icon, font, fixture, and example may be redistributed
 - [ ] Replace personal addresses, real domains, and company-specific examples where inappropriate
-- [ ] Run the complete quality gate from a clean clone
 - [ ] Verify Docker startup in local-model and cloud-model modes from a new machine
-- [ ] Mark the first public version as a pre-release / POC
 
 ## License
 

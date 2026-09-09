@@ -12,6 +12,8 @@ model connection, token and model-spend limits, reusable capability-plugin
 grants, lifecycle, durable Temporal workflow, run history, and direct
 stakeholder chat.
 
+Created and engineered by [Marko Kalajdzic (@TheKalmar)](https://github.com/TheKalmar).
+
 **New here?** Read [the story of how an “AI company” turned into a durable,
 governed multi-agent platform](CASE_STUDY.md)—including the approval overload,
 structured-output failures, false-idle bug, and architectural changes that came
@@ -39,9 +41,9 @@ This repository proves the control loop and governance model. It is not yet a pr
 
 Telekt is licensed under the [Apache License 2.0](LICENSE). Contributor and
 security guidance are available in [CONTRIBUTING.md](CONTRIBUTING.md) and
-[SECURITY.md](SECURITY.md). Complete the remaining
-[open-source readiness checks](docs/open-source-readiness.md) before changing
-repository visibility.
+[SECURITY.md](SECURITY.md). The repository is public for learning, review, and
+contribution; the [readiness checklist](docs/open-source-readiness.md) tracks the
+additional work required before a production deployment.
 
 ## What is implemented
 
@@ -296,7 +298,7 @@ tests/
 
 Read these in order:
 
-1. [Luka / new developer quick handoff](docs/LUKA_HANDOFF.md)
+1. [Developer setup and handoff](docs/developer-setup.md)
 2. [Architecture](docs/architecture.md)
 3. [Developer guide](docs/developer-guide.md)
 4. [Agent prompt contracts](docs/prompt.md)

@@ -1,13 +1,12 @@
-# Developer handoff for Luka
+# Developer setup and handoff
 
 This is the shortest reliable path from a clean machine to a working Telekt
 development environment. Read this file first, then use the linked documents for
 the subsystem being changed.
 
-## 1. What this branch contains
+## 1. What the repository contains
 
-Use branch `codex/multi-agent-platform`. It contains the complete current
-POC history, including:
+The `main` branch contains the complete current POC history, including:
 
 - company profiles separated from digital employee configuration;
 - independently runnable typed agent instances with per-agent model, token/€
@@ -38,8 +37,6 @@ lightweight polling worker and SQLite backend remain development fallbacks.
 ```powershell
 git clone https://github.com/TheKalmar/Telekt.git
 Set-Location Telekt
-git fetch origin
-git switch --track origin/codex/multi-agent-platform
 Copy-Item .env.example .env.local
 ```
 
@@ -48,7 +45,7 @@ profiles, or Ollama model volumes.
 
 ## 3. Choose exactly one model setup
 
-### A. Use Luka's existing Ollama models (recommended for his machine)
+### A. Use existing Ollama models
 
 List the exact installed tags:
 
@@ -151,7 +148,8 @@ Invoke-RestMethod http://127.0.0.1:8421/api/local-model/models
 Expected core services are `app`, `worker`, `browser-runtime`,
 `execution-runtime`, `postgres`, `temporal`, and `temporal-ui`; bundled mode also
 runs `ollama` and the one-shot `ollama-init`. `scripts/up.ps1` includes the free
-self-hosted infrastructure overlay by default. The current suite has 142 tests.
+self-hosted infrastructure overlay by default. The current suite has more than
+200 tests.
 
 The execution runtime has no published host port. Verify it through:
 
@@ -228,9 +226,9 @@ or setup command changes.
 ## 7. Safe development workflow
 
 ```powershell
-git switch codex/multi-agent-platform
+git switch main
 git pull --ff-only
-git switch -c luka/<short-feature-name>
+git switch -c feature/<short-feature-name>
 ```
 
 Before committing:
