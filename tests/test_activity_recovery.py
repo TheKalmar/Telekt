@@ -38,15 +38,24 @@ def test_completed_linked_task_is_recovered_without_duplicate_ledger_cost(tmp_pa
     key = "company:execution:2"
     assert store.begin_activity(key) is None
     task_id = store.create_task(proposal(), "proposed", key)
-    store.complete_task(task_id, SpecialistResult(
-        status="completed", summary="Done", evidence=["Artifact"], recommendation="Continue",
-    ), 12)
+    store.complete_task(
+        task_id,
+        SpecialistResult(
+            status="completed",
+            summary="Done",
+            evidence=["Artifact"],
+            recommendation="Continue",
+        ),
+        12,
+    )
 
     recovered = store.begin_activity(key)
 
     assert recovered == {
-        "status": "recovered_task_completed", "cycles": 1,
-        "task_id": task_id, "recovered": True,
+        "status": "recovered_task_completed",
+        "cycles": 1,
+        "task_id": task_id,
+        "recovered": True,
     }
     assert store.db.execute("SELECT count(*) AS value FROM ledger").fetchone()["value"] == 1
 
@@ -71,7 +80,9 @@ def test_linking_legacy_approved_task_backfills_frozen_proposal(tmp_path: Path):
     key = "company:execution:4"
     expected = proposal()
     task_id = store.create_task(expected, "proposed")
-    store.db.execute("UPDATE tasks SET status='executing',proposal_json=NULL WHERE id=?", (task_id,))
+    store.db.execute(
+        "UPDATE tasks SET status='executing',proposal_json=NULL WHERE id=?", (task_id,)
+    )
     store.db.commit()
     assert store.begin_activity(key) is None
 

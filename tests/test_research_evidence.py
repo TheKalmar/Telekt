@@ -17,9 +17,13 @@ def proposal():
 
 def snapshot():
     return CompanySnapshot(
-        goal="Build an evidence-backed product", initial_budget_eur=1000,
-        spent_eur=0, remaining_budget_eur=1000, completed_tasks=[],
-        pending_approvals=[], recent_evidence=[],
+        goal="Build an evidence-backed product",
+        initial_budget_eur=1000,
+        spent_eur=0,
+        remaining_budget_eur=1000,
+        completed_tasks=[],
+        pending_approvals=[],
+        recent_evidence=[],
     )
 
 
@@ -36,13 +40,20 @@ def content_proposal():
 
 def content_snapshot():
     return CompanySnapshot(
-        goal="Grow legal search visibility", initial_budget_eur=1000,
-        spent_eur=0, remaining_budget_eur=1000, completed_tasks=[],
-        pending_approvals=[], recent_evidence=[],
-        work_queue=[{
-            "id": "topic-1", "topic": "Povrat PDV-a na prvu nekretninu",
-            "status": "draft_saved",
-        }],
+        goal="Grow legal search visibility",
+        initial_budget_eur=1000,
+        spent_eur=0,
+        remaining_budget_eur=1000,
+        completed_tasks=[],
+        pending_approvals=[],
+        recent_evidence=[],
+        work_queue=[
+            {
+                "id": "topic-1",
+                "topic": "Povrat PDV-a na prvu nekretninu",
+                "status": "draft_saved",
+            }
+        ],
     )
 
 
@@ -64,10 +75,17 @@ def test_local_research_fails_closed_without_web_access():
 
 def test_cloud_research_requires_two_verifiable_urls(monkeypatch):
     engine = bare_engine(local=False)
-    monkeypatch.setattr(engine, "_run", lambda *_args: SpecialistResult(
-        status="completed", summary="Market exists", evidence=["Unverified claim"],
-        sources=["https://example.com/one"], recommendation="Build it",
-    ))
+    monkeypatch.setattr(
+        engine,
+        "_run",
+        lambda *_args: SpecialistResult(
+            status="completed",
+            summary="Market exists",
+            evidence=["Unverified claim"],
+            sources=["https://example.com/one"],
+            recommendation="Build it",
+        ),
+    )
     result = engine.execute(proposal(), snapshot())
     assert result.status == "failed"
     assert "fewer than two" in result.summary
@@ -76,7 +94,9 @@ def test_cloud_research_requires_two_verifiable_urls(monkeypatch):
 def test_cloud_research_passes_with_distinct_sources(monkeypatch):
     engine = bare_engine(local=False)
     expected = SpecialistResult(
-        status="completed", summary="Evidence found", evidence=["Two sources agree"],
+        status="completed",
+        summary="Evidence found",
+        evidence=["Two sources agree"],
         sources=["https://example.com/one", "https://vendor.example/pricing"],
         recommendation="Continue validation",
     )
@@ -86,11 +106,17 @@ def test_cloud_research_passes_with_distinct_sources(monkeypatch):
 
 def test_content_research_requires_a_canonical_topic(monkeypatch):
     engine = bare_engine(local=False)
-    monkeypatch.setattr(engine, "_run", lambda *_args: SpecialistResult(
-        status="completed", summary="Evidence found", evidence=["Verified"],
-        sources=["https://example.com/one", "https://example.com/two"],
-        recommendation="Continue",
-    ))
+    monkeypatch.setattr(
+        engine,
+        "_run",
+        lambda *_args: SpecialistResult(
+            status="completed",
+            summary="Evidence found",
+            evidence=["Verified"],
+            sources=["https://example.com/one", "https://example.com/two"],
+            recommendation="Continue",
+        ),
+    )
 
     result = engine.execute(content_proposal(), content_snapshot())
 
@@ -100,12 +126,18 @@ def test_content_research_requires_a_canonical_topic(monkeypatch):
 
 def test_content_research_rejects_an_existing_topic(monkeypatch):
     engine = bare_engine(local=False)
-    monkeypatch.setattr(engine, "_run", lambda *_args: SpecialistResult(
-        status="completed", summary="Repeated evidence", evidence=["Verified"],
-        sources=["https://example.com/one", "https://example.com/two"],
-        researched_topic="Povrat PDV-a na prvu nekretninu za kupce u Banjoj Luci i RS",
-        recommendation="Continue",
-    ))
+    monkeypatch.setattr(
+        engine,
+        "_run",
+        lambda *_args: SpecialistResult(
+            status="completed",
+            summary="Repeated evidence",
+            evidence=["Verified"],
+            sources=["https://example.com/one", "https://example.com/two"],
+            researched_topic="Povrat PDV-a na prvu nekretninu za kupce u Banjoj Luci i RS",
+            recommendation="Continue",
+        ),
+    )
 
     result = engine.execute(content_proposal(), content_snapshot())
 
@@ -116,7 +148,9 @@ def test_content_research_rejects_an_existing_topic(monkeypatch):
 def test_content_research_accepts_a_distinct_topic(monkeypatch):
     engine = bare_engine(local=False)
     expected = SpecialistResult(
-        status="completed", summary="Distinct evidence", evidence=["Verified"],
+        status="completed",
+        summary="Distinct evidence",
+        evidence=["Verified"],
         sources=["https://example.com/one", "https://example.com/two"],
         researched_topic="Nasljeđivanje digitalne imovine u BiH",
         recommendation="Create a draft",
@@ -129,12 +163,16 @@ def test_content_research_accepts_a_distinct_topic(monkeypatch):
 def test_content_discovery_prompt_omits_prior_completed_articles(monkeypatch):
     engine = bare_engine(local=False)
     captured = {}
-    state = content_snapshot().model_copy(update={
-        "completed_tasks": [{"title": "Large prior article", "result": {"summary": "old"}}],
-        "recent_evidence": [{"evidence": "old article evidence"}],
-    })
+    state = content_snapshot().model_copy(
+        update={
+            "completed_tasks": [{"title": "Large prior article", "result": {"summary": "old"}}],
+            "recent_evidence": [{"evidence": "old article evidence"}],
+        }
+    )
     expected = SpecialistResult(
-        status="completed", summary="Fresh evidence", evidence=["Verified"],
+        status="completed",
+        summary="Fresh evidence",
+        evidence=["Verified"],
         sources=["https://example.com/one", "https://example.com/two"],
         researched_topic="Nasljeđivanje digitalne imovine u BiH",
         recommendation="Create a draft",

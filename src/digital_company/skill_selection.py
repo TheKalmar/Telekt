@@ -22,7 +22,8 @@ def select_skills(
     """Validate model-selected skills and optionally recover to safe defaults."""
     catalog = {item["id"]: item for item in catalog_items}
     eligible = [
-        item for item in catalog.values()
+        item
+        for item in catalog.values()
         if item["status"] == "available"
         and specialist in item["roles"]
         and action in item["actions"]

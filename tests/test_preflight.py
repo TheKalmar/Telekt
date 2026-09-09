@@ -1,9 +1,9 @@
+import os
 from pathlib import Path
 from types import SimpleNamespace
-import os
 
-from digital_company.store import CompanyStore
 from digital_company import web
+from digital_company.store import CompanyStore
 
 
 def configured_store(tmp_path: Path, mode: str = "local") -> CompanyStore:
@@ -14,15 +14,17 @@ def configured_store(tmp_path: Path, mode: str = "local") -> CompanyStore:
 
 
 def stub_services(monkeypatch, models=None):
-    monkeypatch.setattr(web, "registry", SimpleNamespace(
-        worker_status=lambda: {"status": "online"}
-    ))
+    monkeypatch.setattr(
+        web, "registry", SimpleNamespace(worker_status=lambda: {"status": "online"})
+    )
+
     def ready(connection, verify_model=False):
         if connection and connection["location"] == "local":
             ok = connection["model"] in (models or [])
             return ok, "installed" if ok else "model is not installed"
         ok = bool(os.getenv("OPENAI_API_KEY"))
         return ok, "ready" if ok else "credential missing"
+
     monkeypatch.setattr(web, "connection_ready", ready)
     monkeypatch.setattr(web, "browser_health", lambda: {"status": "ok", "browser": "chromium"})
     monkeypatch.setattr(web, "execution_health", lambda: {"status": "ok"})

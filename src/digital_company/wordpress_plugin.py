@@ -12,8 +12,8 @@ import urllib.parse
 import urllib.request
 from pathlib import PurePosixPath
 
-from digital_company.integration_connectors import secret_name
 from digital_company.content_rendering import sanitize_article_html
+from digital_company.integration_connectors import secret_name
 from digital_company.models import ContentPackage
 from digital_company.runtime_secrets import get_secret
 
@@ -39,17 +39,23 @@ class WordPressPluginRuntime:
         title = package.title if package else self._title(draft["content"], draft["title"])
         content = (
             sanitize_article_html(package.html_content)
-            if package else markdown_to_html(draft["content"])
+            if package
+            else markdown_to_html(draft["content"])
         )
         frozen = {
-            "slug": slug, "title": title, "status": "draft",
+            "slug": slug,
+            "title": title,
+            "status": "draft",
             "content_sha256": hashlib.sha256(content.encode()).hexdigest(),
             "source_task_id": draft["task_id"],
         }
         operation = self.store.prepare_integration_operation(
             self.execution_key + ":wordpress:draft:" + slug,
-            self.connection["id"], "wordpress.posts.write_drafts",
-            "POST", "/posts", frozen,
+            self.connection["id"],
+            "wordpress.posts.write_drafts",
+            "POST",
+            "/posts",
+            frozen,
         )
         cached = self._cached(operation)
         if cached is not None:
@@ -66,32 +72,43 @@ class WordPressPluginRuntime:
                     "categories": list(dict.fromkeys(package.categories)),
                     "tags": list(dict.fromkeys(package.tags)),
                 }
-                payload.update({
-                    "excerpt": package.excerpt,
-                    "categories": [self._resolve_term("categories", name) for name in term_names["categories"]],
-                    "tags": [self._resolve_term("tags", name) for name in term_names["tags"]],
-                    "aioseo_meta_data": {
-                        "title": package.seo_title,
-                        "description": package.meta_description,
-                    },
-                })
+                payload.update(
+                    {
+                        "excerpt": package.excerpt,
+                        "categories": [
+                            self._resolve_term("categories", name)
+                            for name in term_names["categories"]
+                        ],
+                        "tags": [self._resolve_term("tags", name) for name in term_names["tags"]],
+                        "aioseo_meta_data": {
+                            "title": package.seo_title,
+                            "description": package.meta_description,
+                        },
+                    }
+                )
                 if package.featured_image and self.image_runtime:
                     self._require("upload_media", "wordpress.media.upload")
                     image = self._ensure_featured_image(package)
                     payload["featured_media"] = image["id"]
             response = self._request(
-                "POST", f"/posts/{existing['id']}" if existing else "/posts", payload,
+                "POST",
+                f"/posts/{existing['id']}" if existing else "/posts",
+                payload,
             )
             # Fetch edit context because many SEO plugins expose computed metadata
             # only on the canonical post response, not the mutation response.
             verified = (
                 self._request("GET", f"/posts/{response['id']}?context=edit")
-                if package else response
+                if package
+                else response
             )
             if not isinstance(verified, dict):
                 verified = response
             result = self._safe_post_result(
-                verified, source_task_id=draft["task_id"], term_names=term_names, image=image,
+                verified,
+                source_task_id=draft["task_id"],
+                term_names=term_names,
+                image=image,
             )
             result["telekt_quality"] = draft.get("quality_report")
             return self.store.complete_integration_operation(operation["execution_key"], result)
@@ -103,8 +120,10 @@ class WordPressPluginRuntime:
         slug = self._slug(draft["path"])
         operation = self.store.prepare_integration_operation(
             self.execution_key + ":wordpress:publish:" + slug,
-            self.connection["id"], "wordpress.posts.publish",
-            "POST", f"/posts/by-slug/{slug}/publish",
+            self.connection["id"],
+            "wordpress.posts.publish",
+            "POST",
+            f"/posts/by-slug/{slug}/publish",
             {"slug": slug, "source_task_id": draft["task_id"], "status": "publish"},
         )
         cached = self._cached(operation)
@@ -149,15 +168,25 @@ class WordPressPluginRuntime:
         existing = self._request("GET", f"/media?{query}")
         if isinstance(existing, list) and existing:
             item = existing[0]
-            return {"id": item["id"], "source_url": item.get("source_url"), "alt_text": spec.alt_text}
+            return {
+                "id": item["id"],
+                "source_url": item.get("source_url"),
+                "alt_text": spec.alt_text,
+            }
         data, content_type = self.image_runtime.generate(spec.prompt)
         filename = slug + (".jpg" if content_type == "image/jpeg" else ".png")
         uploaded = self._request_binary("POST", "/media", data, content_type, filename)
-        updated = self._request("POST", f"/media/{uploaded['id']}", {
-            "alt_text": spec.alt_text, "caption": package.title,
-        })
+        updated = self._request(
+            "POST",
+            f"/media/{uploaded['id']}",
+            {
+                "alt_text": spec.alt_text,
+                "caption": package.title,
+            },
+        )
         return {
-            "id": updated["id"], "source_url": updated.get("source_url"),
+            "id": updated["id"],
+            "source_url": updated.get("source_url"),
             "alt_text": updated.get("alt_text") or spec.alt_text,
         }
 
@@ -167,7 +196,9 @@ class WordPressPluginRuntime:
         url = self.connection["base_url"].rstrip("/") + path
         body = None if payload is None else json.dumps(payload).encode()
         request = urllib.request.Request(
-            url, data=body, method=method,
+            url,
+            data=body,
+            method=method,
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
         adapter = self.connection["adapter"]
@@ -186,7 +217,8 @@ class WordPressPluginRuntime:
         else:
             raise ValueError(f"Unsupported WordPress connection adapter: {adapter}")
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            # Connection validation restricts the base URL; paths are relative and checked above.
+            with urllib.request.urlopen(request, timeout=30) as response:  # nosec
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"WordPress REST returned HTTP {exc.code}") from exc
@@ -194,20 +226,29 @@ class WordPressPluginRuntime:
             raise RuntimeError("WordPress REST connection failed") from exc
 
     def _request_binary(
-        self, method: str, path: str, payload: bytes, content_type: str, filename: str,
+        self,
+        method: str,
+        path: str,
+        payload: bytes,
+        content_type: str,
+        filename: str,
     ) -> dict:
         if not path.startswith("/") or "://" in path:
             raise ValueError("WordPress path must be relative")
         request = urllib.request.Request(
-            self.connection["base_url"].rstrip("/") + path, data=payload, method=method,
+            self.connection["base_url"].rstrip("/") + path,
+            data=payload,
+            method=method,
             headers={
-                "Accept": "application/json", "Content-Type": content_type,
+                "Accept": "application/json",
+                "Content-Type": content_type,
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
         )
         self._authorize_request(request)
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            # Connection validation restricts the base URL; paths are relative and checked above.
+            with urllib.request.urlopen(request, timeout=60) as response:  # nosec
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"WordPress media upload returned HTTP {exc.code}") from exc
@@ -239,7 +280,9 @@ class WordPressPluginRuntime:
 
     @staticmethod
     def _safe_post_result(
-        response: dict, source_task_id: str, term_names: dict | None = None,
+        response: dict,
+        source_task_id: str,
+        term_names: dict | None = None,
         image: dict | None = None,
     ) -> dict:
         aioseo = response.get("aioseo_meta_data") or response.get("aioseo_head_json") or {}

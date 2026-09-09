@@ -1,5 +1,7 @@
 """Validated HTTP request contracts for the control-plane API."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from digital_company.models import PolicyDocument
@@ -9,7 +11,7 @@ class MessageIn(BaseModel):
     """Stakeholder chat payload."""
 
     content: str = Field(min_length=1, max_length=4000)
-    kind: str = "directive"
+    kind: Literal["directive", "question", "memory"] = "directive"
 
 
 class AgentPlaybookIn(BaseModel):
@@ -23,13 +25,13 @@ class AgentPlaybookIn(BaseModel):
 class ModelModeIn(BaseModel):
     """Per-company model router selection."""
 
-    mode: str
+    mode: Literal["local", "hybrid", "cloud"]
 
 
 class ModelSettingsIn(BaseModel):
     """Per-company routing mode and connection selection."""
 
-    mode: str
+    mode: Literal["local", "hybrid", "cloud"]
     local_model: str = Field(min_length=1, max_length=200)
     allow_cloud_fallback: bool = False
     cloud_provider: str = "openai"
@@ -42,7 +44,7 @@ class ModelConnectionIn(BaseModel):
     id: str | None = None
     name: str = Field(min_length=1, max_length=100)
     adapter: str
-    location: str
+    location: Literal["local", "cloud"]
     base_url: str = Field(default="", max_length=2000)
     model: str = Field(min_length=1, max_length=200)
     api_key: str = Field(default="", max_length=500)
@@ -72,12 +74,26 @@ class BrowserSessionIn(BaseModel):
 
 
 class BrowserActionIn(BaseModel):
-    kind: str
-    x: float | None = None
-    y: float | None = None
+    kind: Literal[
+        "click",
+        "type",
+        "key",
+        "scroll",
+        "move",
+        "drag",
+        "wait",
+        "screenshot",
+        "navigate",
+    ]
+    x: float | None = Field(default=None, ge=0, le=1440)
+    y: float | None = Field(default=None, ge=0, le=1000)
     text: str | None = Field(default=None, max_length=4000)
     key: str | None = Field(default=None, max_length=40)
     url: str | None = Field(default=None, max_length=2000)
+    scroll_x: float | None = Field(default=None, ge=-2000, le=2000)
+    scroll_y: float | None = Field(default=None, ge=-2000, le=2000)
+    path: list[dict[str, float]] | None = Field(default=None, max_length=100)
+    keys: list[str] = Field(default_factory=list, max_length=8)
 
 
 class EmailSettingsIn(BaseModel):
@@ -113,7 +129,7 @@ class IntegrationConnectionIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     adapter: str
     provider: str = Field(min_length=1, max_length=100)
-    location: str = "cloud"
+    location: Literal["local", "cloud"] = "cloud"
     base_url: str = Field(min_length=1, max_length=2000)
     capabilities: list[str] = Field(min_length=1, max_length=50)
     config: dict = Field(default_factory=dict)
@@ -127,7 +143,7 @@ class IntegrationOperationIn(BaseModel):
     execution_key: str = Field(min_length=8, max_length=200)
     connection_id: str = Field(min_length=1, max_length=100)
     capability: str = Field(min_length=2, max_length=80)
-    method: str = Field(min_length=3, max_length=6)
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
     path: str = Field(min_length=1, max_length=1000)
     request: dict = Field(default_factory=dict)
 
@@ -144,7 +160,7 @@ class CompanyCreateIn(BaseModel):
     description: str = Field(default="", max_length=20_000)
     goal: str = Field(min_length=3, max_length=12_000)
     budget: float | None = Field(default=None, gt=0)
-    currency: str = Field(default="EUR", min_length=3, max_length=3)
+    currency: str = Field(default="EUR", pattern=r"^[A-Z]{3}$")
 
 
 class CompanyBriefIn(BaseModel):

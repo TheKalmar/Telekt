@@ -19,15 +19,21 @@ class Governor:
         # narrow AI authority but can never grant the company legal personhood.
         if proposal.action == ActionType.SIGN_CONTRACT:
             return PolicyDecision(
-                outcome="deny", reason="AI may never sign contracts.", **decision_context,
+                outcome="deny",
+                reason="AI may never sign contracts.",
+                **decision_context,
             )
         if proposal.estimated_cost_eur > remaining_budget_eur:
             return PolicyDecision(
-                outcome="deny", reason="Estimated cost exceeds remaining budget.", **decision_context,
+                outcome="deny",
+                reason="Estimated cost exceeds remaining budget.",
+                **decision_context,
             )
         if proposal.action in self.document.deny_actions:
             return PolicyDecision(
-                outcome="deny", reason="The active company policy denies this action.", **decision_context,
+                outcome="deny",
+                reason="The active company policy denies this action.",
+                **decision_context,
             )
         if (
             proposal.action == ActionType.SPEND_MONEY
@@ -45,5 +51,7 @@ class Governor:
                 **decision_context,
             )
         return PolicyDecision(
-            outcome="allow", reason="Internal reversible action is allowed.", **decision_context,
+            outcome="allow",
+            reason="Internal reversible action is allowed.",
+            **decision_context,
         )

@@ -3,7 +3,10 @@ import asyncio
 from digital_company import temporal_gateway, web
 from digital_company.temporal_worker import _apply_result_state
 from digital_company.temporal_workflow import (
-    AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE, agent_execution_key,
+    TASK_QUEUE,
+    AgentLoopWorkflow,
+    CompanyLoopWorkflow,
+    agent_execution_key,
     waits_for_external_signal,
 )
 
@@ -13,8 +16,13 @@ def test_company_workflow_signals_are_restartable():
 
     asyncio.run(workflow.start("first_start"))
     assert workflow.state() == {
-        "running": True, "paused": False, "shutdown": False, "cycles": 0,
-        "wake_count": 1, "last_status": "idle", "last_wake_reason": "first_start",
+        "running": True,
+        "paused": False,
+        "shutdown": False,
+        "cycles": 0,
+        "wake_count": 1,
+        "last_status": "idle",
+        "last_wake_reason": "first_start",
     }
 
     asyncio.run(workflow.pause("owner_pause"))
@@ -35,7 +43,14 @@ def test_company_workflow_signals_are_restartable():
 
 
 def test_waiting_results_require_a_signal_but_completed_cycle_does_not():
-    for status in ["waiting_for_approval", "waiting_for_human", "paused", "stopped", "error", "failed"]:
+    for status in [
+        "waiting_for_approval",
+        "waiting_for_human",
+        "paused",
+        "stopped",
+        "error",
+        "failed",
+    ]:
         assert waits_for_external_signal(status) is True
     assert waits_for_external_signal("cycle_limit_reached") is False
     assert waits_for_external_signal("approved_task_completed") is False
@@ -84,9 +99,7 @@ def test_agent_gateway_starts_v3_namespace_and_retires_v2():
             return self.handles.setdefault(workflow_id, Handle(workflow_id))
 
     client = Client()
-    handle = asyncio.run(
-        temporal_gateway.ensure_agent_workflow(client, "company", "writer")
-    )
+    handle = asyncio.run(temporal_gateway.ensure_agent_workflow(client, "company", "writer"))
 
     assert handle.workflow_id == "agent-loop-v3-company-writer"
     assert client.starts[0][1]["execution_namespace"] == "v3"
@@ -134,7 +147,9 @@ def test_web_control_persists_then_signals_temporal(monkeypatch):
     calls = []
     monkeypatch.setattr(web.registry, "active_id", lambda: "company-1")
     monkeypatch.setattr(web, "get_store", lambda company_id=None: store)
-    monkeypatch.setattr(web, "runtime_preflight", lambda value, force=False: {"ready": True, "blockers": []})
+    monkeypatch.setattr(
+        web, "runtime_preflight", lambda value, force=False: {"ready": True, "blockers": []}
+    )
     monkeypatch.setattr(web, "signal_temporal", lambda *args: calls.append(args) or True)
 
     web.control("start")
@@ -162,9 +177,14 @@ def test_web_recovery_resumes_from_committed_state(monkeypatch):
     calls = []
     monkeypatch.setattr(web.registry, "active_id", lambda: "company-1")
     monkeypatch.setattr(web, "get_store", lambda company_id=None: store)
-    monkeypatch.setattr(web, "runtime_preflight", lambda value, force=False: {
-        "ready": True, "blockers": [],
-    })
+    monkeypatch.setattr(
+        web,
+        "runtime_preflight",
+        lambda value, force=False: {
+            "ready": True,
+            "blockers": [],
+        },
+    )
     monkeypatch.setattr(web, "signal_temporal", lambda *args: calls.append(args) or True)
 
     result = web.retry_from_checkpoint()
@@ -172,7 +192,9 @@ def test_web_recovery_resumes_from_committed_state(monkeypatch):
     assert result == {"status": "running", "strategy": "resume_from_committed_state"}
     assert store.control == ("running", "Recovery queued from last committed checkpoint")
     assert calls == [("company-1", "start", "operator_recovery_retry")]
-    assert store.events == [(
-        "recovery.operator_retry_requested",
-        {"strategy": "resume_from_committed_state"},
-    )]
+    assert store.events == [
+        (
+            "recovery.operator_retry_requested",
+            {"strategy": "resume_from_committed_state"},
+        )
+    ]

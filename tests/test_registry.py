@@ -5,11 +5,20 @@ from digital_company.registry import CompanyRegistry
 
 def company_payload(name: str) -> dict:
     return {
-        "name": name, "company_type": "eCommerce", "concept": "Niche store",
-        "description": "", "goal": "Validate demand", "budget": 750,
-        "currency": "EUR", "target_market": "EU consumers", "customer_type": "B2C",
-        "time_horizon_days": 45, "risk_tolerance": "medium", "autonomy_level": "balanced",
-        "constraints": ["Approval before spending"], "success_criteria": ["First pilot"],
+        "name": name,
+        "company_type": "eCommerce",
+        "concept": "Niche store",
+        "description": "",
+        "goal": "Validate demand",
+        "budget": 750,
+        "currency": "EUR",
+        "target_market": "EU consumers",
+        "customer_type": "B2C",
+        "time_horizon_days": 45,
+        "risk_tolerance": "medium",
+        "autonomy_level": "balanced",
+        "constraints": ["Approval before spending"],
+        "success_criteria": ["First pilot"],
     }
 
 

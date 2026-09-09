@@ -6,7 +6,6 @@ import json
 
 from digital_company.text_encoding import repair_text_encoding
 
-
 BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS company_schema_versions (
   version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL
@@ -183,23 +182,33 @@ def migrate_company_database(db, now: str) -> None:
     _add_column(db, "approvals", "required_approvals", "INTEGER NOT NULL DEFAULT 1")
     _add_column(db, "approvals", "expires_at", "TEXT")
     _add_column(
-        db, "runtime_settings", "allow_cloud_fallback",
+        db,
+        "runtime_settings",
+        "allow_cloud_fallback",
         "INTEGER NOT NULL DEFAULT 0",
     )
     _add_column(
-        db, "runtime_settings", "cloud_provider",
+        db,
+        "runtime_settings",
+        "cloud_provider",
         "TEXT NOT NULL DEFAULT 'openai'",
     )
     _add_column(
-        db, "runtime_settings", "cloud_model",
+        db,
+        "runtime_settings",
+        "cloud_model",
         "TEXT NOT NULL DEFAULT 'gpt-5.4-mini'",
     )
     _add_column(
-        db, "runtime_settings", "local_connection_id",
+        db,
+        "runtime_settings",
+        "local_connection_id",
         "TEXT NOT NULL DEFAULT 'local-default'",
     )
     _add_column(
-        db, "runtime_settings", "cloud_connection_id",
+        db,
+        "runtime_settings",
+        "cloud_connection_id",
         "TEXT NOT NULL DEFAULT 'cloud-default'",
     )
     _add_column(db, "tasks", "agent_id", "TEXT")
@@ -212,8 +221,7 @@ def migrate_company_database(db, now: str) -> None:
     _add_column(db, "tasks", "work_item_id", "TEXT")
     _add_column(db, "agent_instances", "next_wake_at", "TEXT")
     applied_versions = {
-        int(row["version"])
-        for row in db.execute("SELECT version FROM company_schema_versions")
+        int(row["version"]) for row in db.execute("SELECT version FROM company_schema_versions")
     }
     if 11 not in applied_versions:
         _repair_legacy_text_encoding(db)
@@ -253,25 +261,33 @@ def _repair_legacy_text_encoding(db) -> None:
         ("company", "id", ("goal",), ()),
         ("company_profile", "id", (), ("profile_json",)),
         (
-            "agent_instances", "id",
+            "agent_instances",
+            "id",
             ("name", "role", "purpose", "instructions"),
             ("schedule_json", "config_json"),
         ),
         ("agent_playbook_versions", "id", (), ("document_json",)),
         ("stakeholder_messages", "id", ("content", "response"), ()),
         (
-            "tasks", "id", ("title", "objective", "rationale"),
+            "tasks",
+            "id",
+            ("title", "objective", "rationale"),
             ("proposal_json", "result_json"),
         ),
         (
-            "approvals", "id", ("reason", "decision_comment"),
+            "approvals",
+            "id",
+            ("reason", "decision_comment"),
             ("payload_json",),
         ),
         ("human_handoffs", "id", ("outcome",), ("payload_json",)),
     )
     for table, key, text_columns, json_columns in tables:
         columns = (key, *text_columns, *json_columns)
-        rows = db.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
+        # Table and column identifiers come exclusively from the closed tuple above.
+        rows = db.execute(
+            f"SELECT {','.join(columns)} FROM {table}"  # nosec
+        ).fetchall()
         for row in rows:
             updates: dict[str, str] = {}
             for column in text_columns:
@@ -293,6 +309,7 @@ def _repair_legacy_text_encoding(db) -> None:
             if updates:
                 assignments = ",".join(f"{column}=?" for column in updates)
                 db.execute(
-                    f"UPDATE {table} SET {assignments} WHERE {key}=?",
+                    # Identifiers come from the closed schema tuple; values are parameterized.
+                    f"UPDATE {table} SET {assignments} WHERE {key}=?",  # nosec
                     (*updates.values(), row[key]),
                 )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 import uvicorn
@@ -12,12 +13,13 @@ from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from digital_company.browser_policy import (
-    contains_human_checkpoint, is_dangerous_draft_control, normalize_domain,
+    contains_human_checkpoint,
+    is_dangerous_draft_control,
+    normalize_domain,
     validate_browser_url,
 )
 
-
-app = FastAPI(title="Digital Company Browser Runtime")
+app = FastAPI(title="Telekt Browser Runtime")
 DATA_DIR = Path(os.getenv("BROWSER_DATA_DIR", "/browser-data")).resolve()
 COMPANY_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 sessions: dict[str, dict] = {}
@@ -31,7 +33,17 @@ class OpenSessionIn(BaseModel):
 
 
 class BrowserActionIn(BaseModel):
-    kind: str
+    kind: Literal[
+        "click",
+        "type",
+        "key",
+        "scroll",
+        "move",
+        "drag",
+        "wait",
+        "screenshot",
+        "navigate",
+    ]
     x: float | None = Field(default=None, ge=0, le=1440)
     y: float | None = Field(default=None, ge=0, le=1000)
     text: str | None = Field(default=None, max_length=4000)
@@ -53,6 +65,7 @@ def safe_company_id(company_id: str) -> str:
 async def startup() -> None:
     global playwright
     from playwright.async_api import async_playwright
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     playwright = await async_playwright().start()
 
@@ -73,7 +86,10 @@ async def session_status(company_id: str) -> dict:
     title = await page.title()
     text = await page.locator("body").inner_text(timeout=3000)
     return {
-        "status": "open", "company_id": company_id, "url": page.url, "title": title,
+        "status": "open",
+        "company_id": company_id,
+        "url": page.url,
+        "title": title,
         "allowed_domains": session["allowed_domains"],
         "mutation_scope": session["mutation_scope"],
         "human_checkpoint": contains_human_checkpoint(page.url, title, text),
@@ -98,7 +114,9 @@ async def open_session(company_id: str, payload: OpenSessionIn):
         await sessions.pop(company_id)["context"].close()
     profile = DATA_DIR / company_id
     context = await playwright.chromium.launch_persistent_context(
-        str(profile), headless=True, viewport={"width": 1440, "height": 1000},
+        str(profile),
+        headless=True,
+        viewport={"width": 1440, "height": 1000},
         env={},
         args=["--disable-dev-shm-usage", "--disable-extensions", "--disable-file-system"],
     )
@@ -112,7 +130,9 @@ async def open_session(company_id: str, payload: OpenSessionIn):
     await page.route("**/*", restrict)
     await page.goto(url, wait_until="domcontentloaded", timeout=30000)
     sessions[company_id] = {
-        "context": context, "page": page, "allowed_domains": allowed,
+        "context": context,
+        "page": page,
+        "allowed_domains": allowed,
         "mutation_scope": payload.mutation_scope,
     }
     return await session_status(company_id)
@@ -137,7 +157,11 @@ async def action(company_id: str, payload: BrowserActionIn):
     if not session:
         raise HTTPException(404, "Browser session is closed")
     page = session["page"]
-    if payload.kind in {"click", "double_click"} and payload.x is not None and payload.y is not None:
+    if (
+        payload.kind in {"click", "double_click"}
+        and payload.x is not None
+        and payload.y is not None
+    ):
         if session["mutation_scope"] == "draft":
             label = await page.evaluate(
                 """([x,y]) => {
@@ -150,7 +174,9 @@ async def action(company_id: str, payload: BrowserActionIn):
             )
             if is_dangerous_draft_control(str(label or "")):
                 raise HTTPException(403, "Draft scope blocked a publish or transmission control")
-        await page.mouse.click(payload.x, payload.y, click_count=2 if payload.kind == "double_click" else 1)
+        await page.mouse.click(
+            payload.x, payload.y, click_count=2 if payload.kind == "double_click" else 1
+        )
     elif payload.kind == "type" and payload.text is not None:
         await page.keyboard.type(payload.text)
     elif payload.kind == "key" and payload.key:
@@ -192,4 +218,9 @@ async def close_session(company_id: str):
 
 
 def main() -> None:
-    uvicorn.run(app, host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8430")))
+    # This service is intentionally reachable on its isolated Docker network.
+    uvicorn.run(
+        app,
+        host=os.getenv("HOST", "0.0.0.0"),  # nosec
+        port=int(os.getenv("PORT", "8430")),
+    )

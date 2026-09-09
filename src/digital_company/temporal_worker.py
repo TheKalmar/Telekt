@@ -1,4 +1,5 @@
 """Temporal Activities and worker process for durable company execution."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,9 +17,9 @@ from digital_company.email_service import ApprovalMailer
 from digital_company.errors import BudgetLimitError
 from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.registry import CompanyRegistry
-from digital_company.temporal_gateway import ensure_agent_workflow, ensure_workflow
-from digital_company.temporal_workflow import AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE
 from digital_company.runtime_secrets import apply_runtime_secrets
+from digital_company.temporal_gateway import ensure_agent_workflow, ensure_workflow
+from digital_company.temporal_workflow import TASK_QUEUE, AgentLoopWorkflow, CompanyLoopWorkflow
 
 
 def registry() -> CompanyRegistry:
@@ -37,9 +38,16 @@ def is_non_retryable_activity_error(exc: Exception) -> bool:
     remaining ModelBehaviorError is therefore not a transport outage and must
     not make Temporal repeat the entire paid model activity.
     """
-    return isinstance(exc, (
-        KeyError, PermissionError, ValueError, ModelBehaviorError, BudgetLimitError,
-    ))
+    return isinstance(
+        exc,
+        (
+            KeyError,
+            PermissionError,
+            ValueError,
+            ModelBehaviorError,
+            BudgetLimitError,
+        ),
+    )
 
 
 @activity.defn(name="advance_company")
@@ -52,14 +60,19 @@ async def advance_company(input_value: str | dict) -> dict:
         company_id, execution_key = input_value, f"legacy:{input_value}"
     try:
         return await _to_thread_with_heartbeat(
-            _advance_company_sync, company_id, execution_key,
+            _advance_company_sync,
+            company_id,
+            execution_key,
         )
     except Exception as exc:
         attempt = activity.info().attempt
         if not is_non_retryable_activity_error(exc) and attempt < 3:
             raise
         return await asyncio.to_thread(
-            _finalize_activity_failure, company_id, execution_key, exc,
+            _finalize_activity_failure,
+            company_id,
+            execution_key,
+            exc,
             attempt,
         )
 
@@ -72,7 +85,10 @@ async def advance_agent(input_value: dict) -> dict:
     execution_key = input_value["execution_key"]
     try:
         return await _to_thread_with_heartbeat(
-            _advance_agent_sync, company_id, agent_id, execution_key,
+            _advance_agent_sync,
+            company_id,
+            agent_id,
+            execution_key,
         )
     except Exception as exc:
         attempt = activity.info().attempt
@@ -80,7 +96,11 @@ async def advance_agent(input_value: dict) -> dict:
             raise
         return await asyncio.to_thread(
             _finalize_agent_activity_failure,
-            company_id, agent_id, execution_key, exc, attempt,
+            company_id,
+            agent_id,
+            execution_key,
+            exc,
+            attempt,
         )
 
 
@@ -96,7 +116,10 @@ async def _to_thread_with_heartbeat(function, *args):
 
 
 def _finalize_activity_failure(
-    company_id: str, execution_key: str, exc: Exception, attempts: int = 3,
+    company_id: str,
+    execution_key: str,
+    exc: Exception,
+    attempts: int = 3,
 ) -> dict:
     portfolio = registry()
     try:
@@ -105,10 +128,15 @@ def _finalize_activity_failure(
             store.close_orphaned_model_runs("temporal activity failed after retries")
             result = store.fail_activity(execution_key, detail)
             store.set_control("error", detail)
-            store.audit("temporal.activity_failed", {
-                "activity": "advance_company", "execution_key": execution_key,
-                "attempts": attempts, "error": detail,
-            })
+            store.audit(
+                "temporal.activity_failed",
+                {
+                    "activity": "advance_company",
+                    "execution_key": execution_key,
+                    "attempts": attempts,
+                    "error": detail,
+                },
+            )
             return result
     finally:
         portfolio.close()
@@ -129,7 +157,9 @@ def _advance_company_sync(company_id: str, execution_key: str | None = None) -> 
                 store.complete_activity(execution_key, result)
                 return result
             result = CompanyOrchestrator(
-                store, portfolio.artifacts_for(company_id), company_id=company_id,
+                store,
+                portfolio.artifacts_for(company_id),
+                company_id=company_id,
                 execution_key=execution_key,
             ).run(max_cycles=1)
             apply_orchestration_result(store, result)
@@ -191,7 +221,8 @@ def _advance_agent_sync(company_id: str, agent_id: str, execution_key: str) -> d
             # audited and never roll back finished agent work.
             contact_hours = max(1, int(os.getenv("STAKEHOLDER_CONTACT_INTERVAL_HOURS", "24")))
             result["stakeholder_notification"] = StakeholderBriefService(
-                ApprovalMailer(), contact_interval_hours=contact_hours,
+                ApprovalMailer(),
+                contact_interval_hours=contact_hours,
             ).send_if_due(company_id, store)
             return result
     finally:
@@ -211,24 +242,38 @@ def _finalize_agent_activity_failure(
             detail = f"{type(exc).__name__}: {exc}"
             if isinstance(exc, BudgetLimitError):
                 result = {
-                    "status": "stopped", "cycles": 0, "reason": "agent_budget_limit",
-                    "detail": str(exc), "agent_id": agent_id,
+                    "status": "stopped",
+                    "cycles": 0,
+                    "reason": "agent_budget_limit",
+                    "detail": str(exc),
+                    "agent_id": agent_id,
                 }
                 store.complete_activity(execution_key, result)
                 store.complete_agent_run_by_execution(execution_key, "stopped", detail)
                 store.set_agent_status(agent_id, "stopped")
-                store.audit("budget.agent_limit_reached", {
-                    "agent_id": agent_id, "execution_key": execution_key,
-                    "attempts": attempts, "detail": str(exc),
-                })
+                store.audit(
+                    "budget.agent_limit_reached",
+                    {
+                        "agent_id": agent_id,
+                        "execution_key": execution_key,
+                        "attempts": attempts,
+                        "detail": str(exc),
+                    },
+                )
                 return result
             result = store.fail_activity(execution_key, detail)
             store.fail_agent_run_by_execution(execution_key, detail)
             store.set_agent_status(agent_id, "error")
-            store.audit("temporal.agent_activity_failed", {
-                "activity": "advance_agent", "agent_id": agent_id,
-                "execution_key": execution_key, "attempts": attempts, "error": detail,
-            })
+            store.audit(
+                "temporal.agent_activity_failed",
+                {
+                    "activity": "advance_agent",
+                    "agent_id": agent_id,
+                    "execution_key": execution_key,
+                    "attempts": attempts,
+                    "error": detail,
+                },
+            )
             return {**result, "agent_id": agent_id}
     finally:
         portfolio.close()
@@ -246,7 +291,8 @@ def _send_company_brief_sync(company_id: str) -> dict:
     try:
         with portfolio.store_for(company_id) as store:
             return StakeholderBriefService(
-                ApprovalMailer(), contact_interval_hours=contact_hours,
+                ApprovalMailer(),
+                contact_interval_hours=contact_hours,
             ).send_if_due(company_id, store)
     finally:
         portfolio.close()

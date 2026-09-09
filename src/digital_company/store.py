@@ -13,36 +13,47 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from digital_company.company_schema import migrate_company_database
-from digital_company.capability_plugins import BUILTIN_PLUGINS, validate_plugin_config
 from digital_company.agent_templates import validate_agent_config
-from digital_company.models import ActionType, CompanySnapshot, PolicyDocument, SpecialistResult, TaskProposal
-from digital_company.operations_projection import decode_audit_events, project_operations
-from digital_company.postgres_compat import PostgresCompat, company_schema
-from digital_company.skill_catalog import BUILTIN_SKILLS
-from digital_company.skill_selection import select_skills
+from digital_company.capability_plugins import BUILTIN_PLUGINS, validate_plugin_config
+from digital_company.company_schema import migrate_company_database
+from digital_company.content_topics import topics_equivalent
 from digital_company.integration_connectors import (
     ADAPTERS as INTEGRATION_ADAPTERS,
+)
+from digital_company.integration_connectors import (
     secret_name as integration_secret_name,
+)
+from digital_company.integration_connectors import (
     validate_connection,
 )
+from digital_company.models import (
+    ActionType,
+    CompanySnapshot,
+    PolicyDocument,
+    SpecialistResult,
+    TaskProposal,
+)
+from digital_company.operations_projection import decode_audit_events, project_operations
+from digital_company.postgres_compat import PostgresCompat, company_schema
 from digital_company.runtime_secrets import get_secret
+from digital_company.skill_catalog import BUILTIN_SKILLS
+from digital_company.skill_selection import select_skills
 from digital_company.text_encoding import repair_text_encoding
-from digital_company.content_topics import topics_equivalent
 
 
 def utc_now() -> str:
     """Return an ISO-8601 UTC timestamp suitable for durable records."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class CompanyStore:
     """Repository for all canonical state belonging to exactly one company."""
+
     def __init__(self, path: Path, database_url: str | None = None, company_id: str | None = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
@@ -77,17 +88,12 @@ class CompanyStore:
         # Existing single-loop companies need a projected CEO during the
         # additive migration. A brand-new company database is intentionally
         # left without agents so organization creation and hiring are separate.
-        if (
-            self.is_initialized()
-            and self.get_profile().get("_agent_bootstrap_mode") != "explicit"
-        ):
+        if self.is_initialized() and self.get_profile().get("_agent_bootstrap_mode") != "explicit":
             self._ensure_legacy_ceo_agent()
 
     def _normalize_agent_configs(self) -> None:
         """Add newly introduced typed defaults without replacing owner values."""
-        rows = self.db.execute(
-            "SELECT id,agent_type,config_json FROM agent_instances"
-        ).fetchall()
+        rows = self.db.execute("SELECT id,agent_type,config_json FROM agent_instances").fetchall()
         for row in rows:
             try:
                 current = json.loads(row["config_json"] or "{}")
@@ -124,8 +130,10 @@ class CompanyStore:
             ).fetchone()
         document = PolicyDocument.model_validate_json(row["document_json"])
         return {
-            "version": row["version"], "status": row["status"],
-            "created_at": row["created_at"], "created_by": row["created_by"],
+            "version": row["version"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "created_by": row["created_by"],
             "document": document.model_dump(mode="json"),
         }
 
@@ -157,7 +165,10 @@ class CompanyStore:
         return self.get_policy()
 
     def initialize(
-        self, goal: str, budget: float, profile: dict | None = None,
+        self,
+        goal: str,
+        budget: float,
+        profile: dict | None = None,
         bootstrap_legacy_agent: bool = True,
     ) -> None:
         """Create or replace the singleton company header and optional profile."""
@@ -204,8 +215,16 @@ class CompanyStore:
         company = self.db.execute("SELECT * FROM company WHERE id=1").fetchone()
         if not company:
             raise RuntimeError("Company is not initialized. Run `digital-company init` first.")
-        spent = float(self.db.execute("SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger").fetchone()["value"])
-        spent += float(self.db.execute("SELECT COALESCE(SUM(estimated_budget_cost),0) AS value FROM model_usage").fetchone()["value"])
+        spent = float(
+            self.db.execute("SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger").fetchone()[
+                "value"
+            ]
+        )
+        spent += float(
+            self.db.execute(
+                "SELECT COALESCE(SUM(estimated_budget_cost),0) AS value FROM model_usage"
+            ).fetchone()["value"]
+        )
         completed_query = (
             "SELECT action,title,specialist,status,result_json,agent_id FROM tasks "
             "WHERE status='completed'"
@@ -233,23 +252,37 @@ class CompanyStore:
                 package = raw.get("content_package")
                 if isinstance(package, dict):
                     result["content_package"] = {
-                        key: package.get(key) for key in (
-                            "title", "slug", "focus_keyword", "seo_title",
-                            "meta_description", "categories", "tags",
+                        key: package.get(key)
+                        for key in (
+                            "title",
+                            "slug",
+                            "focus_keyword",
+                            "seo_title",
+                            "meta_description",
+                            "categories",
+                            "tags",
                         )
                     }
                 publication = raw.get("publication_state")
                 if isinstance(publication, dict):
                     result["publication_state"] = {
-                        key: publication.get(key) for key in (
-                            "post_id", "status", "link", "slug", "source_task_id",
+                        key: publication.get(key)
+                        for key in (
+                            "post_id",
+                            "status",
+                            "link",
+                            "slug",
+                            "source_task_id",
                         )
                     }
                 task["result"] = result
-        failures = [dict(row) for row in self.db.execute(
-            "SELECT id,action,title,specialist,status,result_json,completed_at FROM tasks "
-            "WHERE status='failed' ORDER BY completed_at DESC LIMIT 8"
-        )]
+        failures = [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT id,action,title,specialist,status,result_json,completed_at FROM tasks "
+                "WHERE status='failed' ORDER BY completed_at DESC LIMIT 8"
+            )
+        ]
         for failure in failures:
             if failure["result_json"]:
                 failure["result"] = json.loads(failure.pop("result_json"))
@@ -269,7 +302,9 @@ class CompanyStore:
         evidence = []
         for task in tasks[-5:]:
             result = task.get("result") or {}
-            evidence.extend({"task": task["title"], "evidence": item} for item in result.get("evidence", []))
+            evidence.extend(
+                {"task": task["title"], "evidence": item} for item in result.get("evidence", [])
+            )
         message_query = (
             "SELECT id,kind,content,status,response,created_at,addressed_at,agent_id "
             "FROM stakeholder_messages"
@@ -281,9 +316,13 @@ class CompanyStore:
         message_query += " ORDER BY created_at DESC LIMIT 20"
         messages = [dict(row) for row in self.db.execute(message_query, message_params)]
         return CompanySnapshot(
-            goal=company["goal"], initial_budget_eur=company["initial_budget_eur"],
-            spent_eur=spent, remaining_budget_eur=company["initial_budget_eur"] - spent,
-            completed_tasks=tasks, pending_approvals=approvals, recent_evidence=evidence[-12:],
+            goal=company["goal"],
+            initial_budget_eur=company["initial_budget_eur"],
+            spent_eur=spent,
+            remaining_budget_eur=company["initial_budget_eur"] - spent,
+            completed_tasks=tasks,
+            pending_approvals=approvals,
+            recent_evidence=evidence[-12:],
             recent_failures=failures,
             stakeholder_messages=messages,
             profile=self.get_profile(),
@@ -299,7 +338,14 @@ class CompanyStore:
                 "INSERT INTO agent_skills(id,name,version,definition_json,status,updated_at) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,"
                 "definition_json=excluded.definition_json,updated_at=excluded.updated_at",
-                (skill["id"], skill["name"], skill["version"], json.dumps(skill), "available", utc_now()),
+                (
+                    skill["id"],
+                    skill["name"],
+                    skill["version"],
+                    json.dumps(skill),
+                    "available",
+                    utc_now(),
+                ),
             )
         self.db.commit()
 
@@ -313,8 +359,13 @@ class CompanyStore:
                 "name=excluded.name,version=excluded.version,description=excluded.description,"
                 "definition_json=excluded.definition_json,updated_at=excluded.updated_at",
                 (
-                    plugin["id"], plugin["name"], plugin["version"], plugin["description"],
-                    json.dumps(plugin), now, now,
+                    plugin["id"],
+                    plugin["name"],
+                    plugin["version"],
+                    plugin["description"],
+                    json.dumps(plugin),
+                    now,
+                    now,
                 ),
             )
         self.db.commit()
@@ -325,7 +376,8 @@ class CompanyStore:
             return
         settings = self.get_settings()
         connection_id = (
-            settings["local_connection_id"] if settings["model_mode"] == "local"
+            settings["local_connection_id"]
+            if settings["model_mode"] == "local"
             else settings["cloud_connection_id"]
         )
         now = utc_now()
@@ -338,7 +390,9 @@ class CompanyStore:
             (
                 goal,
                 "Choose and coordinate the next useful company action within policy.",
-                connection_id, now, now,
+                connection_id,
+                now,
+                now,
             ),
         )
         self.db.commit()
@@ -351,17 +405,26 @@ class CompanyStore:
             result.append(item)
         return result
 
-    def resolve_skills(self, skill_ids: list[str], specialist: str, action: str,
-                       strict: bool = True) -> list[dict]:
+    def resolve_skills(
+        self, skill_ids: list[str], specialist: str, action: str, strict: bool = True
+    ) -> list[dict]:
         selection = select_skills(
-            self.list_skills(), skill_ids, specialist, action, strict=strict,
+            self.list_skills(),
+            skill_ids,
+            specialist,
+            action,
+            strict=strict,
         )
         if selection.rejected_ids:
-            self.audit("skills.selection_adjusted", {
-                "specialist": specialist, "action": action,
-                "rejected": selection.rejected_ids,
-                "assigned": [item["id"] for item in selection.assigned],
-            })
+            self.audit(
+                "skills.selection_adjusted",
+                {
+                    "specialist": specialist,
+                    "action": action,
+                    "rejected": selection.rejected_ids,
+                    "assigned": [item["id"] for item in selection.assigned],
+                },
+            )
         return selection.assigned
 
     def close_orphaned_model_runs(self, reason: str) -> list[str]:
@@ -377,8 +440,10 @@ class CompanyStore:
     def set_skill_status(self, skill_id: str, status: str) -> None:
         if status not in {"available", "disabled", "missing_access"}:
             raise ValueError("Invalid skill status")
-        changed = self.db.execute("UPDATE agent_skills SET status=?,updated_at=? WHERE id=?",
-                                  (status, utc_now(), skill_id)).rowcount
+        changed = self.db.execute(
+            "UPDATE agent_skills SET status=?,updated_at=? WHERE id=?",
+            (status, utc_now(), skill_id),
+        ).rowcount
         self.db.commit()
         if changed != 1:
             raise KeyError(skill_id)
@@ -400,7 +465,8 @@ class CompanyStore:
             item["usage"] = {"tokens": int(usage["tokens"]), "estimated_cost": float(usage["cost"])}
             last_run = self.db.execute(
                 "SELECT id,status,started_at,completed_at,error FROM agent_runs "
-                "WHERE agent_id=? ORDER BY started_at DESC LIMIT 1", (item["id"],),
+                "WHERE agent_id=? ORDER BY started_at DESC LIMIT 1",
+                (item["id"],),
             ).fetchone()
             item["last_run"] = dict(last_run) if last_run else None
             item["tasks_by_status"] = {
@@ -411,18 +477,26 @@ class CompanyStore:
                 )
             }
             item["attention"] = {
-                "approvals": int(self.db.execute(
-                    "SELECT COUNT(*) AS value FROM approvals a JOIN tasks t ON t.id=a.task_id "
-                    "WHERE t.agent_id=? AND a.status='pending'", (item["id"],),
-                ).fetchone()["value"]),
-                "handoffs": int(self.db.execute(
-                    "SELECT COUNT(*) AS value FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
-                    "WHERE t.agent_id=? AND h.status='pending'", (item["id"],),
-                ).fetchone()["value"]),
+                "approvals": int(
+                    self.db.execute(
+                        "SELECT COUNT(*) AS value FROM approvals a JOIN tasks t ON t.id=a.task_id "
+                        "WHERE t.agent_id=? AND a.status='pending'",
+                        (item["id"],),
+                    ).fetchone()["value"]
+                ),
+                "handoffs": int(
+                    self.db.execute(
+                        "SELECT COUNT(*) AS value FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
+                        "WHERE t.agent_id=? AND h.status='pending'",
+                        (item["id"],),
+                    ).fetchone()["value"]
+                ),
             }
             queue = self.list_content_work_items(item["id"])
             item["work_queue"] = {
-                "active": len([work for work in queue if work["status"] not in {"published", "archived"}]),
+                "active": len(
+                    [work for work in queue if work["status"] not in {"published", "archived"}]
+                ),
                 "total": len(queue),
                 "items": queue,
             }
@@ -441,20 +515,28 @@ class CompanyStore:
             raise KeyError(agent_id)
         row = self.db.execute(
             "SELECT * FROM agent_playbook_versions WHERE agent_id=? AND status='active' "
-            "ORDER BY version DESC LIMIT 1", (agent_id,),
+            "ORDER BY version DESC LIMIT 1",
+            (agent_id,),
         ).fetchone()
         if not row:
             return {
-                "agent_id": agent_id, "version": 0, "status": "empty",
+                "agent_id": agent_id,
+                "version": 0,
+                "status": "empty",
                 "document": {"rules": [], "reference_examples": [], "notes": ""},
-                "created_by": None, "created_at": None, "source_message_id": None,
+                "created_by": None,
+                "created_at": None,
+                "source_message_id": None,
             }
         item = dict(row)
         item["document"] = json.loads(item.pop("document_json"))
         return item
 
     def set_agent_playbook(
-        self, agent_id: str, document: dict, created_by: str = "dashboard",
+        self,
+        agent_id: str,
+        document: dict,
+        created_by: str = "dashboard",
         source_message_id: str | None = None,
     ) -> dict:
         """Create a new immutable playbook version and retain prior versions for audit."""
@@ -462,7 +544,8 @@ class CompanyStore:
         document = repair_text_encoding(document)
         rules = [str(value).strip() for value in document.get("rules", []) if str(value).strip()]
         examples = [
-            str(value).strip() for value in document.get("reference_examples", [])
+            str(value).strip()
+            for value in document.get("reference_examples", [])
             if str(value).strip()
         ]
         normalized = {
@@ -475,7 +558,9 @@ class CompanyStore:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             if getattr(self.db, "is_postgres", False):
-                self.db.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("playbook:" + agent_id,))
+                self.db.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(?))", ("playbook:" + agent_id,)
+                )
             row = self.db.execute(
                 "SELECT COALESCE(MAX(version),0) AS value FROM agent_playbook_versions WHERE agent_id=?",
                 (agent_id,),
@@ -484,33 +569,46 @@ class CompanyStore:
             now = utc_now()
             self.db.execute(
                 "UPDATE agent_playbook_versions SET status='superseded' "
-                "WHERE agent_id=? AND status='active'", (agent_id,),
+                "WHERE agent_id=? AND status='active'",
+                (agent_id,),
             )
             self.db.execute(
                 "INSERT INTO agent_playbook_versions(id,agent_id,version,document_json,status,"
                 "source_message_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)",
                 (
-                    str(uuid4()), agent_id, version,
-                    json.dumps(normalized, ensure_ascii=False), "active", source_message_id,
-                    created_by.strip() or "dashboard", now,
+                    str(uuid4()),
+                    agent_id,
+                    version,
+                    json.dumps(normalized, ensure_ascii=False),
+                    "active",
+                    source_message_id,
+                    created_by.strip() or "dashboard",
+                    now,
                 ),
             )
             self.db.commit()
         except Exception:
             self.db.rollback()
             raise
-        self.audit("agent.playbook_version_created", {
-            "agent_id": agent_id, "version": version,
-            "source_message_id": source_message_id, "rule_count": len(normalized["rules"]),
-        })
+        self.audit(
+            "agent.playbook_version_created",
+            {
+                "agent_id": agent_id,
+                "version": version,
+                "source_message_id": source_message_id,
+                "rule_count": len(normalized["rules"]),
+            },
+        )
         return self.get_agent_playbook(agent_id)
 
     def append_agent_playbook_rule(self, agent_id: str, rule: str, source_message_id: str) -> dict:
         current = self.get_agent_playbook(agent_id)
         document = current["document"]
         return self.set_agent_playbook(
-            agent_id, {**document, "rules": [*document["rules"], rule]},
-            created_by="stakeholder_chat", source_message_id=source_message_id,
+            agent_id,
+            {**document, "rules": [*document["rules"], rule]},
+            created_by="stakeholder_chat",
+            source_message_id=source_message_id,
         )
 
     def get_agent(self, agent_id: str) -> dict:
@@ -531,12 +629,20 @@ class CompanyStore:
             "autonomy_mode,token_limit,spend_limit_eur,schedule_json,config_json,created_at,updated_at) "
             "VALUES(?,?,?,?,?,?,?,'stopped',?,?,?,?,?,?,?)",
             (
-                agent_id, value["name"].strip(), value["role"].strip(), agent_type,
+                agent_id,
+                value["name"].strip(),
+                value["role"].strip(),
+                agent_type,
                 value["purpose"].strip(),
-                value.get("instructions", "").strip(), value["model_connection_id"],
-                value.get("autonomy_mode", "governed"), value.get("token_limit"),
-                value.get("spend_limit_eur"), json.dumps(value.get("schedule") or {}),
-                json.dumps(config), now, now,
+                value.get("instructions", "").strip(),
+                value["model_connection_id"],
+                value.get("autonomy_mode", "governed"),
+                value.get("token_limit"),
+                value.get("spend_limit_eur"),
+                json.dumps(value.get("schedule") or {}),
+                json.dumps(config),
+                now,
+                now,
             ),
         )
         self.db.commit()
@@ -556,11 +662,19 @@ class CompanyStore:
             "autonomy_mode=?,token_limit=?,spend_limit_eur=?,schedule_json=?,config_json=?,updated_at=? "
             "WHERE id=?",
             (
-                value["name"].strip(), value["role"].strip(), agent_type, value["purpose"].strip(),
-                value.get("instructions", "").strip(), value["model_connection_id"],
-                value.get("autonomy_mode", "governed"), value.get("token_limit"),
-                value.get("spend_limit_eur"), json.dumps(value.get("schedule") or {}),
-                json.dumps(config), utc_now(), agent_id,
+                value["name"].strip(),
+                value["role"].strip(),
+                agent_type,
+                value["purpose"].strip(),
+                value.get("instructions", "").strip(),
+                value["model_connection_id"],
+                value.get("autonomy_mode", "governed"),
+                value.get("token_limit"),
+                value.get("spend_limit_eur"),
+                json.dumps(value.get("schedule") or {}),
+                json.dumps(config),
+                utc_now(),
+                agent_id,
             ),
         )
         self.db.commit()
@@ -586,12 +700,20 @@ class CompanyStore:
             )
         references = 0
         for table in (
-            "tasks", "ledger", "model_usage", "activity_executions",
-            "stakeholder_messages", "agent_runs", "agent_plugin_grants",
+            "tasks",
+            "ledger",
+            "model_usage",
+            "activity_executions",
+            "stakeholder_messages",
+            "agent_runs",
+            "agent_plugin_grants",
         ):
-            references += int(self.db.execute(
-                f"SELECT COUNT(*) AS value FROM {table} WHERE agent_id='legacy-ceo'",
-            ).fetchone()["value"])
+            references += int(
+                self.db.execute(
+                    # Table names come from the closed migration tuple above.
+                    f"SELECT COUNT(*) AS value FROM {table} WHERE agent_id='legacy-ceo'",  # nosec
+                ).fetchone()["value"]
+            )
         if references == 0:
             self.db.execute("DELETE FROM agent_instances WHERE id='legacy-ceo'")
         self.db.commit()
@@ -605,11 +727,20 @@ class CompanyStore:
         event.
         """
         if status not in {
-            "running", "paused", "stopped", "waiting_approval",
-            "waiting_human", "sleeping", "error",
+            "running",
+            "paused",
+            "stopped",
+            "waiting_approval",
+            "waiting_human",
+            "sleeping",
+            "error",
         }:
             raise ValueError("Invalid agent status")
-        next_wake_at = None if status in {"running", "paused", "stopped", "error"} else self.get_agent(agent_id).get("next_wake_at")
+        next_wake_at = (
+            None
+            if status in {"running", "paused", "stopped", "error"}
+            else self.get_agent(agent_id).get("next_wake_at")
+        )
         changed = self.db.execute(
             "UPDATE agent_instances SET status=?,next_wake_at=?,updated_at=? WHERE id=?",
             (status, next_wake_at, utc_now(), agent_id),
@@ -623,7 +754,7 @@ class CompanyStore:
     def schedule_agent_wake(self, agent_id: str, delay_seconds: int, reason: str) -> dict:
         """Project a durable Temporal timer into queryable company state."""
         delay_seconds = max(60, min(int(delay_seconds), 7 * 24 * 3600))
-        wake_at = (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).isoformat()
+        wake_at = (datetime.now(UTC) + timedelta(seconds=delay_seconds)).isoformat()
         changed = self.db.execute(
             "UPDATE agent_instances SET status='sleeping',next_wake_at=?,updated_at=? WHERE id=?",
             (wake_at, utc_now(), agent_id),
@@ -631,26 +762,37 @@ class CompanyStore:
         self.db.commit()
         if changed != 1:
             raise KeyError(agent_id)
-        self.audit("agent.sleep_scheduled", {
-            "agent_id": agent_id, "next_wake_at": wake_at,
-            "delay_seconds": delay_seconds, "reason": reason,
-        })
+        self.audit(
+            "agent.sleep_scheduled",
+            {
+                "agent_id": agent_id,
+                "next_wake_at": wake_at,
+                "delay_seconds": delay_seconds,
+                "reason": reason,
+            },
+        )
         return {"next_wake_at": wake_at, "wake_after_seconds": delay_seconds}
 
     def list_content_work_items(self, agent_id: str | None) -> list[dict]:
         """Return the durable, topic-scoped content pipeline for one agent."""
         if not agent_id:
             return []
-        return [dict(row) for row in self.db.execute(
-            "SELECT * FROM content_work_items WHERE agent_id=? "
-            "ORDER BY CASE status WHEN 'changes_requested' THEN 0 WHEN 'approved' THEN 1 "
-            "WHEN 'researched' THEN 2 WHEN 'draft_ready' THEN 3 WHEN 'draft_saved' THEN 4 "
-            "WHEN 'awaiting_review' THEN 5 ELSE 6 END, updated_at",
-            (agent_id,),
-        )]
+        return [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT * FROM content_work_items WHERE agent_id=? "
+                "ORDER BY CASE status WHEN 'changes_requested' THEN 0 WHEN 'approved' THEN 1 "
+                "WHEN 'researched' THEN 2 WHEN 'draft_ready' THEN 3 WHEN 'draft_saved' THEN 4 "
+                "WHEN 'awaiting_review' THEN 5 ELSE 6 END, updated_at",
+                (agent_id,),
+            )
+        ]
 
     def resolve_content_work_item(
-        self, agent_id: str, task_id: str, proposal: TaskProposal,
+        self,
+        agent_id: str,
+        task_id: str,
+        proposal: TaskProposal,
     ) -> TaskProposal:
         """Bind a content action to one canonical topic, never a global latest draft."""
         content_actions = {
@@ -670,17 +812,22 @@ class CompanyStore:
             if not row:
                 raise ValueError("Content work item does not belong to this agent")
             if row["status"] not in allowed:
-                self.audit("content.work_item_rebound", {
-                    "agent_id": agent_id, "task_id": task_id,
-                    "requested_work_item_id": row["id"],
-                    "requested_status": row["status"],
-                    "action": proposal.action.value,
-                })
+                self.audit(
+                    "content.work_item_rebound",
+                    {
+                        "agent_id": agent_id,
+                        "task_id": task_id,
+                        "requested_work_item_id": row["id"],
+                        "requested_status": row["status"],
+                        "action": proposal.action.value,
+                    },
+                )
                 row = None
         if not row:
             placeholders = ",".join("?" for _ in allowed)
             row = self.db.execute(
-                f"SELECT id,status FROM content_work_items WHERE agent_id=? "
+                # Placeholder count derives from a closed set of workflow statuses.
+                f"SELECT id,status FROM content_work_items WHERE agent_id=? "  # nosec
                 f"AND status IN ({placeholders}) ORDER BY updated_at LIMIT 1",
                 (agent_id, *sorted(allowed)),
             ).fetchone()
@@ -697,18 +844,26 @@ class CompanyStore:
         return bound
 
     def create_content_work_item(
-        self, agent_id: str, task_id: str, topic: str, summary: str,
+        self,
+        agent_id: str,
+        task_id: str,
+        topic: str,
+        summary: str,
     ) -> str:
         """Turn completed research into one independently reviewable content thread."""
         normalized = re.sub(r"\s+", " ", topic).strip()
-        existing = next((
-            row for row in self.db.execute(
-                "SELECT id,topic FROM content_work_items WHERE agent_id=? "
-                "AND status NOT IN ('published','archived') ORDER BY created_at",
-                (agent_id,),
-            )
-            if topics_equivalent(normalized, row["topic"])
-        ), None)
+        existing = next(
+            (
+                row
+                for row in self.db.execute(
+                    "SELECT id,topic FROM content_work_items WHERE agent_id=? "
+                    "AND status NOT IN ('published','archived') ORDER BY created_at",
+                    (agent_id,),
+                )
+                if topics_equivalent(normalized, row["topic"])
+            ),
+            None,
+        )
         if existing:
             work_item_id = existing["id"]
         else:
@@ -722,14 +877,23 @@ class CompanyStore:
             )
         self.db.execute("UPDATE tasks SET work_item_id=? WHERE id=?", (work_item_id, task_id))
         self.db.commit()
-        self.audit("content.work_item_created", {
-            "agent_id": agent_id, "work_item_id": work_item_id,
-            "research_task_id": task_id, "topic": normalized,
-        })
+        self.audit(
+            "content.work_item_created",
+            {
+                "agent_id": agent_id,
+                "work_item_id": work_item_id,
+                "research_task_id": task_id,
+                "topic": normalized,
+            },
+        )
         return work_item_id
 
     def transition_content_work_item(
-        self, work_item_id: str | None, status: str, *, task_id: str | None = None,
+        self,
+        work_item_id: str | None,
+        status: str,
+        *,
+        task_id: str | None = None,
         approval_id: str | None = None,
     ) -> None:
         """Advance one topic without affecting any sibling topic or email thread."""
@@ -748,12 +912,19 @@ class CompanyStore:
             values.append(task_id)
         values.append(work_item_id)
         self.db.execute(
-            f"UPDATE content_work_items SET {','.join(columns)} WHERE id=?", tuple(values),
+            # Column fragments are assembled only by the closed conditions above.
+            f"UPDATE content_work_items SET {','.join(columns)} WHERE id=?",  # nosec
+            tuple(values),
         )
         self.db.commit()
-        self.audit("content.work_item_" + status, {
-            "work_item_id": work_item_id, "task_id": task_id, "approval_id": approval_id,
-        })
+        self.audit(
+            "content.work_item_" + status,
+            {
+                "work_item_id": work_item_id,
+                "task_id": task_id,
+                "approval_id": approval_id,
+            },
+        )
 
     def rename_content_work_item(self, work_item_id: str | None, topic: str) -> None:
         """Replace a planning placeholder with the draft's reader-facing title."""
@@ -767,9 +938,13 @@ class CompanyStore:
             (normalized, utc_now(), work_item_id),
         )
         self.db.commit()
-        self.audit("content.work_item_named", {
-            "work_item_id": work_item_id, "topic": normalized,
-        })
+        self.audit(
+            "content.work_item_named",
+            {
+                "work_item_id": work_item_id,
+                "topic": normalized,
+            },
+        )
 
     def reconcile_content_work_items(self, agent_id: str) -> dict:
         """Repair legacy placeholder titles and archive duplicate active topics.
@@ -778,17 +953,21 @@ class CompanyStore:
         complete draft later supplied a reader-facing title, use that canonical
         value and keep only the most advanced active row for an exact duplicate.
         """
-        rows = [dict(row) for row in self.db.execute(
-            "SELECT id,topic,status,draft_task_id,updated_at FROM content_work_items "
-            "WHERE agent_id=? AND status NOT IN ('published','archived')",
-            (agent_id,),
-        )]
+        rows = [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT id,topic,status,draft_task_id,updated_at FROM content_work_items "
+                "WHERE agent_id=? AND status NOT IN ('published','archived')",
+                (agent_id,),
+            )
+        ]
         renamed: list[str] = []
         for item in rows:
             if not item.get("draft_task_id"):
                 continue
             task = self.db.execute(
-                "SELECT result_json FROM tasks WHERE id=?", (item["draft_task_id"],),
+                "SELECT result_json FROM tasks WHERE id=?",
+                (item["draft_task_id"],),
             ).fetchone()
             if not task or not task["result_json"]:
                 continue
@@ -806,8 +985,12 @@ class CompanyStore:
                 renamed.append(item["id"])
 
         priority = {
-            "researched": 0, "draft_ready": 1, "changes_requested": 1,
-            "draft_saved": 2, "awaiting_review": 3, "approved": 4,
+            "researched": 0,
+            "draft_ready": 1,
+            "changes_requested": 1,
+            "draft_saved": 2,
+            "awaiting_review": 3,
+            "approved": 4,
         }
         archived: list[str] = []
         keepers: list[dict] = []
@@ -826,9 +1009,14 @@ class CompanyStore:
                 keepers.append(item)
         self.db.commit()
         if renamed or archived:
-            self.audit("content.work_queue_reconciled", {
-                "agent_id": agent_id, "renamed": renamed, "archived_duplicates": archived,
-            })
+            self.audit(
+                "content.work_queue_reconciled",
+                {
+                    "agent_id": agent_id,
+                    "renamed": renamed,
+                    "archived_duplicates": archived,
+                },
+            )
         return {"renamed": renamed, "archived_duplicates": archived}
 
     def agent_remaining_budget(self, agent_id: str) -> float:
@@ -853,7 +1041,8 @@ class CompanyStore:
     def begin_agent_run(self, agent_id: str, execution_key: str) -> str:
         """Create an auditable run identity; execution keys prevent duplicate starts."""
         existing = self.db.execute(
-            "SELECT id FROM agent_runs WHERE execution_key=?", (execution_key,),
+            "SELECT id FROM agent_runs WHERE execution_key=?",
+            (execution_key,),
         ).fetchone()
         if existing:
             return existing["id"]
@@ -881,7 +1070,10 @@ class CompanyStore:
         self.complete_agent_run_by_execution(execution_key, "failed", error)
 
     def complete_agent_run_by_execution(
-        self, execution_key: str, status: str, error: str | None = None,
+        self,
+        execution_key: str,
+        status: str,
+        error: str | None = None,
     ) -> None:
         """Close the one idempotent agent run owned by an activity execution."""
         row = self.db.execute(
@@ -941,7 +1133,8 @@ class CompanyStore:
                 raise ValueError(f"Plugin connection is not ready: {connection['status']}")
             capability_map = definition.get("connection_capabilities") or {}
             required_capabilities = {
-                capability_map[permission] for permission in permissions
+                capability_map[permission]
+                for permission in permissions
                 if permission in capability_map
             }
             missing_capabilities = required_capabilities - set(connection["capabilities"])
@@ -958,8 +1151,13 @@ class CompanyStore:
             "DO UPDATE SET connection_id=excluded.connection_id,permissions_json=excluded.permissions_json,"
             "config_json=excluded.config_json,status='enabled',updated_at=excluded.updated_at",
             (
-                agent_id, plugin_id, connection_id, json.dumps(permissions),
-                json.dumps(config, ensure_ascii=False), now, now,
+                agent_id,
+                plugin_id,
+                connection_id,
+                json.dumps(permissions),
+                json.dumps(config, ensure_ascii=False),
+                now,
+                now,
             ),
         )
         self.db.commit()
@@ -968,34 +1166,47 @@ class CompanyStore:
             or not config.get("allow_human_takeover", True)
         ):
             self.supersede_agent_handoffs(
-                agent_id, "Browser Automation human takeover was disabled",
+                agent_id,
+                "Browser Automation human takeover was disabled",
             )
-        self.audit("agent.plugin_granted", {
-            "agent_id": agent_id, "plugin_id": plugin_id, "permissions": permissions,
-        })
-        return next(item for item in self.list_agent_plugins(agent_id) if item["plugin_id"] == plugin_id)
+        self.audit(
+            "agent.plugin_granted",
+            {
+                "agent_id": agent_id,
+                "plugin_id": plugin_id,
+                "permissions": permissions,
+            },
+        )
+        return next(
+            item for item in self.list_agent_plugins(agent_id) if item["plugin_id"] == plugin_id
+        )
 
     def revoke_agent_plugin(self, agent_id: str, plugin_id: str) -> None:
         changed = self.db.execute(
             "UPDATE agent_plugin_grants SET status='disabled',updated_at=? "
-            "WHERE agent_id=? AND plugin_id=?", (utc_now(), agent_id, plugin_id),
+            "WHERE agent_id=? AND plugin_id=?",
+            (utc_now(), agent_id, plugin_id),
         ).rowcount
         self.db.commit()
         if changed != 1:
             raise KeyError(plugin_id)
         if plugin_id == "browser-automation":
             self.supersede_agent_handoffs(
-                agent_id, "Browser Automation was disabled for this agent",
+                agent_id,
+                "Browser Automation was disabled for this agent",
             )
         self.audit("agent.plugin_revoked", {"agent_id": agent_id, "plugin_id": plugin_id})
 
     def supersede_agent_handoffs(self, agent_id: str, reason: str) -> int:
         """Clear obsolete browser takeovers without waking or restarting the agent."""
         now = utc_now()
-        rows = list(self.db.execute(
-            "SELECT h.id,h.task_id FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
-            "WHERE h.status='pending' AND t.agent_id=?", (agent_id,),
-        ))
+        rows = list(
+            self.db.execute(
+                "SELECT h.id,h.task_id FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
+                "WHERE h.status='pending' AND t.agent_id=?",
+                (agent_id,),
+            )
+        )
         for row in rows:
             self.db.execute(
                 "UPDATE human_handoffs SET status='superseded',outcome=?,resolved_at=? WHERE id=?",
@@ -1003,18 +1214,25 @@ class CompanyStore:
             )
             self.db.execute(
                 "UPDATE tasks SET status='superseded',completed_at=? WHERE id=? "
-                "AND status IN ('proposed','waiting_human')", (now, row["task_id"]),
+                "AND status IN ('proposed','waiting_human')",
+                (now, row["task_id"]),
             )
         if rows:
             self.db.execute(
                 "UPDATE agent_instances SET status='stopped',updated_at=? "
-                "WHERE id=? AND status='waiting_human'", (now, agent_id),
+                "WHERE id=? AND status='waiting_human'",
+                (now, agent_id),
             )
         self.db.commit()
         if rows:
-            self.audit("agent.handoffs_superseded", {
-                "agent_id": agent_id, "count": len(rows), "reason": reason,
-            })
+            self.audit(
+                "agent.handoffs_superseded",
+                {
+                    "agent_id": agent_id,
+                    "count": len(rows),
+                    "reason": reason,
+                },
+            )
         return len(rows)
 
     def get_profile(self) -> dict:
@@ -1042,10 +1260,13 @@ class CompanyStore:
         except Exception:
             self.db.rollback()
             raise
-        self.audit("company.profile_updated", {
-            "workflow_type": profile.get("workflow_type", "general"),
-            "publishing_configured": bool(profile.get("publishing_url")),
-        })
+        self.audit(
+            "company.profile_updated",
+            {
+                "workflow_type": profile.get("workflow_type", "general"),
+                "publishing_configured": bool(profile.get("publishing_url")),
+            },
+        )
         return self.get_profile()
 
     def reset_attention_queue(self, reason: str) -> dict:
@@ -1053,16 +1274,19 @@ class CompanyStore:
         now = utc_now()
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            approvals = list(self.db.execute(
-                "SELECT id,task_id FROM approvals WHERE status IN ('pending','approved','waiting_human')"
-            ))
-            handoffs = list(self.db.execute(
-                "SELECT id,task_id FROM human_handoffs WHERE status='pending'"
-            ))
+            approvals = list(
+                self.db.execute(
+                    "SELECT id,task_id FROM approvals WHERE status IN ('pending','approved','waiting_human')"
+                )
+            )
+            handoffs = list(
+                self.db.execute("SELECT id,task_id FROM human_handoffs WHERE status='pending'")
+            )
             for row in approvals:
                 self.db.execute(
                     "UPDATE approvals SET status='superseded',resolved_at=?,decision_comment=?,decided_by='owner' "
-                    "WHERE id=?", (now, reason, row["id"]),
+                    "WHERE id=?",
+                    (now, reason, row["id"]),
                 )
                 self.db.execute(
                     "UPDATE tasks SET status='superseded',completed_at=? WHERE id=? "
@@ -1076,7 +1300,8 @@ class CompanyStore:
                 )
                 self.db.execute(
                     "UPDATE tasks SET status='superseded',completed_at=? WHERE id=? "
-                    "AND status IN ('proposed','waiting_human')", (now, row["task_id"]),
+                    "AND status IN ('proposed','waiting_human')",
+                    (now, row["task_id"]),
                 )
             self.db.execute(
                 "UPDATE runtime_control SET state='stopped',detail=?,updated_at=? WHERE id=1",
@@ -1090,8 +1315,9 @@ class CompanyStore:
         self.audit("company.attention_queue_reset", {**result, "reason": reason})
         return result
 
-    def upsert_integration(self, provider: str, status: str, config: dict,
-                           required_secrets: list[str]) -> dict:
+    def upsert_integration(
+        self, provider: str, status: str, config: dict, required_secrets: list[str]
+    ) -> dict:
         """Persist non-secret capability metadata and references to environment secrets."""
         now = utc_now()
         self.db.execute(
@@ -1102,15 +1328,22 @@ class CompanyStore:
             (provider, status, json.dumps(config), json.dumps(required_secrets), now),
         )
         self.db.commit()
-        self.audit("integration.configured", {
-            "provider": provider, "status": status, "config": config,
-            "required_secrets": required_secrets,
-        })
+        self.audit(
+            "integration.configured",
+            {
+                "provider": provider,
+                "status": status,
+                "config": config,
+                "required_secrets": required_secrets,
+            },
+        )
         return next(item for item in self.list_integrations() if item["provider"] == provider)
 
     def request_integration(self, provider: str, capabilities: list[str]) -> dict:
         """Record a CEO-requested platform without treating access as granted."""
-        existing = next((item for item in self.list_integrations() if item["provider"] == provider), None)
+        existing = next(
+            (item for item in self.list_integrations() if item["provider"] == provider), None
+        )
         if existing:
             return existing
         return self.upsert_integration(provider, "requested", {"capabilities": capabilities}, [])
@@ -1125,12 +1358,16 @@ class CompanyStore:
             effective = "ready" if configured and all(secret_status.values()) else row["status"]
             if configured and required and not all(secret_status.values()):
                 effective = "missing_secrets"
-            result.append({
-                "provider": row["provider"], "status": effective,
-                "config": json.loads(row["config_json"]),
-                "required_secrets": required, "secret_status": secret_status,
-                "updated_at": row["updated_at"],
-            })
+            result.append(
+                {
+                    "provider": row["provider"],
+                    "status": effective,
+                    "config": json.loads(row["config_json"]),
+                    "required_secrets": required,
+                    "secret_status": secret_status,
+                    "updated_at": row["updated_at"],
+                }
+            )
         return result
 
     def upsert_integration_connection(self, payload: dict) -> dict:
@@ -1147,25 +1384,36 @@ class CompanyStore:
             "capabilities_json=excluded.capabilities_json,config_json=excluded.config_json,"
             "credential_fields_json=excluded.credential_fields_json,updated_at=excluded.updated_at",
             (
-                value["id"], value["name"], value["adapter"], value["provider"],
-                value["location"], value["base_url"], status,
-                json.dumps(value["capabilities"]), json.dumps(value["config"]),
-                json.dumps(value["credential_fields"]), now, now,
+                value["id"],
+                value["name"],
+                value["adapter"],
+                value["provider"],
+                value["location"],
+                value["base_url"],
+                status,
+                json.dumps(value["capabilities"]),
+                json.dumps(value["config"]),
+                json.dumps(value["credential_fields"]),
+                now,
+                now,
             ),
         )
         self.db.commit()
-        self.audit("integration.connection_configured", {
-            "connection_id": value["id"], "adapter": value["adapter"],
-            "provider": value["provider"], "capabilities": value["capabilities"],
-        })
+        self.audit(
+            "integration.connection_configured",
+            {
+                "connection_id": value["id"],
+                "adapter": value["adapter"],
+                "provider": value["provider"],
+                "capabilities": value["capabilities"],
+            },
+        )
         return self.get_integration_connection(value["id"])
 
     def list_integration_connections(self) -> list[dict]:
         """Return provider-neutral profiles with boolean-only credential state."""
         values = []
-        for row in self.db.execute(
-            "SELECT * FROM integration_connections ORDER BY name,id"
-        ):
+        for row in self.db.execute("SELECT * FROM integration_connections ORDER BY name,id"):
             fields = json.loads(row["credential_fields_json"])
             secret_status = {
                 field: bool(get_secret(integration_secret_name(row["id"], field)))
@@ -1178,32 +1426,46 @@ class CompanyStore:
                 and str(config.get("authentication", "password")).lower() == "none"
             )
             ready = configured and (no_auth_smtp or all(secret_status.values()))
-            authorization_required = (
-                row["adapter"] == "oauth2_authorization_code"
-                and not bool(config.get("authorized"))
+            authorization_required = row["adapter"] == "oauth2_authorization_code" and not bool(
+                config.get("authorized")
             )
             effective = (
-                "disabled" if not configured
-                else "missing_credentials" if not ready
-                else "authorization_required" if authorization_required
+                "disabled"
+                if not configured
+                else "missing_credentials"
+                if not ready
+                else "authorization_required"
+                if authorization_required
                 else "ready"
             )
-            values.append({
-                "id": row["id"], "name": row["name"], "adapter": row["adapter"],
-                "adapter_label": INTEGRATION_ADAPTERS[row["adapter"]]["label"],
-                "provider": row["provider"], "location": row["location"],
-                "base_url": row["base_url"], "status": effective,
-                "capabilities": json.loads(row["capabilities_json"]),
-                "config": config, "credential_fields": fields,
-                "secret_status": secret_status, "updated_at": row["updated_at"],
-            })
+            values.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "adapter": row["adapter"],
+                    "adapter_label": INTEGRATION_ADAPTERS[row["adapter"]]["label"],
+                    "provider": row["provider"],
+                    "location": row["location"],
+                    "base_url": row["base_url"],
+                    "status": effective,
+                    "capabilities": json.loads(row["capabilities_json"]),
+                    "config": config,
+                    "credential_fields": fields,
+                    "secret_status": secret_status,
+                    "updated_at": row["updated_at"],
+                }
+            )
         return values
 
     def get_integration_connection(self, connection_id: str) -> dict:
-        item = next((
-            value for value in self.list_integration_connections()
-            if value["id"] == connection_id
-        ), None)
+        item = next(
+            (
+                value
+                for value in self.list_integration_connections()
+                if value["id"] == connection_id
+            ),
+            None,
+        )
         if not item:
             raise KeyError(connection_id)
         return item
@@ -1211,18 +1473,28 @@ class CompanyStore:
     def capability_snapshot(self) -> list[dict]:
         """Expose legacy platform requests and ready transport profiles to the CEO."""
         result = self.list_integrations()
-        result.extend({
-            "provider": item["provider"], "connection_id": item["id"],
-            "adapter": item["adapter"], "status": item["status"],
-            "config": {"capabilities": item["capabilities"], "base_url": item["base_url"]},
-            "required_secrets": item["credential_fields"],
-            "secret_status": item["secret_status"],
-        } for item in self.list_integration_connections())
+        result.extend(
+            {
+                "provider": item["provider"],
+                "connection_id": item["id"],
+                "adapter": item["adapter"],
+                "status": item["status"],
+                "config": {"capabilities": item["capabilities"], "base_url": item["base_url"]},
+                "required_secrets": item["credential_fields"],
+                "secret_status": item["secret_status"],
+            }
+            for item in self.list_integration_connections()
+        )
         return result
 
     def prepare_integration_operation(
-        self, execution_key: str, connection_id: str, capability: str,
-        method: str, path: str, request: dict,
+        self,
+        execution_key: str,
+        connection_id: str,
+        capability: str,
+        method: str,
+        path: str,
+        request: dict,
     ) -> dict:
         """Freeze one connector call and derive its provider idempotency key."""
         connection = self.get_integration_connection(connection_id)
@@ -1242,7 +1514,8 @@ class CompanyStore:
             raise ValueError("Integration request is too large")
         provider_key = "telekt-" + hashlib.sha256(execution_key.encode()).hexdigest()[:40]
         existing = self.db.execute(
-            "SELECT * FROM integration_operations WHERE execution_key=?", (execution_key,),
+            "SELECT * FROM integration_operations WHERE execution_key=?",
+            (execution_key,),
         ).fetchone()
         if existing:
             same = (
@@ -1253,27 +1526,53 @@ class CompanyStore:
                 and existing["request_json"] == canonical_request
             )
             if not same:
-                raise RuntimeError("Execution key was already used for a different integration operation")
-            return {**dict(existing), "request": json.loads(existing["request_json"]), "cached": True}
+                raise RuntimeError(
+                    "Execution key was already used for a different integration operation"
+                )
+            return {
+                **dict(existing),
+                "request": json.loads(existing["request_json"]),
+                "cached": True,
+            }
         now = utc_now()
         self.db.execute(
             "INSERT INTO integration_operations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (
-                execution_key, connection_id, capability, method, path, canonical_request,
-                provider_key, "prepared", None, now, now,
+                execution_key,
+                connection_id,
+                capability,
+                method,
+                path,
+                canonical_request,
+                provider_key,
+                "prepared",
+                None,
+                now,
+                now,
             ),
         )
         self.db.commit()
-        self.audit("integration.operation_prepared", {
-            "execution_key": execution_key, "connection_id": connection_id,
-            "capability": capability, "method": method, "path": path,
-            "provider_idempotency_key": provider_key,
-        })
+        self.audit(
+            "integration.operation_prepared",
+            {
+                "execution_key": execution_key,
+                "connection_id": connection_id,
+                "capability": capability,
+                "method": method,
+                "path": path,
+                "provider_idempotency_key": provider_key,
+            },
+        )
         return {
-            "execution_key": execution_key, "connection_id": connection_id,
-            "capability": capability, "method": method, "path": path,
-            "request": request, "provider_idempotency_key": provider_key,
-            "status": "prepared", "cached": False,
+            "execution_key": execution_key,
+            "connection_id": connection_id,
+            "capability": capability,
+            "method": method,
+            "path": path,
+            "request": request,
+            "provider_idempotency_key": provider_key,
+            "status": "prepared",
+            "cached": False,
         }
 
     def complete_integration_operation(self, execution_key: str, response: dict) -> dict:
@@ -1315,10 +1614,18 @@ class CompanyStore:
         if row and row["status"] == "completed":
             return json.loads(row["result_json"])
         if row and row["task_id"]:
-            task = self.db.execute("SELECT status FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
+            task = self.db.execute(
+                "SELECT status FROM tasks WHERE id=?", (row["task_id"],)
+            ).fetchone()
             if task and task["status"] in {
-                "completed", "denied", "stopped", "superseded", "waiting_approval", "waiting_human",
-                "failed", "rejected",
+                "completed",
+                "denied",
+                "stopped",
+                "superseded",
+                "waiting_approval",
+                "waiting_human",
+                "failed",
+                "rejected",
             }:
                 status_map = {
                     "waiting_approval": "waiting_for_approval",
@@ -1329,7 +1636,9 @@ class CompanyStore:
                 }
                 result = {
                     "status": status_map.get(task["status"], task["status"]),
-                    "cycles": 1, "task_id": row["task_id"], "recovered": True,
+                    "cycles": 1,
+                    "task_id": row["task_id"],
+                    "recovered": True,
                 }
                 self.complete_activity(execution_key, result)
                 return result
@@ -1351,11 +1660,15 @@ class CompanyStore:
         """Finalize unfinished work after the final Temporal attempt."""
         now = utc_now()
         row = self.db.execute(
-            "SELECT task_id FROM activity_executions WHERE execution_key=?", (execution_key,),
+            "SELECT task_id FROM activity_executions WHERE execution_key=?",
+            (execution_key,),
         ).fetchone()
         if row and row["task_id"]:
             result = SpecialistResult(
-                status="failed", summary=reason, evidence=[], recommendation="Human review required",
+                status="failed",
+                summary=reason,
+                evidence=[],
+                recommendation="Human review required",
             )
             self.db.execute(
                 "UPDATE tasks SET status='failed',result_json=?,completed_at=? "
@@ -1364,12 +1677,14 @@ class CompanyStore:
             )
             self.db.execute(
                 "UPDATE approvals SET status='execution_failed' "
-                "WHERE task_id=? AND status='executing'", (row["task_id"],),
+                "WHERE task_id=? AND status='executing'",
+                (row["task_id"],),
             )
         outcome = {"status": "error", "cycles": 0, "error": reason}
         self.db.execute(
             "UPDATE activity_executions SET status='completed',result_json=?,updated_at=? "
-            "WHERE execution_key=?", (json.dumps(outcome), now, execution_key),
+            "WHERE execution_key=?",
+            (json.dumps(outcome), now, execution_key),
         )
         self.db.commit()
         return outcome
@@ -1387,14 +1702,18 @@ class CompanyStore:
         row = self.db.execute(
             "SELECT t.id,t.status,t.proposal_json FROM activity_executions e "
             "JOIN tasks t ON t.id=e.task_id WHERE e.execution_key=? "
-            "AND t.status IN ('proposed','executing')", (execution_key,),
+            "AND t.status IN ('proposed','executing')",
+            (execution_key,),
         ).fetchone()
         if not row or not row["proposal_json"]:
             return None
         return row["id"], TaskProposal.model_validate_json(row["proposal_json"]), row["status"]
 
     def link_activity_task(
-        self, execution_key: str, task_id: str, proposal: TaskProposal | None = None,
+        self,
+        execution_key: str,
+        task_id: str,
+        proposal: TaskProposal | None = None,
     ) -> None:
         """Attach an already-created approved task to its current activity."""
         if proposal is not None:
@@ -1412,7 +1731,10 @@ class CompanyStore:
         self.db.commit()
 
     def create_task(
-        self, proposal: TaskProposal, status: str, execution_key: str | None = None,
+        self,
+        proposal: TaskProposal,
+        status: str,
+        execution_key: str | None = None,
         agent_id: str | None = None,
     ) -> str:
         """Persist a CEO proposal before authorization or execution."""
@@ -1421,10 +1743,22 @@ class CompanyStore:
             "INSERT INTO tasks(id,action,title,specialist,objective,rationale,estimated_cost_eur,status,"
             "result_json,created_at,completed_at,proposal_json,agent_id,work_item_id) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (task_id, proposal.action.value, proposal.title, proposal.specialist,
-             proposal.objective, proposal.rationale, proposal.estimated_cost_eur,
-             status, None, utc_now(), None, proposal.model_dump_json(), agent_id,
-             proposal.work_item_id),
+            (
+                task_id,
+                proposal.action.value,
+                proposal.title,
+                proposal.specialist,
+                proposal.objective,
+                proposal.rationale,
+                proposal.estimated_cost_eur,
+                status,
+                None,
+                utc_now(),
+                None,
+                proposal.model_dump_json(),
+                agent_id,
+                proposal.work_item_id,
+            ),
         )
         if execution_key:
             changed = self.db.execute(
@@ -1436,7 +1770,9 @@ class CompanyStore:
                 self.db.rollback()
                 raise RuntimeError("Activity already owns a different task")
         self.db.commit()
-        self.audit("task.created", {"task_id": task_id, "proposal": proposal.model_dump(mode="json")})
+        self.audit(
+            "task.created", {"task_id": task_id, "proposal": proposal.model_dump(mode="json")}
+        )
         return task_id
 
     def create_handoff(self, task_id: str, proposal: TaskProposal) -> str:
@@ -1445,21 +1781,30 @@ class CompanyStore:
         agent_id = task["agent_id"] if task else None
         requested_host = urlparse(proposal.handoff_url).hostname if proposal.handoff_url else None
         for row in self.db.execute(
-            "SELECT h.id,h.payload_json FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
-            "WHERE h.status='pending' AND " + ("t.agent_id=?" if agent_id else "t.agent_id IS NULL") +
-            " ORDER BY h.created_at", (agent_id,) if agent_id else (),
+            # Scope fragment is one of two constant predicates; all values are parameterized.
+            "SELECT h.id,h.payload_json FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "  # nosec
+            "WHERE h.status='pending' AND "
+            + ("t.agent_id=?" if agent_id else "t.agent_id IS NULL")
+            + " ORDER BY h.created_at",
+            (agent_id,) if agent_id else (),
         ):
             existing = TaskProposal.model_validate_json(row["payload_json"])
-            existing_host = urlparse(existing.handoff_url).hostname if existing.handoff_url else None
+            existing_host = (
+                urlparse(existing.handoff_url).hostname if existing.handoff_url else None
+            )
             if existing.action == proposal.action and existing_host == requested_host:
                 self.db.execute(
                     "UPDATE tasks SET status='superseded',completed_at=? WHERE id=? AND status='proposed'",
                     (utc_now(), task_id),
                 )
                 self.db.commit()
-                self.audit("handoff.duplicate_suppressed", {
-                    "existing_handoff_id": row["id"], "task_id": task_id,
-                })
+                self.audit(
+                    "handoff.duplicate_suppressed",
+                    {
+                        "existing_handoff_id": row["id"],
+                        "task_id": task_id,
+                    },
+                )
                 return row["id"]
         handoff_id = str(uuid4())
         now = utc_now()
@@ -1483,21 +1828,24 @@ class CompanyStore:
                 (proposal.title, now),
             )
         self.db.commit()
-        self.audit("handoff.requested", {
-            "handoff_id": handoff_id, "task_id": task_id,
-            "url": proposal.handoff_url,
-            "instructions": proposal.handoff_instructions,
-            "resume_evidence": proposal.resume_evidence,
-        })
+        self.audit(
+            "handoff.requested",
+            {
+                "handoff_id": handoff_id,
+                "task_id": task_id,
+                "url": proposal.handoff_url,
+                "instructions": proposal.handoff_instructions,
+                "resume_evidence": proposal.resume_evidence,
+            },
+        )
         return handoff_id
 
     def list_handoffs(
-        self, status: str | None = None, agent_id: str | None = None,
+        self,
+        status: str | None = None,
+        agent_id: str | None = None,
     ) -> list[dict]:
-        query = (
-            "SELECT h.*,t.agent_id FROM human_handoffs h "
-            "JOIN tasks t ON t.id=h.task_id"
-        )
+        query = "SELECT h.*,t.agent_id FROM human_handoffs h JOIN tasks t ON t.id=h.task_id"
         clauses = []
         params: list = []
         if status:
@@ -1513,9 +1861,7 @@ class CompanyStore:
 
     def get_handoff(self, handoff_id: str, require_pending: bool = False) -> dict:
         """Return one frozen handoff payload for an operator action."""
-        row = self.db.execute(
-            "SELECT * FROM human_handoffs WHERE id=?", (handoff_id,)
-        ).fetchone()
+        row = self.db.execute("SELECT * FROM human_handoffs WHERE id=?", (handoff_id,)).fetchone()
         if not row:
             raise RuntimeError("Handoff not found")
         if require_pending and row["status"] != "pending":
@@ -1530,7 +1876,8 @@ class CompanyStore:
             raise ValueError("A handoff outcome is required")
         row = self.db.execute(
             "SELECT h.task_id,h.status,h.payload_json,t.agent_id FROM human_handoffs h "
-            "JOIN tasks t ON t.id=h.task_id WHERE h.id=?", (handoff_id,)
+            "JOIN tasks t ON t.id=h.task_id WHERE h.id=?",
+            (handoff_id,),
         ).fetchone()
         if not row or row["status"] != "pending":
             raise RuntimeError("Pending handoff not found")
@@ -1548,7 +1895,12 @@ class CompanyStore:
         )
         self.db.execute(
             "UPDATE tasks SET status=?,result_json=?,completed_at=? WHERE id=?",
-            ("completed" if completed else "rejected", result.model_dump_json(), now, row["task_id"]),
+            (
+                "completed" if completed else "rejected",
+                result.model_dump_json(),
+                now,
+                row["task_id"],
+            ),
         )
         self.db.execute(
             "UPDATE approvals SET status=? WHERE task_id=? AND status='waiting_human'",
@@ -1559,7 +1911,13 @@ class CompanyStore:
             "INSERT INTO stakeholder_messages(id,kind,content,status,response,created_at,addressed_at,agent_id) "
             "VALUES(?,?,?,?,?,?,?,?)",
             (
-                message_id, "handoff_result", outcome.strip(), "pending", None, now, None,
+                message_id,
+                "handoff_result",
+                outcome.strip(),
+                "pending",
+                None,
+                now,
+                None,
                 row["agent_id"],
             ),
         )
@@ -1574,14 +1932,21 @@ class CompanyStore:
                 (f"Human handoff {status}; CEO reconsideration queued", now),
             )
         self.db.commit()
-        self.audit(f"handoff.{status}", {
-            "handoff_id": handoff_id, "task_id": row["task_id"], "message_id": message_id,
-        })
+        self.audit(
+            f"handoff.{status}",
+            {
+                "handoff_id": handoff_id,
+                "task_id": row["task_id"],
+                "message_id": message_id,
+            },
+        )
         return row["agent_id"]
 
     def complete_task(self, task_id: str, result: SpecialistResult, cost: float) -> None:
         """Atomically complete a task, its approval, and authorized ledger cost."""
-        current = self.db.execute("SELECT status,agent_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        current = self.db.execute(
+            "SELECT status,agent_id FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()
         if not current or current["status"] not in {"proposed", "executing"}:
             raise RuntimeError("Task is not executable or has already been finalized.")
         self.db.execute(
@@ -1596,18 +1961,31 @@ class CompanyStore:
         if cost:
             self.db.execute(
                 "INSERT INTO ledger(id,task_id,amount_eur,description,created_at,agent_id) VALUES(?,?,?,?,?,?)",
-                (str(uuid4()), task_id, cost, "Authorized task cost", utc_now(), current["agent_id"]),
+                (
+                    str(uuid4()),
+                    task_id,
+                    cost,
+                    "Authorized task cost",
+                    utc_now(),
+                    current["agent_id"],
+                ),
             )
         self.db.commit()
         self.audit("task.completed", {"task_id": task_id, "result": result.model_dump(mode="json")})
 
     def fail_task(
-        self, task_id: str, reason: str, result: SpecialistResult | None = None,
+        self,
+        task_id: str,
+        reason: str,
+        result: SpecialistResult | None = None,
     ) -> None:
         """Finalize an attempted task as failed so it cannot execute twice."""
         now = utc_now()
         result = result or SpecialistResult(
-            status="failed", summary=reason, evidence=[], recommendation="Human review required",
+            status="failed",
+            summary=reason,
+            evidence=[],
+            recommendation="Human review required",
         )
         self.db.execute(
             "UPDATE tasks SET status='failed',result_json=?,completed_at=? "
@@ -1625,12 +2003,18 @@ class CompanyStore:
         """Set a deterministic terminal/intermediate status for orchestration."""
         if status not in {"denied", "stopped", "superseded", "deferred"}:
             raise ValueError("Invalid direct task status")
-        self.db.execute("UPDATE tasks SET status=?,completed_at=? WHERE id=?", (status, utc_now(), task_id))
+        self.db.execute(
+            "UPDATE tasks SET status=?,completed_at=? WHERE id=?", (status, utc_now(), task_id)
+        )
         self.db.commit()
 
     def request_approval(
-        self, task_id: str, proposal: TaskProposal, reason: str,
-        required_approvals: int = 1, ttl_hours: int = 72,
+        self,
+        task_id: str,
+        proposal: TaskProposal,
+        reason: str,
+        required_approvals: int = 1,
+        ttl_hours: int = 72,
     ) -> str:
         """Freeze the exact proposed payload as a pending human approval."""
         if not 1 <= required_approvals <= 20:
@@ -1638,18 +2022,28 @@ class CompanyStore:
         if not 1 <= ttl_hours <= 720:
             raise ValueError("Approval TTL must be between 1 and 720 hours")
         approval_id = str(uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = (now + timedelta(hours=ttl_hours)).isoformat()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             self.db.execute(
                 "INSERT INTO approvals(id,task_id,payload_json,status,reason,created_at,resolved_at,"
                 "required_approvals,expires_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (approval_id, task_id, proposal.model_dump_json(), "pending", reason,
-                 now.isoformat(), None, required_approvals, expires_at),
+                (
+                    approval_id,
+                    task_id,
+                    proposal.model_dump_json(),
+                    "pending",
+                    reason,
+                    now.isoformat(),
+                    None,
+                    required_approvals,
+                    expires_at,
+                ),
             )
             changed = self.db.execute(
-                "UPDATE tasks SET status='waiting_approval' WHERE id=? AND status='proposed'", (task_id,)
+                "UPDATE tasks SET status='waiting_approval' WHERE id=? AND status='proposed'",
+                (task_id,),
             ).rowcount
             if changed != 1:
                 raise RuntimeError("Only a proposed task can request approval")
@@ -1657,23 +2051,32 @@ class CompanyStore:
         except Exception:
             self.db.rollback()
             raise
-        self.audit("approval.requested", {
-            "approval_id": approval_id, "task_id": task_id,
-            "required_approvals": required_approvals, "expires_at": expires_at,
-        })
+        self.audit(
+            "approval.requested",
+            {
+                "approval_id": approval_id,
+                "task_id": task_id,
+                "required_approvals": required_approvals,
+                "expires_at": expires_at,
+            },
+        )
         self.transition_content_work_item(
-            proposal.work_item_id, "awaiting_review", approval_id=approval_id,
+            proposal.work_item_id,
+            "awaiting_review",
+            approval_id=approval_id,
         )
         return approval_id
 
     def has_pending_equivalent_approval(
-        self, proposal: TaskProposal, agent_id: str | None = None,
+        self,
+        proposal: TaskProposal,
+        agent_id: str | None = None,
     ) -> bool:
         """Prevent repeated stakeholder requests for the same external action."""
         query = (
-            "SELECT a.payload_json FROM approvals a JOIN tasks t ON t.id=a.task_id "
-            "WHERE a.status='pending' AND " +
-            ("t.agent_id=?" if agent_id else "t.agent_id IS NULL")
+            # Scope fragment is one of two constant predicates; all values are parameterized.
+            "SELECT a.payload_json FROM approvals a JOIN tasks t ON t.id=a.task_id "  # nosec
+            "WHERE a.status='pending' AND " + ("t.agent_id=?" if agent_id else "t.agent_id IS NULL")
         )
         for row in self.db.execute(query, (agent_id,) if agent_id else ()):
             existing = TaskProposal.model_validate_json(row["payload_json"])
@@ -1687,8 +2090,12 @@ class CompanyStore:
                 ActionType.REQUEST_PLATFORM_ACCESS,
                 ActionType.PUBLISH_CONTENT,
             }:
-                existing_host = urlparse(existing.handoff_url).hostname if existing.handoff_url else None
-                proposed_host = urlparse(proposal.handoff_url).hostname if proposal.handoff_url else None
+                existing_host = (
+                    urlparse(existing.handoff_url).hostname if existing.handoff_url else None
+                )
+                proposed_host = (
+                    urlparse(proposal.handoff_url).hostname if proposal.handoff_url else None
+                )
                 if existing_host == proposed_host and (
                     proposal.action != ActionType.PUBLISH_CONTENT
                     or existing.work_item_id == proposal.work_item_id
@@ -1699,7 +2106,9 @@ class CompanyStore:
         return False
 
     def latest_content_draft(
-        self, agent_id: str | None = None, work_item_id: str | None = None,
+        self,
+        agent_id: str | None = None,
+        work_item_id: str | None = None,
     ) -> dict | None:
         """Return the latest completed content artifact for review and publishing."""
         query = (
@@ -1720,8 +2129,10 @@ class CompanyStore:
             package = result.get("content_package")
             if result.get("artifact_path") and result.get("artifact_content"):
                 value = {
-                    "task_id": row["id"], "title": row["title"],
-                    "path": result["artifact_path"], "content": result["artifact_content"],
+                    "task_id": row["id"],
+                    "title": row["title"],
+                    "path": result["artifact_path"],
+                    "content": result["artifact_content"],
                     "content_package": package,
                     "quality_report": result.get("quality_report"),
                     "summary": result.get("summary", ""),
@@ -1755,7 +2166,8 @@ class CompanyStore:
             return None
         return (
             self.latest_content_draft(item.get("agent_id"), proposal.work_item_id)
-            if proposal.action == ActionType.PUBLISH_CONTENT else None
+            if proposal.action == ActionType.PUBLISH_CONTENT
+            else None
         )
 
     def stakeholder_notification_allowed(self, hours: int = 24) -> bool:
@@ -1767,7 +2179,7 @@ class CompanyStore:
         if not row:
             return True
         sent = datetime.fromisoformat(row["created_at"])
-        return (datetime.now(timezone.utc) - sent).total_seconds() >= hours * 3600
+        return (datetime.now(UTC) - sent).total_seconds() >= hours * 3600
 
     def mark_approvals_notified(self, approval_ids: list[str]) -> None:
         """Record successful delivery so a new content approval is emailed once."""
@@ -1779,30 +2191,33 @@ class CompanyStore:
             )
             row = self.db.execute(
                 "SELECT t.agent_id,t.work_item_id FROM approvals a JOIN tasks t ON t.id=a.task_id "
-                "WHERE a.id=?", (approval_id,),
+                "WHERE a.id=?",
+                (approval_id,),
             ).fetchone()
             if row and row["agent_id"] and row["work_item_id"]:
                 agent = self.get_agent(row["agent_id"])
-                followup_hours = int(
-                    (agent.get("config") or {}).get("review_followup_hours", 24)
-                )
+                followup_hours = int((agent.get("config") or {}).get("review_followup_hours", 24))
                 followup_at = (
-                    datetime.now(timezone.utc) + timedelta(hours=max(1, followup_hours))
+                    datetime.now(UTC) + timedelta(hours=max(1, followup_hours))
                 ).isoformat()
                 self.db.execute(
                     "UPDATE content_work_items SET last_contact_at=?,next_followup_at=?,updated_at=? "
-                    "WHERE id=?", (now, followup_at, now, row["work_item_id"]),
+                    "WHERE id=?",
+                    (now, followup_at, now, row["work_item_id"]),
                 )
         self.db.commit()
 
     def list_approvals(self) -> list[dict]:
         """Return approval history, newest first."""
         self.expire_pending_approvals()
-        result = [dict(row) for row in self.db.execute(
-            "SELECT a.*,t.agent_id,(SELECT COUNT(*) FROM approval_votes v WHERE v.approval_id=a.id "
-            "AND v.decision='approve') AS approval_count FROM approvals a "
-            "JOIN tasks t ON t.id=a.task_id ORDER BY a.created_at DESC"
-        )]
+        result = [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT a.*,t.agent_id,(SELECT COUNT(*) FROM approval_votes v WHERE v.approval_id=a.id "
+                "AND v.decision='approve') AS approval_count FROM approvals a "
+                "JOIN tasks t ON t.id=a.task_id ORDER BY a.created_at DESC"
+            )
+        ]
         for item in result:
             item["review"] = self._approval_review(item)
         return result
@@ -1820,7 +2235,8 @@ class CompanyStore:
             item["proposal"] = TaskProposal.model_validate_json(item.pop("payload_json"))
             item["review"] = (
                 self.latest_content_draft(item.get("agent_id"), item["proposal"].work_item_id)
-                if item["proposal"].action == ActionType.PUBLISH_CONTENT else None
+                if item["proposal"].action == ActionType.PUBLISH_CONTENT
+                else None
             )
             item["followup_due"] = False
             if item["proposal"].work_item_id:
@@ -1829,15 +2245,16 @@ class CompanyStore:
                     (item["proposal"].work_item_id,),
                 ).fetchone()
                 item["followup_due"] = bool(
-                    work and work["next_followup_at"]
-                    and datetime.fromisoformat(work["next_followup_at"]) <= datetime.now(timezone.utc)
+                    work
+                    and work["next_followup_at"]
+                    and datetime.fromisoformat(work["next_followup_at"]) <= datetime.now(UTC)
                 )
             result.append(item)
         return result
 
     def expire_pending_approvals(self) -> list[str]:
         """Close approvals after their policy TTL so stale authority cannot be used."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired = []
         self.db.execute("BEGIN IMMEDIATE")
         try:
@@ -1878,7 +2295,8 @@ class CompanyStore:
         try:
             lock = " FOR UPDATE" if getattr(self.db, "is_postgres", False) else ""
             row = self.db.execute(
-                "SELECT a.task_id,a.status,a.required_approvals,t.agent_id FROM approvals a "
+                # Lock fragment is a backend-selected constant, never request data.
+                "SELECT a.task_id,a.status,a.required_approvals,t.agent_id FROM approvals a "  # nosec
                 "JOIN tasks t ON t.id=a.task_id WHERE a.id=?" + lock,
                 (approval_id,),
             ).fetchone()
@@ -1896,10 +2314,12 @@ class CompanyStore:
                 "INSERT INTO approval_votes(approval_id,voter,decision,comment,created_at) VALUES(?,?,?,?,?)",
                 (approval_id, voter, "approve", comment.strip() or None, now),
             )
-            vote_count = int(self.db.execute(
-                "SELECT COUNT(*) AS value FROM approval_votes WHERE approval_id=? AND decision='approve'",
-                (approval_id,),
-            ).fetchone()["value"])
+            vote_count = int(
+                self.db.execute(
+                    "SELECT COUNT(*) AS value FROM approval_votes WHERE approval_id=? AND decision='approve'",
+                    (approval_id,),
+                ).fetchone()["value"]
+            )
             required = int(row["required_approvals"])
             final = vote_count >= required
             if final:
@@ -1910,7 +2330,8 @@ class CompanyStore:
                 )
                 self.db.execute("UPDATE tasks SET status='approved' WHERE id=?", (row["task_id"],))
                 work = self.db.execute(
-                    "SELECT work_item_id FROM tasks WHERE id=?", (row["task_id"],),
+                    "SELECT work_item_id FROM tasks WHERE id=?",
+                    (row["task_id"],),
                 ).fetchone()
                 if work and work["work_item_id"]:
                     self.db.execute(
@@ -1933,15 +2354,22 @@ class CompanyStore:
             self.db.rollback()
             raise
         event = "approval.approved" if final else "approval.vote_recorded"
-        self.audit(event, {
-            "approval_id": approval_id, "task_id": row["task_id"],
-            "voter": voter, "approval_count": vote_count, "required_approvals": required,
-        })
+        self.audit(
+            event,
+            {
+                "approval_id": approval_id,
+                "task_id": row["task_id"],
+                "voter": voter,
+                "approval_count": vote_count,
+                "required_approvals": required,
+            },
+        )
         if comment.strip():
             self.add_approval_feedback(comment, approval_id, voter, "approved")
         result = {
             "status": "approved" if final else "pending",
-            "approval_count": vote_count, "required_approvals": required,
+            "approval_count": vote_count,
+            "required_approvals": required,
         }
         if row["agent_id"]:
             result["agent_id"] = row["agent_id"]
@@ -1953,17 +2381,19 @@ class CompanyStore:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
-                "SELECT a.task_id,a.payload_json FROM approvals a JOIN tasks t ON t.id=a.task_id "
-                "WHERE a.status='approved' AND t.status='approved' AND " +
-                ("t.agent_id=?" if agent_id else "t.agent_id IS NULL") +
-                " ORDER BY a.created_at LIMIT 1",
+                # Scope fragment is one of two constant predicates; all values are parameterized.
+                "SELECT a.task_id,a.payload_json FROM approvals a JOIN tasks t ON t.id=a.task_id "  # nosec
+                "WHERE a.status='approved' AND t.status='approved' AND "
+                + ("t.agent_id=?" if agent_id else "t.agent_id IS NULL")
+                + " ORDER BY a.created_at LIMIT 1",
                 (agent_id,) if agent_id else (),
             ).fetchone()
             if not row:
                 self.db.commit()
                 return None
             changed = self.db.execute(
-                "UPDATE tasks SET status='executing' WHERE id=? AND status='approved'", (row["task_id"],)
+                "UPDATE tasks SET status='executing' WHERE id=? AND status='approved'",
+                (row["task_id"],),
             ).rowcount
             if changed != 1:
                 self.db.rollback()
@@ -1991,8 +2421,10 @@ class CompanyStore:
         try:
             lock = " FOR UPDATE" if getattr(self.db, "is_postgres", False) else ""
             row = self.db.execute(
-                "SELECT a.task_id,a.status,t.agent_id FROM approvals a "
-                "JOIN tasks t ON t.id=a.task_id WHERE a.id=?" + lock, (approval_id,)
+                # Lock fragment is a backend-selected constant, never request data.
+                "SELECT a.task_id,a.status,t.agent_id FROM approvals a "  # nosec
+                "JOIN tasks t ON t.id=a.task_id WHERE a.id=?" + lock,
+                (approval_id,),
             ).fetchone()
             if not row or row["status"] != "pending":
                 raise RuntimeError("Pending approval not found.")
@@ -2011,12 +2443,14 @@ class CompanyStore:
             )
             self.db.execute("UPDATE tasks SET status='rejected' WHERE id=?", (row["task_id"],))
             work = self.db.execute(
-                "SELECT work_item_id FROM tasks WHERE id=?", (row["task_id"],),
+                "SELECT work_item_id FROM tasks WHERE id=?",
+                (row["task_id"],),
             ).fetchone()
             if work and work["work_item_id"]:
                 self.db.execute(
                     "UPDATE content_work_items SET status='changes_requested',approval_id=NULL,"
-                    "next_followup_at=NULL,updated_at=? WHERE id=?", (now, work["work_item_id"]),
+                    "next_followup_at=NULL,updated_at=? WHERE id=?",
+                    (now, work["work_item_id"]),
                 )
             if row["agent_id"]:
                 self.db.execute(
@@ -2036,7 +2470,9 @@ class CompanyStore:
         self.add_approval_feedback(comment, approval_id, voter, "rejected")
         return row["agent_id"]
 
-    def add_approval_feedback(self, comment: str, approval_id: str, author: str, decision: str) -> None:
+    def add_approval_feedback(
+        self, comment: str, approval_id: str, author: str, decision: str
+    ) -> None:
         """Put human decision context into the CEO/specialist canonical snapshot."""
         message_id = str(uuid4())
         content = f"Approval {decision} by {author}: {comment.strip()}"
@@ -2048,7 +2484,13 @@ class CompanyStore:
             "INSERT INTO stakeholder_messages(id,kind,content,status,response,created_at,addressed_at,agent_id) "
             "VALUES(?,?,?,?,?,?,?,?)",
             (
-                message_id, "approval_feedback", content, "pending", None, utc_now(), None,
+                message_id,
+                "approval_feedback",
+                content,
+                "pending",
+                None,
+                utc_now(),
+                None,
                 task["agent_id"] if task else None,
             ),
         )
@@ -2070,7 +2512,9 @@ class CompanyStore:
         return {
             "enabled": bool(profile.get("approval_email_enabled", False)),
             "approvers": profile.get("approval_emails", []),
-            "sender_name": profile.get("approval_sender_name", profile.get("name", "Digital Company")),
+            "sender_name": profile.get(
+                "approval_sender_name", profile.get("name", "Digital Company")
+            ),
             "smtp_connection_id": connection_id,
             "smtp_connection": connection,
             "from_address": profile.get("approval_from_address", ""),
@@ -2082,15 +2526,21 @@ class CompanyStore:
         }
 
     def set_email_settings(
-        self, enabled: bool, approvers: list[str], sender_name: str,
-        smtp_connection_id: str | None = None, from_address: str = "",
+        self,
+        enabled: bool,
+        approvers: list[str],
+        sender_name: str,
+        smtp_connection_id: str | None = None,
+        from_address: str = "",
         public_base_url: str = "",
     ) -> dict:
         """Persist recipients and a reference to write-only SMTP credentials."""
         profile = self.get_profile()
         profile["approval_email_enabled"] = enabled
         profile["approval_emails"] = approvers
-        profile["approval_sender_name"] = sender_name.strip() or profile.get("name", "Digital Company")
+        profile["approval_sender_name"] = sender_name.strip() or profile.get(
+            "name", "Digital Company"
+        )
         profile["approval_smtp_connection_id"] = smtp_connection_id or ""
         profile["approval_from_address"] = from_address.strip()
         profile["approval_public_base_url"] = public_base_url.strip().rstrip("/")
@@ -2100,27 +2550,47 @@ class CompanyStore:
             (json.dumps(profile), utc_now()),
         )
         self.db.commit()
-        self.audit("email.settings", {
-            "enabled": enabled, "approver_count": len(approvers),
-            "smtp_connection_id": smtp_connection_id,
-        })
+        self.audit(
+            "email.settings",
+            {
+                "enabled": enabled,
+                "approver_count": len(approvers),
+                "smtp_connection_id": smtp_connection_id,
+            },
+        )
         return self.get_email_settings()
 
     def get_control(self) -> dict:
         """Read cooperative runtime state for this company."""
-        return dict(self.db.execute("SELECT state,detail,updated_at FROM runtime_control WHERE id=1").fetchone())
+        return dict(
+            self.db.execute(
+                "SELECT state,detail,updated_at FROM runtime_control WHERE id=1"
+            ).fetchone()
+        )
 
     def set_control(self, state: str, detail: str | None = None) -> None:
         """Set runtime state and emit a corresponding audit event."""
-        if state not in {"running", "paused", "stopped", "waiting_approval", "waiting_human", "error"}:
+        if state not in {
+            "running",
+            "paused",
+            "stopped",
+            "waiting_approval",
+            "waiting_human",
+            "error",
+        }:
             raise ValueError("Invalid runtime state")
-        self.db.execute("UPDATE runtime_control SET state=?,detail=?,updated_at=? WHERE id=1",
-                        (state, detail, utc_now()))
+        self.db.execute(
+            "UPDATE runtime_control SET state=?,detail=?,updated_at=? WHERE id=1",
+            (state, detail, utc_now()),
+        )
         self.db.commit()
         self.audit("runtime." + state, {"detail": detail})
 
     def add_stakeholder_message(
-        self, content: str, kind: str = "directive", agent_id: str | None = None,
+        self,
+        content: str,
+        kind: str = "directive",
+        agent_id: str | None = None,
     ) -> str:
         """Persist an owner message and supersede stale approvals for directives.
 
@@ -2136,36 +2606,59 @@ class CompanyStore:
             "INSERT INTO stakeholder_messages(id,kind,content,status,response,created_at,addressed_at,agent_id) "
             "VALUES(?,?,?,?,?,?,?,?)",
             (
-                message_id, kind, content, "addressed" if kind == "memory" else "pending",
+                message_id,
+                kind,
+                content,
+                "addressed" if kind == "memory" else "pending",
                 "Saved to the durable agent playbook." if kind == "memory" else None,
-                utc_now(), utc_now() if kind == "memory" else None, agent_id,
+                utc_now(),
+                utc_now() if kind == "memory" else None,
+                agent_id,
             ),
         )
         if kind == "directive":
             task_scope = " AND t.agent_id=?" if agent_id else ""
-            pending = list(self.db.execute(
-                "SELECT a.id,a.task_id FROM approvals a JOIN tasks t ON t.id=a.task_id "
-                "WHERE a.status IN ('pending','approved')" + task_scope,
-                (agent_id,) if agent_id else (),
-            ))
+            pending = list(
+                self.db.execute(
+                    # Scope fragment is one of two constant predicates.
+                    "SELECT a.id,a.task_id FROM approvals a JOIN tasks t ON t.id=a.task_id "  # nosec
+                    "WHERE a.status IN ('pending','approved')" + task_scope,
+                    (agent_id,) if agent_id else (),
+                )
+            )
             for row in pending:
-                self.db.execute("UPDATE approvals SET status='superseded',resolved_at=? WHERE id=?", (utc_now(), row["id"]))
-                self.db.execute("UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],))
-            handoffs = list(self.db.execute(
-                "SELECT h.id,h.task_id FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "
-                "WHERE h.status='pending'" + task_scope,
-                (agent_id,) if agent_id else (),
-            ))
+                self.db.execute(
+                    "UPDATE approvals SET status='superseded',resolved_at=? WHERE id=?",
+                    (utc_now(), row["id"]),
+                )
+                self.db.execute(
+                    "UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],)
+                )
+            handoffs = list(
+                self.db.execute(
+                    # Scope fragment is one of two constant predicates.
+                    "SELECT h.id,h.task_id FROM human_handoffs h JOIN tasks t ON t.id=h.task_id "  # nosec
+                    "WHERE h.status='pending'" + task_scope,
+                    (agent_id,) if agent_id else (),
+                )
+            )
             for row in handoffs:
                 self.db.execute(
                     "UPDATE human_handoffs SET status='superseded',resolved_at=? WHERE id=?",
                     (utc_now(), row["id"]),
                 )
-                self.db.execute("UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],))
+                self.db.execute(
+                    "UPDATE tasks SET status='superseded' WHERE id=?", (row["task_id"],)
+                )
         self.db.commit()
-        self.audit("stakeholder.message", {
-            "message_id": message_id, "kind": kind, "agent_id": agent_id,
-        })
+        self.audit(
+            "stakeholder.message",
+            {
+                "message_id": message_id,
+                "kind": kind,
+                "agent_id": agent_id,
+            },
+        )
         return message_id
 
     def address_messages(self, message_ids: list[str], response: str | None) -> None:
@@ -2174,7 +2667,8 @@ class CompanyStore:
         for message_id in message_ids:
             self.db.execute(
                 "UPDATE stakeholder_messages SET status='addressed',response=?,addressed_at=? "
-                "WHERE id=? AND status='pending'", (response, now, message_id)
+                "WHERE id=? AND status='pending'",
+                (response, now, message_id),
             )
         self.db.commit()
 
@@ -2189,42 +2683,55 @@ class CompanyStore:
         snapshot["human_handoffs"] = self.list_handoffs()
         snapshot["integration_connections"] = self.list_integration_connections()
         snapshot["agents"] = self.list_agents()
-        snapshot["recent_tasks"] = [dict(row) for row in self.db.execute(
-            "SELECT id,action,title,specialist,status,created_at,completed_at FROM tasks "
-            "ORDER BY created_at DESC LIMIT 20"
-        )]
-        snapshot["audit"] = [dict(row) for row in self.db.execute(
-            "SELECT event_type,payload_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 30"
-        )]
+        snapshot["recent_tasks"] = [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT id,action,title,specialist,status,created_at,completed_at FROM tasks "
+                "ORDER BY created_at DESC LIMIT 20"
+            )
+        ]
+        snapshot["audit"] = [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT event_type,payload_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 30"
+            )
+        ]
         snapshot["operations"] = self.operations_data()
         return snapshot
 
     def operations_data(self) -> dict:
         """Project audit/task state into compact operational telemetry."""
-        rows = [dict(row) for row in self.db.execute(
-            "SELECT event_type,payload_json,created_at FROM audit_events "
-            "ORDER BY created_at DESC LIMIT 250"
-        )]
-        task_counts = {
-            row["status"]: row["count"] for row in self.db.execute(
-                "SELECT status,COUNT(*) AS count FROM tasks GROUP BY status"
+        rows = [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT event_type,payload_json,created_at FROM audit_events "
+                "ORDER BY created_at DESC LIMIT 250"
             )
+        ]
+        task_counts = {
+            row["status"]: row["count"]
+            for row in self.db.execute("SELECT status,COUNT(*) AS count FROM tasks GROUP BY status")
         }
-        authorized_spend = float(self.db.execute(
-            "SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger"
-        ).fetchone()["value"])
-        usage = dict(self.db.execute(
-            "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(input_tokens),0) input_tokens,"
-            "COALESCE(SUM(cached_tokens),0) cached_tokens,COALESCE(SUM(output_tokens),0) output_tokens,"
-            "COALESCE(SUM(reasoning_tokens),0) reasoning_tokens,COALESCE(SUM(total_tokens),0) total_tokens,"
-            "COALESCE(SUM(estimated_usd),0) estimated_usd,COALESCE(SUM(estimated_budget_cost),0) estimated_budget_cost,"
-            "SUM(CASE WHEN pricing_status='unknown_model' THEN 1 ELSE 0 END) unpriced_calls FROM model_usage"
-        ).fetchone())
+        authorized_spend = float(
+            self.db.execute("SELECT COALESCE(SUM(amount_eur),0) AS value FROM ledger").fetchone()[
+                "value"
+            ]
+        )
+        usage = dict(
+            self.db.execute(
+                "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(input_tokens),0) input_tokens,"
+                "COALESCE(SUM(cached_tokens),0) cached_tokens,COALESCE(SUM(output_tokens),0) output_tokens,"
+                "COALESCE(SUM(reasoning_tokens),0) reasoning_tokens,COALESCE(SUM(total_tokens),0) total_tokens,"
+                "COALESCE(SUM(estimated_usd),0) estimated_usd,COALESCE(SUM(estimated_budget_cost),0) estimated_budget_cost,"
+                "SUM(CASE WHEN pricing_status='unknown_model' THEN 1 ELSE 0 END) unpriced_calls FROM model_usage"
+            ).fetchone()
+        )
         return project_operations(
-            decode_audit_events(rows), task_counts, authorized_spend, usage,
-            stale_after_seconds=max(
-                60, int(float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))) + 60
-            ),
+            decode_audit_events(rows),
+            task_counts,
+            authorized_spend,
+            usage,
+            stale_after_seconds=max(60, int(float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))) + 60),
             control=self.get_control(),
         )
 
@@ -2234,30 +2741,54 @@ class CompanyStore:
             "INSERT INTO model_usage(run_id,provider,model,requests,input_tokens,cached_tokens,output_tokens,"
             "reasoning_tokens,total_tokens,estimated_usd,estimated_budget_cost,pricing_status,created_at,agent_id) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO NOTHING",
-            (payload["run_id"], payload["provider"], payload["model"], payload["requests"],
-             payload["input_tokens"], payload["cached_tokens"], payload["output_tokens"],
-             payload["reasoning_tokens"], payload["total_tokens"], payload.get("estimated_usd"),
-             payload.get("estimated_budget_cost"), payload["pricing_status"], utc_now(),
-             payload.get("agent_id")),
+            (
+                payload["run_id"],
+                payload["provider"],
+                payload["model"],
+                payload["requests"],
+                payload["input_tokens"],
+                payload["cached_tokens"],
+                payload["output_tokens"],
+                payload["reasoning_tokens"],
+                payload["total_tokens"],
+                payload.get("estimated_usd"),
+                payload.get("estimated_budget_cost"),
+                payload["pricing_status"],
+                utc_now(),
+                payload.get("agent_id"),
+            ),
         )
         self.db.commit()
 
     def get_settings(self) -> dict:
         """Return per-company model routing settings."""
-        return dict(self.db.execute(
-            "SELECT model_mode,local_model,allow_cloud_fallback,cloud_provider,cloud_model,local_connection_id,cloud_connection_id,updated_at FROM runtime_settings WHERE id=1"
-        ).fetchone())
+        return dict(
+            self.db.execute(
+                "SELECT model_mode,local_model,allow_cloud_fallback,cloud_provider,cloud_model,local_connection_id,cloud_connection_id,updated_at FROM runtime_settings WHERE id=1"
+            ).fetchone()
+        )
 
     def set_model_mode(self, mode: str) -> None:
         """Select local, hybrid, or cloud routing for future cycles."""
         current = self.get_settings()
-        self.set_model_settings(mode, current["local_model"], bool(current["allow_cloud_fallback"]),
-                                current["cloud_provider"], current["cloud_model"])
+        self.set_model_settings(
+            mode,
+            current["local_model"],
+            bool(current["allow_cloud_fallback"]),
+            current["cloud_provider"],
+            current["cloud_model"],
+        )
 
-    def set_model_settings(self, mode: str, local_model: str, allow_cloud_fallback: bool = False,
-                           cloud_provider: str = "openai", cloud_model: str = "gpt-5.4-mini",
-                           local_connection_id: str = "local-default",
-                           cloud_connection_id: str = "cloud-default") -> None:
+    def set_model_settings(
+        self,
+        mode: str,
+        local_model: str,
+        allow_cloud_fallback: bool = False,
+        cloud_provider: str = "openai",
+        cloud_model: str = "gpt-5.4-mini",
+        local_connection_id: str = "local-default",
+        cloud_connection_id: str = "cloud-default",
+    ) -> None:
         """Atomically select routing and the concrete local/cloud models."""
         if mode not in {"local", "hybrid", "cloud"}:
             raise ValueError("Invalid model mode")
@@ -2273,16 +2804,30 @@ class CompanyStore:
             raise ValueError("Cloud model name must contain 1 to 200 characters")
         self.db.execute(
             "UPDATE runtime_settings SET model_mode=?,local_model=?,allow_cloud_fallback=?,cloud_provider=?,cloud_model=?,local_connection_id=?,cloud_connection_id=?,updated_at=? WHERE id=1",
-            (mode, local_model, int(allow_cloud_fallback), cloud_provider, cloud_model,
-             local_connection_id, cloud_connection_id, utc_now()),
+            (
+                mode,
+                local_model,
+                int(allow_cloud_fallback),
+                cloud_provider,
+                cloud_model,
+                local_connection_id,
+                cloud_connection_id,
+                utc_now(),
+            ),
         )
         self.db.commit()
-        self.audit("runtime.model_settings", {
-            "mode": mode, "local_model": local_model,
-            "allow_cloud_fallback": allow_cloud_fallback,
-            "cloud_provider": cloud_provider, "cloud_model": cloud_model,
-            "local_connection_id": local_connection_id, "cloud_connection_id": cloud_connection_id,
-        })
+        self.audit(
+            "runtime.model_settings",
+            {
+                "mode": mode,
+                "local_model": local_model,
+                "allow_cloud_fallback": allow_cloud_fallback,
+                "cloud_provider": cloud_provider,
+                "cloud_model": cloud_model,
+                "local_connection_id": local_connection_id,
+                "cloud_connection_id": cloud_connection_id,
+            },
+        )
 
     def audit(self, event_type: str, payload: dict) -> None:
         """Append an immutable event describing a meaningful state transition."""

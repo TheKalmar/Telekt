@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-
 BUILTIN_PLUGINS = [
     {
         "id": "web-research",
@@ -30,7 +29,10 @@ BUILTIN_PLUGINS = [
             "type": "object",
             "properties": {
                 "max_steps": {
-                    "type": "integer", "default": 12, "minimum": 1, "maximum": 30,
+                    "type": "integer",
+                    "default": 12,
+                    "minimum": 1,
+                    "maximum": 30,
                 },
                 "allow_human_takeover": {"type": "boolean", "default": True},
             },
@@ -50,7 +52,7 @@ BUILTIN_PLUGINS = [
             "type": "object",
             "properties": {
                 "draft_directory": {"type": "string", "default": "content/drafts"},
-                "default_language": {"type": "string", "default": "sr"},
+                "default_language": {"type": "string", "default": "en"},
             },
             "additionalProperties": False,
         },
@@ -64,8 +66,12 @@ BUILTIN_PLUGINS = [
         "tools": ["platform_api"],
         "connection_kinds": ["http_basic", "http_bearer", "http_api_key"],
         "permissions": [
-            "read_posts", "write_drafts", "manage_terms", "upload_media",
-            "write_seo_metadata", "publish_posts",
+            "read_posts",
+            "write_drafts",
+            "manage_terms",
+            "upload_media",
+            "write_seo_metadata",
+            "publish_posts",
         ],
         "connection_capabilities": {
             "read_posts": "wordpress.posts.read",
@@ -103,14 +109,25 @@ BUILTIN_PLUGINS = [
                 "enabled": {"type": "boolean", "default": True},
                 "model": {"type": "string", "default": "gpt-image-2"},
                 "size": {
-                    "type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536"],
+                    "type": "string",
+                    "enum": ["1024x1024", "1536x1024", "1024x1536"],
                     "default": "1536x1024",
                 },
-                "quality": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
-                "estimated_cost_eur": {
-                    "type": "number", "default": 0.25, "minimum": 0, "maximum": 10,
+                "quality": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "default": "medium",
                 },
-                "brand_style": {"type": "string", "default": "professional editorial photography, no text, no logos"},
+                "estimated_cost_eur": {
+                    "type": "number",
+                    "default": 0.25,
+                    "minimum": 0,
+                    "maximum": 10,
+                },
+                "brand_style": {
+                    "type": "string",
+                    "default": "professional editorial photography, no text, no logos",
+                },
             },
             "additionalProperties": False,
         },
@@ -155,16 +172,19 @@ def authorize_action(action: str, grants: list[dict]) -> tuple[bool, str]:
     requirement = ACTION_PLUGIN_REQUIREMENTS.get(action)
     if requirement:
         plugin_id, permission = requirement
-        matching_grant = next((
-            item for item in enabled
-            if item.get("plugin_id") == plugin_id
-            and permission in item.get("permissions", [])
-        ), None)
+        matching_grant = next(
+            (
+                item
+                for item in enabled
+                if item.get("plugin_id") == plugin_id and permission in item.get("permissions", [])
+            ),
+            None,
+        )
         if not matching_grant:
             return False, f"Action requires {plugin_id}:{permission}"
-        if action == "request_human_handoff" and not (
-            matching_grant.get("config") or {}
-        ).get("allow_human_takeover", True):
+        if action == "request_human_handoff" and not (matching_grant.get("config") or {}).get(
+            "allow_human_takeover", True
+        ):
             return False, "Human takeover is disabled in the browser-automation plugin"
     return True, "Action is inside enabled plugin grants"
 
@@ -188,7 +208,11 @@ def validate_plugin_config(definition: dict, config: dict) -> dict:
         if name not in normalized:
             continue
         value = normalized[name]
-        if rules.get("type") == "boolean" and isinstance(value, str) and value.lower() in {"true", "false"}:
+        if (
+            rules.get("type") == "boolean"
+            and isinstance(value, str)
+            and value.lower() in {"true", "false"}
+        ):
             value = normalized[name] = value.lower() == "true"
         if rules.get("type") == "integer" and isinstance(value, str) and value.strip().isdigit():
             value = normalized[name] = int(value)
@@ -216,6 +240,10 @@ def validate_plugin_config(definition: dict, config: dict) -> dict:
             parsed = urlparse(value)
             if parsed.scheme != "https" or not parsed.hostname:
                 raise ValueError(f"Plugin field {name} must be a public HTTPS URL")
-        if rules.get("format") == "email" and value and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+        if (
+            rules.get("format") == "email"
+            and value
+            and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value)
+        ):
             raise ValueError(f"Plugin field {name} must be an email address")
     return normalized

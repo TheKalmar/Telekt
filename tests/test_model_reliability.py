@@ -4,8 +4,12 @@ from agents import AgentOutputSchema, ModelBehaviorError
 
 from digital_company.agents import AgentEngine
 from digital_company.models import (
-    ActionType, CompanySnapshot, SpecialistResult, SpecialistResultDraft,
-    TaskProposal, TaskProposalDraft,
+    ActionType,
+    CompanySnapshot,
+    SpecialistResult,
+    SpecialistResultDraft,
+    TaskProposal,
+    TaskProposalDraft,
 )
 
 
@@ -40,7 +44,9 @@ def test_invalid_structured_output_is_repaired_once(monkeypatch):
     assert '"research_market"' in calls[1]
     assert "```" not in calls[1]
     assert [event for event, _ in events] == [
-        "model.started", "model.structured_output_error", "model.succeeded",
+        "model.started",
+        "model.structured_output_error",
+        "model.succeeded",
     ]
 
 
@@ -92,7 +98,10 @@ def test_cross_field_contract_error_is_repaired_with_precise_feedback(monkeypatc
 
     monkeypatch.setattr("digital_company.agents.Runner.run_sync", run_sync)
     result = engine._run(
-        agent, None, "company state", "ceo",
+        agent,
+        None,
+        "company state",
+        "ceo",
         output_validator=engine._task_proposal_validator,
     )
 
@@ -129,18 +138,26 @@ def test_repair_attempts_have_distinct_usage_records(monkeypatch):
     )
     outputs = iter((invalid, valid))
     usage = SimpleNamespace(
-        requests=1, input_tokens=10, output_tokens=5, total_tokens=15,
-        input_tokens_details=None, output_tokens_details=None,
+        requests=1,
+        input_tokens=10,
+        output_tokens=5,
+        total_tokens=15,
+        input_tokens_details=None,
+        output_tokens_details=None,
     )
 
     monkeypatch.setattr(
         "digital_company.agents.Runner.run_sync",
         lambda *args, **kwargs: SimpleNamespace(
-            final_output=next(outputs), context_wrapper=SimpleNamespace(usage=usage),
+            final_output=next(outputs),
+            context_wrapper=SimpleNamespace(usage=usage),
         ),
     )
     engine._run(
-        agent, None, "company state", "ceo",
+        agent,
+        None,
+        "company state",
+        "ceo",
         output_validator=engine._task_proposal_validator,
     )
 
@@ -173,10 +190,14 @@ def test_specialists_use_strict_model_output_without_runtime_dicts():
     for specialist in engine.specialists.values():
         assert specialist.output_type is SpecialistResultDraft
         assert AgentOutputSchema(specialist.output_type).is_strict_json_schema() is True
-    promoted = engine._specialist_result_validator(SpecialistResultDraft(
-        status="completed", summary="Done", evidence=["Verified"],
-        recommendation="Continue",
-    ))
+    promoted = engine._specialist_result_validator(
+        SpecialistResultDraft(
+            status="completed",
+            summary="Done",
+            evidence=["Verified"],
+            recommendation="Continue",
+        )
+    )
     assert isinstance(promoted, SpecialistResult)
     assert promoted.quality_report is None
 
@@ -187,9 +208,14 @@ def test_ceo_context_uses_compact_skill_routing_metadata(monkeypatch):
     engine.ceo_fallback = None
     captured = {}
     expected = TaskProposal(
-        action="research_market", title="Research market", objective="Find demand",
-        rationale="Need evidence", expected_evidence=["Sources"], specialist="research",
+        action="research_market",
+        title="Research market",
+        objective="Find demand",
+        rationale="Need evidence",
+        expected_evidence=["Sources"],
+        specialist="research",
     )
+
     def capture_run(agent, fallback, prompt, role, output_validator=None):
         captured["prompt"] = prompt
         captured["role"] = role
@@ -197,11 +223,23 @@ def test_ceo_context_uses_compact_skill_routing_metadata(monkeypatch):
 
     engine._run = capture_run
     snapshot = CompanySnapshot(
-        goal="Test", initial_budget_eur=10, spent_eur=0, remaining_budget_eur=10,
-        completed_tasks=[], pending_approvals=[], recent_evidence=[],
-        skills=[{"id": "market", "name": "Market", "roles": ["research"],
-                 "actions": ["research_market"], "status": "available",
-                 "instructions": "very long instructions that CEO does not need"}],
+        goal="Test",
+        initial_budget_eur=10,
+        spent_eur=0,
+        remaining_budget_eur=10,
+        completed_tasks=[],
+        pending_approvals=[],
+        recent_evidence=[],
+        skills=[
+            {
+                "id": "market",
+                "name": "Market",
+                "roles": ["research"],
+                "actions": ["research_market"],
+                "status": "available",
+                "instructions": "very long instructions that CEO does not need",
+            }
+        ],
     )
 
     engine.decide(snapshot)

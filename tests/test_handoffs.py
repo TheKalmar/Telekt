@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from digital_company import web
 from digital_company.models import ActionType, TaskProposal
@@ -37,9 +37,9 @@ def test_handoff_pauses_then_resumes_with_human_evidence(tmp_path: Path):
     store.initialize("Find a UI specialist", 1000, {"company_type": "SaaS"})
     store.set_control("running", "Test run")
 
-    result = CompanyOrchestrator(
-        store, tmp_path / "artifacts", engine=HandoffEngine()
-    ).run(max_cycles=1)
+    result = CompanyOrchestrator(store, tmp_path / "artifacts", engine=HandoffEngine()).run(
+        max_cycles=1
+    )
 
     assert result["status"] == "waiting_for_human"
     handoff = store.list_handoffs("pending")[0]
@@ -55,8 +55,12 @@ def test_handoff_requires_precise_resume_contract():
     try:
         TaskProposal(
             action=ActionType.REQUEST_HUMAN_HANDOFF,
-            title="Help with login", objective="Get access", rationale="Blocked",
-            expected_evidence=["Access"], specialist="operations", execution_mode="manual",
+            title="Help with login",
+            objective="Get access",
+            rationale="Blocked",
+            expected_evidence=["Access"],
+            specialist="operations",
+            execution_mode="manual",
         )
     except ValueError as exc:
         assert "instructions" in str(exc)
@@ -79,24 +83,40 @@ def test_stakeholder_directive_supersedes_pending_handoff(tmp_path: Path):
 
 def test_guided_browser_opens_the_frozen_pending_handoff(tmp_path: Path, monkeypatch):
     registry = CompanyRegistry(tmp_path / ".company")
-    company = registry.create({
-        "name": "Browser Test", "company_type": "SaaS", "concept": "Test handoffs",
-        "description": "", "goal": "Test", "budget": 1000, "currency": "EUR",
-        "target_market": "B2B", "customer_type": "B2B", "time_horizon_days": 30,
-        "risk_tolerance": "medium", "autonomy_level": "balanced", "constraints": [],
-        "success_criteria": ["Guided takeover"],
-    })
+    company = registry.create(
+        {
+            "name": "Browser Test",
+            "company_type": "SaaS",
+            "concept": "Test handoffs",
+            "description": "",
+            "goal": "Test",
+            "budget": 1000,
+            "currency": "EUR",
+            "target_market": "B2B",
+            "customer_type": "B2B",
+            "time_horizon_days": 30,
+            "risk_tolerance": "medium",
+            "autonomy_level": "balanced",
+            "constraints": [],
+            "success_criteria": ["Guided takeover"],
+        }
+    )
     store = registry.store_for(company["id"])
-    proposal = handoff_proposal().model_copy(update={
-        "handoff_allowed_domains": ["accounts.google.com"],
-    })
+    proposal = handoff_proposal().model_copy(
+        update={
+            "handoff_allowed_domains": ["accounts.google.com"],
+        }
+    )
     task_id = store.create_task(proposal, "proposed")
     handoff_id = store.create_handoff(task_id, proposal)
     calls = []
 
     def fake_browser(method, path, payload=None, timeout=40):
         calls.append((method, path, payload, timeout))
-        return b'{"status":"open","url":"https://www.upwork.com/ab/account-security/login"}', "application/json"
+        return (
+            b'{"status":"open","url":"https://www.upwork.com/ab/account-security/login"}',
+            "application/json",
+        )
 
     monkeypatch.setattr(web, "registry", registry)
     monkeypatch.setattr(web, "browser_runtime_request", fake_browser)
@@ -116,13 +136,24 @@ def test_guided_browser_opens_the_frozen_pending_handoff(tmp_path: Path, monkeyp
 
 def test_guided_browser_rejects_a_resolved_handoff(tmp_path: Path, monkeypatch):
     registry = CompanyRegistry(tmp_path / ".company")
-    company = registry.create({
-        "name": "Browser Test", "company_type": "SaaS", "concept": "Test handoffs",
-        "description": "", "goal": "Test", "budget": 1000, "currency": "EUR",
-        "target_market": "B2B", "customer_type": "B2B", "time_horizon_days": 30,
-        "risk_tolerance": "medium", "autonomy_level": "balanced", "constraints": [],
-        "success_criteria": ["Guided takeover"],
-    })
+    company = registry.create(
+        {
+            "name": "Browser Test",
+            "company_type": "SaaS",
+            "concept": "Test handoffs",
+            "description": "",
+            "goal": "Test",
+            "budget": 1000,
+            "currency": "EUR",
+            "target_market": "B2B",
+            "customer_type": "B2B",
+            "time_horizon_days": 30,
+            "risk_tolerance": "medium",
+            "autonomy_level": "balanced",
+            "constraints": [],
+            "success_criteria": ["Guided takeover"],
+        }
+    )
     store = registry.store_for(company["id"])
     proposal = handoff_proposal()
     task_id = store.create_task(proposal, "proposed")

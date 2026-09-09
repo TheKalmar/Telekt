@@ -5,11 +5,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from digital_company.browser_client import browser_runtime_request
-
 
 BLOCKED_KEYS = {"ENTER", "RETURN"}
 
@@ -28,11 +28,17 @@ class BrowserMissionRunner:
     safety checks and stops as soon as the page reports an authentication checkpoint.
     """
 
-    def __init__(self, runtime_request: Callable = browser_runtime_request, client: Any | None = None,
-                 model: str | None = None, reporter: Callable | None = None,
-                 control_state: Callable[[], str] | None = None):
+    def __init__(
+        self,
+        runtime_request: Callable = browser_runtime_request,
+        client: Any | None = None,
+        model: str | None = None,
+        reporter: Callable | None = None,
+        control_state: Callable[[], str] | None = None,
+    ):
         if client is None:
             from openai import OpenAI
+
             client = OpenAI()
         self.client = client
         self.runtime_request = runtime_request
@@ -41,16 +47,23 @@ class BrowserMissionRunner:
         self.control_state = control_state or (lambda: "running")
 
     def run(
-        self, company_id: str, objective: str, max_steps: int = 12,
+        self,
+        company_id: str,
+        objective: str,
+        max_steps: int = 12,
         mutation_scope: str = "read",
     ) -> MissionOutcome:
         if mutation_scope not in {"read", "draft", "publish"}:
             raise ValueError("Invalid browser mutation scope")
-        if not os.getenv("OPENAI_API_KEY") and self.client.__class__.__module__.startswith("openai"):
+        if not os.getenv("OPENAI_API_KEY") and self.client.__class__.__module__.startswith(
+            "openai"
+        ):
             return MissionOutcome("blocked", "Cloud API key is not configured", 0)
         initial = self._json("GET", f"/sessions/{company_id}")
         if initial.get("human_checkpoint"):
-            return self._stop("waiting_human", "Login, CAPTCHA, or verification checkpoint detected", 0)
+            return self._stop(
+                "waiting_human", "Login, CAPTCHA, or verification checkpoint detected", 0
+            )
         scope_instruction = {
             "read": "This is read-only: do not type into forms or change external state.",
             "draft": (
@@ -69,21 +82,29 @@ class BrowserMissionRunner:
             "Stop and explain when human action is required. Use the computer tool."
         )
         response = self.client.responses.create(
-            model=self.model, tools=[{"type": "computer"}], input=prompt,
+            model=self.model,
+            tools=[{"type": "computer"}],
+            input=prompt,
         )
         for step in range(1, max_steps + 1):
             interrupted = self._interrupted(step - 1)
             if interrupted:
                 return interrupted
-            calls = [item for item in response.output if getattr(item, "type", None) == "computer_call"]
+            calls = [
+                item for item in response.output if getattr(item, "type", None) == "computer_call"
+            ]
             if not calls:
                 summary = getattr(response, "output_text", "") or "Mission completed"
-                self.reporter("browser.mission_completed", {"steps": step - 1, "summary": summary[:500]})
+                self.reporter(
+                    "browser.mission_completed", {"steps": step - 1, "summary": summary[:500]}
+                )
                 return MissionOutcome("completed", summary, step - 1)
             call = calls[0]
             pending = getattr(call, "pending_safety_checks", None) or []
             if pending:
-                return self._stop("waiting_human", "Model safety confirmation requires a stakeholder", step - 1)
+                return self._stop(
+                    "waiting_human", "Model safety confirmation requires a stakeholder", step - 1
+                )
             for raw_action in call.actions:
                 interrupted = self._interrupted(step - 1)
                 if interrupted:
@@ -94,18 +115,35 @@ class BrowserMissionRunner:
                     return self._stop("waiting_human", reason, step - 1)
                 self.runtime_request("POST", f"/sessions/{company_id}/actions", action)
                 status = self._json("GET", f"/sessions/{company_id}")
-                self.reporter("browser.mission_action", {
-                    "step": step, "kind": action.get("kind"), "url": status.get("url"),
-                })
+                self.reporter(
+                    "browser.mission_action",
+                    {
+                        "step": step,
+                        "kind": action.get("kind"),
+                        "url": status.get("url"),
+                    },
+                )
                 if status.get("human_checkpoint"):
-                    return self._stop("waiting_human", "Login, CAPTCHA, or verification checkpoint detected", step)
+                    return self._stop(
+                        "waiting_human", "Login, CAPTCHA, or verification checkpoint detected", step
+                    )
             screenshot, _ = self.runtime_request("GET", f"/sessions/{company_id}/screenshot")
             response = self.client.responses.create(
-                model=self.model, tools=[{"type": "computer"}], previous_response_id=response.id,
-                input=[{"type": "computer_call_output", "call_id": call.call_id,
-                        "output": {"type": "computer_screenshot",
-                                   "image_url": "data:image/png;base64," + base64.b64encode(screenshot).decode(),
-                                   "detail": "original"}}],
+                model=self.model,
+                tools=[{"type": "computer"}],
+                previous_response_id=response.id,
+                input=[
+                    {
+                        "type": "computer_call_output",
+                        "call_id": call.call_id,
+                        "output": {
+                            "type": "computer_screenshot",
+                            "image_url": "data:image/png;base64,"
+                            + base64.b64encode(screenshot).decode(),
+                            "detail": "original",
+                        },
+                    }
+                ],
             )
         return self._stop("step_limit", f"Mission stopped at the {max_steps}-step limit", max_steps)
 
@@ -121,12 +159,16 @@ class BrowserMissionRunner:
         return json.loads(body)
 
     def _stop(self, status: str, summary: str, steps: int) -> MissionOutcome:
-        self.reporter("browser.mission_stopped", {"status": status, "summary": summary, "steps": steps})
+        self.reporter(
+            "browser.mission_stopped", {"status": status, "summary": summary, "steps": steps}
+        )
         return MissionOutcome(status, summary, steps)
 
     @staticmethod
     def _action_dict(action: Any) -> dict:
-        data = action.model_dump(exclude_none=True) if hasattr(action, "model_dump") else dict(action)
+        data = (
+            action.model_dump(exclude_none=True) if hasattr(action, "model_dump") else dict(action)
+        )
         action_type = data.pop("type")
         data["kind"] = "key" if action_type == "keypress" and "key" in data else action_type
         return data

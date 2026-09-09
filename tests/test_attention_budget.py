@@ -5,9 +5,14 @@ from digital_company.store import CompanyStore
 
 
 def proposal():
-    return TaskProposal(action=ActionType.EXTERNAL_OUTREACH, title="Validate demand",
-                        objective="Contact the shortlisted buyers", rationale="Need demand evidence",
-                        expected_evidence=["Replies"], specialist="growth")
+    return TaskProposal(
+        action=ActionType.EXTERNAL_OUTREACH,
+        title="Validate demand",
+        objective="Contact the shortlisted buyers",
+        rationale="Need demand evidence",
+        expected_evidence=["Replies"],
+        specialist="growth",
+    )
 
 
 def test_duplicate_pending_approval_is_detected(tmp_path: Path):

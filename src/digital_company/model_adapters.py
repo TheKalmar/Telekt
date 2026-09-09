@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from agents import AsyncOpenAI, OpenAIChatCompletionsModel, OpenAIResponsesModel
 from agents.extensions.models.litellm_model import LitellmModel
@@ -31,25 +31,19 @@ class ModelAdapterFactory:
         timeout_seconds: float | None = None,
     ):
         self.secret_reader = secret_reader
-        self.timeout_seconds = timeout_seconds or float(
-            os.getenv("MODEL_TIMEOUT_SECONDS", "240")
-        )
+        self.timeout_seconds = timeout_seconds or float(os.getenv("MODEL_TIMEOUT_SECONDS", "240"))
 
     def build(
         self, connection: dict | None, *, default_model: str, default_cloud: bool
     ) -> ModelBinding:
         if not connection:
             if default_cloud:
-                return ModelBinding(
-                    default_model, bool(os.getenv("OPENAI_API_KEY")), True
-                )
+                return ModelBinding(default_model, bool(os.getenv("OPENAI_API_KEY")), True)
             connection = {
                 "id": "local-default",
                 "adapter": "openai_compatible",
                 "location": "local",
-                "base_url": os.getenv(
-                    "OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"
-                ),
+                "base_url": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
                 "model": default_model,
                 "requires_api_key": False,
             }

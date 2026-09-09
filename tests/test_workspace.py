@@ -16,11 +16,13 @@ def test_workspace_atomically_writes_and_validates_html(tmp_path: Path):
     assert metadata["checks"]["passed"] is True
     assert metadata["size_bytes"] > 20
     assert len(metadata["sha256"]) == 64
-    assert workspace.inventory() == [{
-        "path": "mvp/index.html",
-        "size_bytes": metadata["size_bytes"],
-        "sha256": metadata["sha256"],
-    }]
+    assert workspace.inventory() == [
+        {
+            "path": "mvp/index.html",
+            "size_bytes": metadata["size_bytes"],
+            "sha256": metadata["sha256"],
+        }
+    ]
 
 
 @pytest.mark.parametrize("path", ["../secret.txt", "/etc/passwd", "mvp\\index.html", "app.exe"])

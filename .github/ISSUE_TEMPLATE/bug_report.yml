@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible Telekt failure without sharing private company data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping make durable agents less surprising.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the expected and observed behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Remove credentials, customer content, and personal information.
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime mode
+      options:
+        - Docker with PostgreSQL and Temporal
+        - Lightweight SQLite development mode
+        - Native Python
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Commit or version
+      placeholder: 87e0cad or v0.1.0
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: I removed secrets and private company/customer data from this report.
+          required: true

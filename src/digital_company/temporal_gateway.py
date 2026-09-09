@@ -5,15 +5,17 @@ durably wake the matching company workflow. The gateway is disabled when
 ``TEMPORAL_ADDRESS`` is absent, preserving the lightweight SQLite development
 stack while the infrastructure overlay uses Temporal exclusively.
 """
+
 from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import suppress
 
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
-from digital_company.temporal_workflow import AgentLoopWorkflow, CompanyLoopWorkflow, TASK_QUEUE
+from digital_company.temporal_workflow import TASK_QUEUE, AgentLoopWorkflow, CompanyLoopWorkflow
 
 
 class TemporalCommandError(RuntimeError):
@@ -44,22 +46,20 @@ def legacy_agent_workflow_id(company_id: str, agent_id: str) -> str:
 
 async def ensure_workflow(client: Client, company_id: str):
     """Start the company workflow once and return its stable handle."""
-    try:
+    with suppress(WorkflowAlreadyStartedError):
         await client.start_workflow(
             CompanyLoopWorkflow.run,
             company_id,
             id=workflow_id(company_id),
             task_queue=TASK_QUEUE,
         )
-    except WorkflowAlreadyStartedError:
-        pass
     return client.get_workflow_handle(workflow_id(company_id))
 
 
 async def ensure_agent_workflow(client: Client, company_id: str, agent_id: str):
     """Start exactly one stable Temporal workflow for this agent instance."""
     identity = agent_workflow_id(company_id, agent_id)
-    try:
+    with suppress(WorkflowAlreadyStartedError):
         await client.start_workflow(
             AgentLoopWorkflow.run,
             {
@@ -70,17 +70,13 @@ async def ensure_agent_workflow(client: Client, company_id: str, agent_id: str):
             id=identity,
             task_queue=TASK_QUEUE,
         )
-    except WorkflowAlreadyStartedError:
-        pass
     handle = client.get_workflow_handle(identity)
     # A sleeping V2 loop could otherwise wake later and race the V3 owner. This
     # migration signal is best-effort because many installations never created
     # a V2 workflow for this agent.
-    try:
+    with suppress(Exception):
         legacy = client.get_workflow_handle(legacy_agent_workflow_id(company_id, agent_id))
         await legacy.signal("shutdown", "superseded_by_agent_loop_v3")
-    except Exception:
-        pass
     return handle
 
 
@@ -112,7 +108,10 @@ def signal_company(company_id: str, signal_name: str, reason: str) -> bool:
 
 
 async def _signal_agent(
-    company_id: str, agent_id: str, signal_name: str, reason: str,
+    company_id: str,
+    agent_id: str,
+    signal_name: str,
+    reason: str,
 ) -> None:
     client = await Client.connect(
         os.environ["TEMPORAL_ADDRESS"],
@@ -123,7 +122,10 @@ async def _signal_agent(
 
 
 def signal_agent(
-    company_id: str, agent_id: str, signal_name: str, reason: str,
+    company_id: str,
+    agent_id: str,
+    signal_name: str,
+    reason: str,
 ) -> bool:
     """Durably control one agent without changing any sibling agent."""
     if not enabled():

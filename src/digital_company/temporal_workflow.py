@@ -1,19 +1,22 @@
 """Signal-driven Temporal workflow for one long-running digital company."""
+
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-
 TASK_QUEUE = "digital-company-v4"
 HISTORY_EVENT_LIMIT = 1000
 RUN_CYCLE_LIMIT = 250
 WAITING_STATUSES = {
-    "waiting_for_approval", "waiting_for_human", "paused", "stopped",
-    "error", "failed",
+    "waiting_for_approval",
+    "waiting_for_human",
+    "paused",
+    "stopped",
+    "error",
+    "failed",
 }
 
 
@@ -129,7 +132,7 @@ class CompanyLoopWorkflow:
                         lambda: (self._running and not self._paused) or self._shutdown,
                         timeout=timedelta(hours=1),
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await workflow.execute_activity(
                         "send_company_brief",
                         company_id,
@@ -143,8 +146,10 @@ class CompanyLoopWorkflow:
 
             result = await workflow.execute_activity(
                 "advance_company",
-                {"company_id": company_id,
-                 "execution_key": f"{company_id}:execution:{self._execution_sequence + 1}"},
+                {
+                    "company_id": company_id,
+                    "execution_key": f"{company_id}:execution:{self._execution_sequence + 1}",
+                },
                 start_to_close_timeout=timedelta(minutes=10),
                 schedule_to_start_timeout=timedelta(minutes=2),
                 schedule_to_close_timeout=timedelta(minutes=35),
@@ -177,15 +182,17 @@ class CompanyLoopWorkflow:
             and not info.is_continue_as_new_suggested()
         ):
             return
-        workflow.continue_as_new({
-            "company_id": company_id,
-            "running": self._running and not self._paused,
-            "execution_sequence": self._execution_sequence,
-            "cycles": self._cycles,
-            "wake_count": self._wake_count,
-            "last_status": self._last_status,
-            "last_wake_reason": self._last_wake_reason,
-        })
+        workflow.continue_as_new(
+            {
+                "company_id": company_id,
+                "running": self._running and not self._paused,
+                "execution_sequence": self._execution_sequence,
+                "cycles": self._cycles,
+                "wake_count": self._wake_count,
+                "last_status": self._last_status,
+                "last_wake_reason": self._last_wake_reason,
+            }
+        )
 
 
 @workflow.defn(name="AgentLoopWorkflowV2")
@@ -316,7 +323,7 @@ class AgentLoopWorkflow:
                         lambda: self._running or self._shutdown,
                         timeout=timedelta(seconds=delay),
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if self._last_status == "sleeping" and not self._paused and not self._shutdown:
                         self._running = True
                         self._last_wake_reason = "scheduled_wake"

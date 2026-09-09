@@ -1,5 +1,9 @@
 # Telekt — Digital AI Company
 
+[![CI](https://github.com/TheKalmar/Telekt/actions/workflows/ci.yml/badge.svg)](https://github.com/TheKalmar/Telekt/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://www.python.org/)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](docs/known-limitations.md)
+
 Telekt is a control plane for a portfolio of digital companies. Organization
 facts are independent from digital employees: after creating a company, the
 owner adds any number of typed agent instances. Every agent has its own mandate,
@@ -25,6 +29,8 @@ plugins are the enforceable runtime authority layer.
 
 The control-plane UI supports English and Serbian through an extensible
 translation catalog. See [`docs/LOCALIZATION.md`](docs/LOCALIZATION.md).
+English is the source language for code, documentation, logs, and first-run UI;
+Serbian is maintained as an explicit locale rather than mixed into source copy.
 
 This repository proves the control loop and governance model. It is not yet a production-ready autonomous business platform.
 
@@ -211,6 +217,20 @@ Pause and stop are cooperative. An in-flight model request or database write is 
 
 ## Tests
 
+Run the complete local quality gate from any directory:
+
+```powershell
+.\scripts\check.ps1
+```
+
+It verifies formatting, static analysis, branch-aware test coverage, behavior
+eval fixtures, medium/high-severity security findings, and installed dependencies.
+The same checks run on Python 3.11 and 3.12 in GitHub Actions. See
+[Engineering standards](docs/engineering-standards.md) for the rationale and
+the boundaries intentionally excluded from unit coverage.
+
+For a quick test-only run:
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
@@ -283,11 +303,12 @@ Read these in order:
 7. [Known limitations](docs/known-limitations.md)
 8. [Email approvals](docs/email-approvals.md)
 9. [Agent operating cadence and content pipeline](docs/agent-operating-cadence.md)
-9. [Model reliability](docs/model-reliability.md)
-10. [Platform strategy and Shopify](docs/platform-integrations.md)
-11. [Browser missions and human takeover](docs/browser-handoffs.md)
-12. [Isolated execution runtime](docs/execution-runtime.md)
-13. [Company policy and approval quorum](docs/company-policy.md)
+10. [Model reliability](docs/model-reliability.md)
+11. [Platform strategy and Shopify](docs/platform-integrations.md)
+12. [Browser missions and human takeover](docs/browser-handoffs.md)
+13. [Isolated execution runtime](docs/execution-runtime.md)
+14. [Company policy and approval quorum](docs/company-policy.md)
+15. [Engineering standards](docs/engineering-standards.md)
 
 ## Security warning
 

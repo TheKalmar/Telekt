@@ -124,7 +124,8 @@
     "agent.playbookNotes":"Dodatne napomene","agent.savePlaybook":"Sačuvaj novu verziju playbooka"
   });
   const labels = {en:"English",sr:"Srpski"};
-  let language = localStorage.getItem(STORAGE_KEY) || (navigator.language.toLowerCase().startsWith("sr") ? "sr" : "en");
+  // English is the source and first-run language. Other locales are explicit user choices.
+  let language = localStorage.getItem(STORAGE_KEY) || "en";
   if (!catalogs[language]) language = "en";
   const t = key => catalogs[language]?.[key] ?? catalogs.en[key] ?? key;
   const apply = (root=document) => {

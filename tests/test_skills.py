@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import pytest
 
 from digital_company.store import CompanyStore
@@ -34,6 +35,9 @@ def test_agent_skill_mismatch_is_replaced_with_safe_matching_default(tmp_path: P
     store = CompanyStore(tmp_path / "company.db")
     store.initialize("Build a company", 1000)
     resolved = store.resolve_skills(
-        ["market-evidence"], "product", "define_product", strict=False,
+        ["market-evidence"],
+        "product",
+        "define_product",
+        strict=False,
     )
     assert [skill["id"] for skill in resolved] == ["lean-product"]

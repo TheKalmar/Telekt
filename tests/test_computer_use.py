@@ -14,10 +14,18 @@ class FakeResponses:
 
 
 def response(*actions, text=""):
-    output = [] if not actions else [SimpleNamespace(
-        type="computer_call", call_id="call-1", actions=list(actions),
-        pending_safety_checks=[],
-    )]
+    output = (
+        []
+        if not actions
+        else [
+            SimpleNamespace(
+                type="computer_call",
+                call_id="call-1",
+                actions=list(actions),
+                pending_safety_checks=[],
+            )
+        ]
+    )
     return SimpleNamespace(id="response-1", output=output, output_text=text)
 
 
@@ -33,18 +41,26 @@ def runtime(checkpoint=False):
         if path.endswith("/screenshot"):
             return b"png", "image/png"
         if method == "GET":
-            return (b'{"url":"https://example.com","human_checkpoint":%s}' %
-                    (b"true" if checkpoint else b"false")), "application/json"
+            return (
+                b'{"url":"https://example.com","human_checkpoint":%s}'
+                % (b"true" if checkpoint else b"false")
+            ), "application/json"
         return b"{}", "application/json"
+
     return request, calls
 
 
 def test_safe_action_is_executed_and_audited():
     request, calls = runtime()
     events = []
-    fake = SimpleNamespace(responses=FakeResponses([
-        response(action("click", x=20, y=30)), response(text="Found the pricing page"),
-    ]))
+    fake = SimpleNamespace(
+        responses=FakeResponses(
+            [
+                response(action("click", x=20, y=30)),
+                response(text="Found the pricing page"),
+            ]
+        )
+    )
     outcome = BrowserMissionRunner(request, fake, reporter=lambda *item: events.append(item)).run(
         "acme", "inspect public pricing", 3
     )
@@ -72,19 +88,29 @@ def test_submit_key_and_model_safety_check_fail_closed():
     assert not any(call[0] == "POST" for call in calls)
 
     guarded_call = SimpleNamespace(
-        type="computer_call", call_id="call-2", actions=[], pending_safety_checks=[{"id": "x"}],
+        type="computer_call",
+        call_id="call-2",
+        actions=[],
+        pending_safety_checks=[{"id": "x"}],
     )
-    guarded = SimpleNamespace(responses=FakeResponses([
-        SimpleNamespace(id="r", output=[guarded_call], output_text="")
-    ]))
-    assert BrowserMissionRunner(request, guarded).run("acme", "continue", 3).status == "waiting_human"
+    guarded = SimpleNamespace(
+        responses=FakeResponses([SimpleNamespace(id="r", output=[guarded_call], output_text="")])
+    )
+    assert (
+        BrowserMissionRunner(request, guarded).run("acme", "continue", 3).status == "waiting_human"
+    )
 
 
 def test_step_limit_is_deterministic():
     request, _ = runtime()
-    fake = SimpleNamespace(responses=FakeResponses([
-        response(action("screenshot")), response(action("screenshot")),
-    ]))
+    fake = SimpleNamespace(
+        responses=FakeResponses(
+            [
+                response(action("screenshot")),
+                response(action("screenshot")),
+            ]
+        )
+    )
     outcome = BrowserMissionRunner(request, fake).run("acme", "observe", 1)
     assert outcome.status == "step_limit"
     assert outcome.steps == 1

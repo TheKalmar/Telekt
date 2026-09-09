@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _MOJIBAKE_PREFIXES = {"\u00c2", "\u00c3", "\u00c4", "\u00c5", "\u00e2"}
 
 
@@ -44,8 +43,7 @@ def repair_text_encoding(value: Any) -> Any:
         return repaired
     if isinstance(value, dict):
         return {
-            repair_text_encoding(key): repair_text_encoding(item)
-            for key, item in value.items()
+            repair_text_encoding(key): repair_text_encoding(item) for key, item in value.items()
         }
     if isinstance(value, list):
         return [repair_text_encoding(item) for item in value]

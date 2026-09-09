@@ -42,6 +42,8 @@ def score_content(package: ContentPackage, minimum_words: int = 700) -> dict:
         "score": score,
         "maximum": sum(weight for _name, _passed, weight in checks),
         "word_count": len(words),
-        "checks": [{"name": name, "passed": passed, "weight": weight} for name, passed, weight in checks],
+        "checks": [
+            {"name": name, "passed": passed, "weight": weight} for name, passed, weight in checks
+        ],
         "issues": [name for name, passed, _weight in checks if not passed],
     }

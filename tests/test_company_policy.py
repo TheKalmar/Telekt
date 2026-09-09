@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,19 +26,20 @@ def test_policy_versions_are_immutable_and_contract_ban_cannot_be_removed(tmp_pa
     assert store.schema_version() == 12
     initial = store.get_policy()
 
-    updated = store.set_policy({
-        **initial["document"],
-        "deny_actions": [],
-        "approval_quorum": 2,
-    }, "test-owner")
+    updated = store.set_policy(
+        {
+            **initial["document"],
+            "deny_actions": [],
+            "approval_quorum": 2,
+        },
+        "test-owner",
+    )
 
     assert initial["version"] == 1
     assert updated["version"] == 2
     assert updated["document"]["approval_quorum"] == 2
     assert ActionType.SIGN_CONTRACT.value in updated["document"]["deny_actions"]
-    old = store.db.execute(
-        "SELECT status FROM policy_versions WHERE version=1"
-    ).fetchone()
+    old = store.db.execute("SELECT status FROM policy_versions WHERE version=1").fetchone()
     assert old["status"] == "superseded"
 
 
@@ -46,7 +47,9 @@ def test_policy_can_allow_small_spend_but_never_overspend_or_sign():
     governor = Governor(PolicyDocument(autonomous_spend_limit_eur=25))
 
     assert governor.evaluate(proposal(ActionType.SPEND_MONEY, 20), 100).outcome == "allow"
-    assert governor.evaluate(proposal(ActionType.SPEND_MONEY, 30), 100).outcome == "require_approval"
+    assert (
+        governor.evaluate(proposal(ActionType.SPEND_MONEY, 30), 100).outcome == "require_approval"
+    )
     assert governor.evaluate(proposal(ActionType.SPEND_MONEY, 20), 10).outcome == "deny"
     assert governor.evaluate(proposal(ActionType.SIGN_CONTRACT), 100).outcome == "deny"
 
@@ -57,7 +60,11 @@ def test_distinct_approvers_must_reach_quorum(tmp_path: Path):
     task = proposal(ActionType.EXTERNAL_OUTREACH)
     task_id = store.create_task(task, "proposed")
     approval_id = store.request_approval(
-        task_id, task, "External action", required_approvals=2, ttl_hours=24,
+        task_id,
+        task,
+        "External action",
+        required_approvals=2,
+        ttl_hours=24,
     )
 
     first = store.approve(approval_id, "Looks good", "alice@example.com")
@@ -77,7 +84,7 @@ def test_expired_approval_cannot_release_task(tmp_path: Path):
     task = proposal(ActionType.EXTERNAL_OUTREACH)
     task_id = store.create_task(task, "proposed")
     approval_id = store.request_approval(task_id, task, "External action", ttl_hours=1)
-    expired = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    expired = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
     store.db.execute("UPDATE approvals SET expires_at=? WHERE id=?", (expired, approval_id))
     store.db.commit()
 
@@ -96,7 +103,10 @@ def test_concurrent_distinct_votes_release_exactly_once(tmp_path: Path):
         task = proposal(ActionType.EXTERNAL_OUTREACH)
         task_id = store.create_task(task, "proposed")
         approval_id = store.request_approval(
-            task_id, task, "External action", required_approvals=2,
+            task_id,
+            task,
+            "External action",
+            required_approvals=2,
         )
 
     def vote(voter: str) -> dict:

@@ -1,12 +1,15 @@
 import pytest
+from pydantic import ValidationError
 
+from digital_company.api_models import BrowserActionIn
 from digital_company.browser_policy import contains_human_checkpoint, validate_browser_url
 
 
 def test_browser_url_requires_https_and_explicit_domain_allowlist():
-    assert validate_browser_url(
-        "https://accounts.example.com/login", ["example.com"]
-    ) == "https://accounts.example.com/login"
+    assert (
+        validate_browser_url("https://accounts.example.com/login", ["example.com"])
+        == "https://accounts.example.com/login"
+    )
 
     with pytest.raises(ValueError, match="HTTPS"):
         validate_browser_url("http://example.com", ["example.com"])
@@ -29,3 +32,16 @@ def test_human_checkpoint_detection_is_conservative():
     assert not contains_human_checkpoint(
         "https://example.com/catalog", "Products", "Browse the current collection"
     )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["click", "type", "key", "scroll", "move", "drag", "wait", "screenshot", "navigate"],
+)
+def test_browser_api_contract_accepts_every_runtime_action(kind):
+    assert BrowserActionIn(kind=kind).kind == kind
+
+
+def test_browser_api_contract_rejects_unknown_actions():
+    with pytest.raises(ValidationError):
+        BrowserActionIn(kind="execute_script")

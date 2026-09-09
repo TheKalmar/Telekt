@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+from contextlib import suppress
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
+from typing import ClassVar
 
 
 class _HTMLProbe(HTMLParser):
@@ -26,7 +28,14 @@ class _HTMLProbe(HTMLParser):
 class WorkspaceRuntime:
     """Write and inspect only safe files below one company's artifact root."""
 
-    ALLOWED_SUFFIXES = {".html", ".css", ".js", ".json", ".md", ".txt"}
+    ALLOWED_SUFFIXES: ClassVar[set[str]] = {
+        ".html",
+        ".css",
+        ".js",
+        ".json",
+        ".md",
+        ".txt",
+    }
     MAX_FILE_BYTES = 2 * 1024 * 1024
 
     def __init__(self, root: Path):
@@ -62,10 +71,8 @@ class WorkspaceRuntime:
                 os.fsync(handle.fileno())
             os.replace(temporary, target)
         except Exception:
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(temporary)
-            except FileNotFoundError:
-                pass
             raise
         checks = self.validate(relative_path, content)
         return {
@@ -84,11 +91,13 @@ class WorkspaceRuntime:
             probe = _HTMLProbe()
             try:
                 probe.feed(body)
-                checks.update({
-                    "html_document": "html" in probe.tags,
-                    "has_body": "body" in probe.tags,
-                    "has_script": "script" in probe.tags,
-                })
+                checks.update(
+                    {
+                        "html_document": "html" in probe.tags,
+                        "has_body": "body" in probe.tags,
+                        "has_script": "script" in probe.tags,
+                    }
+                )
             except Exception:
                 checks["parseable_html"] = False
         checks["passed"] = all(checks.values())
@@ -102,9 +111,11 @@ class WorkspaceRuntime:
             if target.suffix.lower() not in self.ALLOWED_SUFFIXES:
                 continue
             content = target.read_bytes()
-            files.append({
-                "path": relative,
-                "size_bytes": len(content),
-                "sha256": hashlib.sha256(content).hexdigest(),
-            })
+            files.append(
+                {
+                    "path": relative,
+                    "size_bytes": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+            )
         return files

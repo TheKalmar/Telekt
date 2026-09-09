@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from digital_company import execution_runtime
 
@@ -10,9 +10,12 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     monkeypatch.setattr(execution_runtime, "DATA_DIR", tmp_path.resolve())
     monkeypatch.setattr(execution_runtime, "TOKEN", "test-token")
     monkeypatch.setattr(execution_runtime, "COMMANDS_ENABLED", True)
-    return TestClient(execution_runtime.app, headers={
-        "X-Telekt-Execution-Token": "test-token",
-    })
+    return TestClient(
+        execution_runtime.app,
+        headers={
+            "X-Telekt-Execution-Token": "test-token",
+        },
+    )
 
 
 def checkpoint_payload(key: str | None = None) -> dict:
@@ -92,9 +95,10 @@ def test_structured_command_runs_without_a_shell_and_caches_result(tmp_path, mon
 
 
 def test_runtime_requires_shared_internal_token(tmp_path, monkeypatch):
-    api = client(tmp_path, monkeypatch)
+    client(tmp_path, monkeypatch)
     response = TestClient(execution_runtime.app).post(
-        "/workspaces/company-1/repository/checkpoints", json=checkpoint_payload(),
+        "/workspaces/company-1/repository/checkpoints",
+        json=checkpoint_payload(),
     )
     assert response.status_code == 401
 
@@ -102,11 +106,14 @@ def test_runtime_requires_shared_internal_token(tmp_path, monkeypatch):
 def test_general_commands_fail_closed_without_process_sandbox(tmp_path, monkeypatch):
     api = client(tmp_path, monkeypatch)
     monkeypatch.setattr(execution_runtime, "COMMANDS_ENABLED", False)
-    response = api.post("/workspaces/company-1/commands", json={
-        "idempotency_key": "disabled-command-check",
-        "executable": "python",
-        "args": ["verify.py"],
-        "cwd": ".",
-        "timeout_seconds": 10,
-    })
+    response = api.post(
+        "/workspaces/company-1/commands",
+        json={
+            "idempotency_key": "disabled-command-check",
+            "executable": "python",
+            "args": ["verify.py"],
+            "cwd": ".",
+            "timeout_seconds": 10,
+        },
+    )
     assert response.status_code == 503

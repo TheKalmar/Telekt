@@ -6,7 +6,6 @@ import hashlib
 import re
 from urllib.parse import urlparse
 
-
 ADAPTERS = {
     "smtp": {
         "label": "SMTP mailbox",
@@ -67,11 +66,20 @@ def validate_connection(value: dict) -> dict:
         raise ValueError("Connection location must be local or cloud")
     parsed = urlparse(base_url)
     allowed_schemes = (
-        {"smtp", "smtps"} if adapter == "smtp"
-        else {"http", "https"} if location == "local"
+        {"smtp", "smtps"}
+        if adapter == "smtp"
+        else {"http", "https"}
+        if location == "local"
         else {"https"}
     )
-    if parsed.scheme not in allowed_schemes or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        parsed.scheme not in allowed_schemes
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("Connection base URL is invalid for its location")
     capabilities = list(dict.fromkeys(str(item).strip() for item in value.get("capabilities", [])))
     if not capabilities or any(not CAPABILITY_RE.fullmatch(item) for item in capabilities):
@@ -80,7 +88,9 @@ def validate_connection(value: dict) -> dict:
     if len(str(config)) > 4000:
         raise ValueError("Integration configuration is too large")
     if adapter == "smtp":
-        security = str(config.get("security") or ("ssl" if parsed.scheme == "smtps" else "starttls")).lower()
+        security = str(
+            config.get("security") or ("ssl" if parsed.scheme == "smtps" else "starttls")
+        ).lower()
         authentication = str(config.get("authentication", "password")).lower()
         if security not in {"starttls", "ssl", "plain"}:
             raise ValueError("SMTP security must be starttls, ssl, or plain")

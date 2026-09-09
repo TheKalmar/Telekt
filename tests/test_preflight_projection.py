@@ -29,7 +29,11 @@ def test_preflight_projection_keeps_optional_services_as_warnings():
 
     assert result["ready"] is True
     assert [item["status"] for item in result["checks"]] == [
-        "pass", "pass", "warn", "warn", "warn",
+        "pass",
+        "pass",
+        "warn",
+        "warn",
+        "warn",
     ]
 
 

@@ -22,7 +22,6 @@ import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-
 app = FastAPI(title="Telekt Isolated Execution Runtime")
 DATA_DIR = Path(os.getenv("EXECUTION_DATA_DIR", "/workspaces")).resolve()
 TOKEN = os.getenv("EXECUTION_RUNTIME_TOKEN", "")
@@ -30,8 +29,16 @@ COMMANDS_ENABLED = os.getenv("EXECUTION_COMMANDS_ENABLED", "false").lower() == "
 COMPANY_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 BRANCH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,119}$")
 ALLOWED_SUFFIXES = {
-    ".css", ".html", ".js", ".json", ".md", ".py", ".toml", ".txt",
-    ".yaml", ".yml",
+    ".css",
+    ".html",
+    ".js",
+    ".json",
+    ".md",
+    ".py",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
 }
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_BYTES = 128 * 1024
@@ -95,7 +102,9 @@ def _lock(company_id: str) -> threading.Lock:
 
 def _fingerprint(payload: BaseModel) -> str:
     body = payload.model_dump(mode="json")
-    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _cache_path(root: Path, category: str, key: str) -> Path:
@@ -153,8 +162,13 @@ def _write_file(root: Path, item: RuntimeFile) -> dict:
 
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=root, text=True, capture_output=True, check=check,
-        timeout=30, env={"PATH": os.environ.get("PATH", ""), "HOME": str(root / ".home")},
+        ["git", *args],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=check,
+        timeout=30,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": str(root / ".home")},
     )
 
 
@@ -218,15 +232,25 @@ def _validate_command(payload: CommandIn) -> None:
             or (not args[0].startswith("-") and args[0].endswith(".py"))
         )
     elif payload.executable == "pytest":
-        valid = all(not arg.startswith("/") and ".." not in PurePosixPath(arg).parts for arg in args)
+        valid = all(
+            not arg.startswith("/") and ".." not in PurePosixPath(arg).parts for arg in args
+        )
     elif payload.executable == "node":
         valid = bool(args) and not args[0].startswith("-") and args[0].endswith(".js")
     elif payload.executable == "npm":
         valid = bool(args) and args[0] in {"test", "run", "ci"}
     else:
         safe_git = {
-            "init", "status", "add", "commit", "branch", "switch", "checkout",
-            "log", "diff", "rev-parse",
+            "init",
+            "status",
+            "add",
+            "commit",
+            "branch",
+            "switch",
+            "checkout",
+            "log",
+            "diff",
+            "rev-parse",
         }
         valid = bool(args) and args[0] in safe_git
     if not valid:
@@ -257,11 +281,17 @@ def execute_command(
             return cached
         try:
             completed = subprocess.run(
-                [payload.executable, *payload.args], cwd=cwd, text=False, capture_output=True,
-                timeout=payload.timeout_seconds, check=False,
+                [payload.executable, *payload.args],
+                cwd=cwd,
+                text=False,
+                capture_output=True,
+                timeout=payload.timeout_seconds,
+                check=False,
                 env={
-                    "PATH": os.environ.get("PATH", ""), "HOME": str(root / ".home"),
-                    "CI": "true", "PYTHONDONTWRITEBYTECODE": "1",
+                    "PATH": os.environ.get("PATH", ""),
+                    "HOME": str(root / ".home"),
+                    "CI": "true",
+                    "PYTHONDONTWRITEBYTECODE": "1",
                 },
             )
             result = {
@@ -274,10 +304,12 @@ def execute_command(
             }
         except subprocess.TimeoutExpired as exc:
             result = {
-                "status": "timed_out", "exit_code": None,
+                "status": "timed_out",
+                "exit_code": None,
                 "stdout": (exc.stdout or b"")[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
                 "stderr": (exc.stderr or b"")[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
-                "timed_out": True, "cached": False,
+                "timed_out": True,
+                "cached": False,
             }
         _store_cache(cache, fingerprint, result)
         return result

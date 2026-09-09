@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,6 +24,7 @@ class CompanyRegistry:
     each company's own :class:`CompanyStore`, preventing cross-company context
     leakage and simplifying future per-tenant migration.
     """
+
     def __init__(self, state_dir: Path):
         self.state_dir = state_dir
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -41,7 +42,9 @@ class CompanyRegistry:
             self._initialize_postgres()
             self._import_legacy_registry()
         else:
-            self.db = sqlite3.connect(state_dir / "registry.db", timeout=30, check_same_thread=False)
+            self.db = sqlite3.connect(
+                state_dir / "registry.db", timeout=30, check_same_thread=False
+            )
             self.db.row_factory = sqlite3.Row
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA busy_timeout=30000")
@@ -96,9 +99,15 @@ class CompanyRegistry:
             "INSERT INTO telekt.schema_version(version,description) "
             "VALUES(3,'PostgreSQL portfolio registry') ON CONFLICT(version) DO NOTHING"
         )
-        self.db.execute("CREATE INDEX IF NOT EXISTS companies_source_id ON telekt.companies(source_id)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS companies_updated_at ON telekt.companies(updated_at DESC)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS work_leases_expiry ON telekt.work_leases(expires_at)")
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS companies_source_id ON telekt.companies(source_id)"
+        )
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS companies_updated_at ON telekt.companies(updated_at DESC)"
+        )
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS work_leases_expiry ON telekt.work_leases(expires_at)"
+        )
         self.db.execute(
             "CREATE INDEX IF NOT EXISTS worker_heartbeats_time "
             "ON telekt.worker_heartbeats(heartbeat_at DESC)"
@@ -123,7 +132,10 @@ class CompanyRegistry:
         source = sqlite3.connect(f"file:{registry_path.as_posix()}?mode=ro", uri=True)
         source.row_factory = sqlite3.Row
         try:
-            tables = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            tables = {
+                row[0]
+                for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
             if "companies" not in tables:
                 return
             for row in source.execute("SELECT * FROM companies"):
@@ -139,12 +151,20 @@ class CompanyRegistry:
                         (company_id, row["db_path"], row["artifacts_path"], existing["id"]),
                     )
                     continue
-                source_store = sqlite3.connect(f"file:{Path(row['db_path']).as_posix()}?mode=ro", uri=True)
+                source_store = sqlite3.connect(
+                    f"file:{Path(row['db_path']).as_posix()}?mode=ro", uri=True
+                )
                 source_store.row_factory = sqlite3.Row
                 try:
-                    header = source_store.execute("SELECT goal,initial_budget_eur FROM company WHERE id=1").fetchone()
-                    control = source_store.execute("SELECT state FROM runtime_control WHERE id=1").fetchone()
-                    profile_row = source_store.execute("SELECT profile_json FROM company_profile WHERE id=1").fetchone()
+                    header = source_store.execute(
+                        "SELECT goal,initial_budget_eur FROM company WHERE id=1"
+                    ).fetchone()
+                    control = source_store.execute(
+                        "SELECT state FROM runtime_control WHERE id=1"
+                    ).fetchone()
+                    profile_row = source_store.execute(
+                        "SELECT profile_json FROM company_profile WHERE id=1"
+                    ).fetchone()
                     profile = json.loads(profile_row[0]) if profile_row else {}
                 finally:
                     source_store.close()
@@ -152,13 +172,26 @@ class CompanyRegistry:
                     "INSERT INTO telekt.companies(id,source_id,name,company_type,concept,goal,initial_budget,"
                     "profile,runtime_state,db_path,artifacts_path,created_at,updated_at) "
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
-                    (company_schema(company_id).removeprefix("company_"), company_id, row["name"],
-                     row["company_type"], row["concept"], header["goal"], header["initial_budget_eur"],
-                     json.dumps(profile), control["state"], row["db_path"], row["artifacts_path"],
-                     row["created_at"], row["updated_at"]),
+                    (
+                        company_schema(company_id).removeprefix("company_"),
+                        company_id,
+                        row["name"],
+                        row["company_type"],
+                        row["concept"],
+                        header["goal"],
+                        header["initial_budget_eur"],
+                        json.dumps(profile),
+                        control["state"],
+                        row["db_path"],
+                        row["artifacts_path"],
+                        row["created_at"],
+                        row["updated_at"],
+                    ),
                 )
             if "registry_settings" in tables:
-                setting = source.execute("SELECT active_company_id FROM registry_settings WHERE id=1").fetchone()
+                setting = source.execute(
+                    "SELECT active_company_id FROM registry_settings WHERE id=1"
+                ).fetchone()
                 if setting and setting["active_company_id"]:
                     self.db.execute(
                         "UPDATE telekt.registry_settings SET active_company_id=%s "
@@ -179,7 +212,7 @@ class CompanyRegistry:
 
     def claim_work(self, company_id: str, owner: str, lease_seconds: int = 3600) -> bool:
         """Atomically claim one company's next cycle across worker processes."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = (now + timedelta(seconds=lease_seconds)).isoformat()
         if self.is_postgres:
             row = self.db.execute(
@@ -209,8 +242,11 @@ class CompanyRegistry:
 
     def release_work(self, company_id: str, owner: str) -> None:
         """Release a lease only when it still belongs to this worker."""
-        query = ("DELETE FROM telekt.work_leases WHERE company_id=%s AND owner=%s" if self.is_postgres
-                 else "DELETE FROM work_leases WHERE company_id=? AND owner=?")
+        query = (
+            "DELETE FROM telekt.work_leases WHERE company_id=%s AND owner=%s"
+            if self.is_postgres
+            else "DELETE FROM work_leases WHERE company_id=? AND owner=?"
+        )
         self.db.execute(query, (company_id, owner))
         self.db.commit()
 
@@ -219,7 +255,8 @@ class CompanyRegistry:
         if self.is_postgres:
             self.db.execute(
                 "INSERT INTO telekt.worker_heartbeats(owner,heartbeat_at) VALUES(%s,%s) "
-                "ON CONFLICT(owner) DO UPDATE SET heartbeat_at=excluded.heartbeat_at", (owner, utc_now())
+                "ON CONFLICT(owner) DO UPDATE SET heartbeat_at=excluded.heartbeat_at",
+                (owner, utc_now()),
             )
         else:
             self.db.execute(
@@ -231,13 +268,16 @@ class CompanyRegistry:
     def worker_status(self, stale_after_seconds: int = 15) -> dict:
         """Return whether any worker heartbeat is recent enough to be operational."""
         table = "telekt.worker_heartbeats" if self.is_postgres else "worker_heartbeats"
-        row = self.db.execute(f"SELECT owner,heartbeat_at FROM {table} ORDER BY heartbeat_at DESC LIMIT 1").fetchone()
+        # The backend selects one of two constant table names.
+        row = self.db.execute(
+            f"SELECT owner,heartbeat_at FROM {table} ORDER BY heartbeat_at DESC LIMIT 1"  # nosec
+        ).fetchone()
         if not row:
             return {"status": "offline", "owner": None, "heartbeat_at": None}
         heartbeat = row["heartbeat_at"]
         if isinstance(heartbeat, str):
             heartbeat = datetime.fromisoformat(heartbeat)
-        age = (datetime.now(timezone.utc) - heartbeat).total_seconds()
+        age = (datetime.now(UTC) - heartbeat).total_seconds()
         return {
             "status": "online" if age <= stale_after_seconds else "offline",
             "owner": row["owner"],
@@ -267,26 +307,51 @@ class CompanyRegistry:
             now = utc_now()
             self.db.execute(
                 "INSERT INTO companies VALUES(?,?,?,?,?,?,?,?)",
-                (company_id, "Invoice Chase Ventures", "SaaS",
-                 "B2B invoice tracking and collections software", str(legacy_db),
-                 str(self.state_dir / "artifacts"), now, now),
+                (
+                    company_id,
+                    "Invoice Chase Ventures",
+                    "SaaS",
+                    "B2B invoice tracking and collections software",
+                    str(legacy_db),
+                    str(self.state_dir / "artifacts"),
+                    now,
+                    now,
+                ),
             )
-            self.db.execute("UPDATE registry_settings SET active_company_id=? WHERE id=1", (company_id,))
+            self.db.execute(
+                "UPDATE registry_settings SET active_company_id=? WHERE id=1", (company_id,)
+            )
             if not store.get_profile():
                 snapshot = store.snapshot()
                 store.db.execute(
                     "INSERT OR REPLACE INTO company_profile VALUES(1,?,?)",
-                    (json.dumps({
-                        "name": "Invoice Chase Ventures", "company_type": "SaaS",
-                        "concept": "B2B invoice tracking and collections software",
-                        "description": "Original autonomous company POC",
-                        "target_market": "Small B2B service companies", "customer_type": "B2B",
-                        "currency": "EUR", "time_horizon_days": 30,
-                        "risk_tolerance": "medium", "autonomy_level": "balanced",
-                        "constraints": ["Approval before external outreach", "Approval before spending"],
-                        "success_criteria": ["Validated problem", "Functional MVP", "Pilot interest"],
-                        "goal": snapshot.goal,
-                    }), now),
+                    (
+                        json.dumps(
+                            {
+                                "name": "Invoice Chase Ventures",
+                                "company_type": "SaaS",
+                                "concept": "B2B invoice tracking and collections software",
+                                "description": "Original autonomous company POC",
+                                "target_market": "Small B2B service companies",
+                                "customer_type": "B2B",
+                                "currency": "EUR",
+                                "time_horizon_days": 30,
+                                "risk_tolerance": "medium",
+                                "autonomy_level": "balanced",
+                                "constraints": [
+                                    "Approval before external outreach",
+                                    "Approval before spending",
+                                ],
+                                "success_criteria": [
+                                    "Validated problem",
+                                    "Functional MVP",
+                                    "Pilot interest",
+                                ],
+                                "goal": snapshot.goal,
+                            }
+                        ),
+                        now,
+                    ),
                 )
                 store.db.commit()
         self.db.commit()
@@ -302,11 +367,14 @@ class CompanyRegistry:
         if self.is_postgres and not database_url:
             raise RuntimeError("DATABASE_URL is required when DATABASE_BACKEND=postgres")
         with CompanyStore(
-            db_path, database_url if self.is_postgres else None,
+            db_path,
+            database_url if self.is_postgres else None,
             company_id if self.is_postgres else None,
         ) as store:
             store.initialize(
-                profile["goal"], float(profile.get("budget") or 0), profile,
+                profile["goal"],
+                float(profile.get("budget") or 0),
+                profile,
                 bootstrap_legacy_agent=False,
             )
         now = utc_now()
@@ -315,18 +383,41 @@ class CompanyRegistry:
                 "INSERT INTO telekt.companies(id,source_id,name,company_type,concept,goal,initial_budget,"
                 "profile,runtime_state,db_path,artifacts_path,created_at,updated_at) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'stopped',%s,%s,%s,%s)",
-                (company_id, company_id, profile["name"], profile["company_type"], profile["concept"],
-                 profile["goal"], float(profile.get("budget") or 0), json.dumps(profile), str(db_path),
-                 str(artifacts_path), now, now),
+                (
+                    company_id,
+                    company_id,
+                    profile["name"],
+                    profile["company_type"],
+                    profile["concept"],
+                    profile["goal"],
+                    float(profile.get("budget") or 0),
+                    json.dumps(profile),
+                    str(db_path),
+                    str(artifacts_path),
+                    now,
+                    now,
+                ),
             )
-            self.db.execute("UPDATE telekt.registry_settings SET active_company_id=%s WHERE id=1", (company_id,))
+            self.db.execute(
+                "UPDATE telekt.registry_settings SET active_company_id=%s WHERE id=1", (company_id,)
+            )
         else:
             self.db.execute(
                 "INSERT INTO companies VALUES(?,?,?,?,?,?,?,?)",
-                (company_id, profile["name"], profile["company_type"], profile["concept"],
-                 str(db_path), str(artifacts_path), now, now),
+                (
+                    company_id,
+                    profile["name"],
+                    profile["company_type"],
+                    profile["concept"],
+                    str(db_path),
+                    str(artifacts_path),
+                    now,
+                    now,
+                ),
             )
-            self.db.execute("UPDATE registry_settings SET active_company_id=? WHERE id=1", (company_id,))
+            self.db.execute(
+                "UPDATE registry_settings SET active_company_id=? WHERE id=1", (company_id,)
+            )
         self.db.commit()
         return self.get(company_id)
 
@@ -337,9 +428,12 @@ class CompanyRegistry:
         except RuntimeError:
             active = None
         result = []
-        query = ("SELECT COALESCE(source_id,id::text) AS id,name,company_type,concept,db_path,"
-                 "artifacts_path,created_at,updated_at FROM telekt.companies ORDER BY created_at"
-                 if self.is_postgres else "SELECT * FROM companies ORDER BY created_at")
+        query = (
+            "SELECT COALESCE(source_id,id::text) AS id,name,company_type,concept,db_path,"
+            "artifacts_path,created_at,updated_at FROM telekt.companies ORDER BY created_at"
+            if self.is_postgres
+            else "SELECT * FROM companies ORDER BY created_at"
+        )
         for row in self.db.execute(query):
             item = dict(row)
             item["created_at"] = str(item["created_at"])
@@ -356,7 +450,8 @@ class CompanyRegistry:
             row = self.db.execute(
                 "SELECT COALESCE(source_id,id::text) AS id,name,company_type,concept,db_path,"
                 "artifacts_path,created_at,updated_at FROM telekt.companies "
-                "WHERE source_id=%s OR id::text=%s", (company_id, company_id)
+                "WHERE source_id=%s OR id::text=%s",
+                (company_id, company_id),
             ).fetchone()
         else:
             row = self.db.execute("SELECT * FROM companies WHERE id=?", (company_id,)).fetchone()
@@ -367,7 +462,10 @@ class CompanyRegistry:
     def active_id(self) -> str:
         """Return the company currently selected in the control plane."""
         table = "telekt.registry_settings" if self.is_postgres else "registry_settings"
-        row = self.db.execute(f"SELECT active_company_id FROM {table} WHERE id=1").fetchone()
+        # The backend selects one of two constant table names.
+        row = self.db.execute(
+            f"SELECT active_company_id FROM {table} WHERE id=1"  # nosec
+        ).fetchone()
         if not row or not row["active_company_id"]:
             raise RuntimeError("No company exists yet")
         return row["active_company_id"]
@@ -375,8 +473,11 @@ class CompanyRegistry:
     def select(self, company_id: str) -> dict:
         """Select a company for subsequent dashboard/API operations."""
         company = self.get(company_id)
-        query = ("UPDATE telekt.registry_settings SET active_company_id=%s WHERE id=1" if self.is_postgres
-                 else "UPDATE registry_settings SET active_company_id=? WHERE id=1")
+        query = (
+            "UPDATE telekt.registry_settings SET active_company_id=%s WHERE id=1"
+            if self.is_postgres
+            else "UPDATE registry_settings SET active_company_id=? WHERE id=1"
+        )
         self.db.execute(query, (company_id,))
         self.db.commit()
         return company
@@ -393,17 +494,25 @@ class CompanyRegistry:
                 "UPDATE telekt.companies SET name=%s,company_type=%s,concept=%s,goal=%s,"
                 "profile=%s,updated_at=%s WHERE source_id=%s OR id::text=%s",
                 (
-                    updated["name"], updated.get("company_type", "Company"),
-                    updated["concept"], updated["goal"], json.dumps(updated, ensure_ascii=False),
-                    now, company_id, company_id,
+                    updated["name"],
+                    updated.get("company_type", "Company"),
+                    updated["concept"],
+                    updated["goal"],
+                    json.dumps(updated, ensure_ascii=False),
+                    now,
+                    company_id,
+                    company_id,
                 ),
             )
         else:
             self.db.execute(
                 "UPDATE companies SET name=?,company_type=?,concept=?,updated_at=? WHERE id=?",
                 (
-                    updated["name"], updated.get("company_type", "Company"),
-                    updated["concept"], now, company_id,
+                    updated["name"],
+                    updated.get("company_type", "Company"),
+                    updated["concept"],
+                    now,
+                    company_id,
                 ),
             )
         self.db.commit()
@@ -428,7 +537,11 @@ class CompanyRegistry:
         """Return the isolated artifact root for a company."""
         selected_id = company_id or self.active_id()
         configured = self.get(selected_id)["artifacts_path"]
-        path = Path(configured) if configured else self.state_dir / "companies" / selected_id / "artifacts"
+        path = (
+            Path(configured)
+            if configured
+            else self.state_dir / "companies" / selected_id / "artifacts"
+        )
         if self.is_postgres and not path.exists():
             path = self.state_dir / "companies" / selected_id / "artifacts"
         path.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 import re
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from digital_company import web
 
@@ -36,6 +36,35 @@ def test_registered_frontend_assets_are_served_and_unknown_files_are_denied():
         if name == "i18n.js":
             assert response.headers["cache-control"] == "no-store, max-age=0"
     assert client.get("/assets/secrets.env").status_code == 404
+
+
+def test_responses_include_browser_security_headers_and_safe_request_ids():
+    client = TestClient(web.app)
+
+    response = client.get("/", headers={"X-Request-ID": "portfolio-test-42"})
+    assert response.headers["X-Request-ID"] == "portfolio-test-42"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Content-Security-Policy"] == "frame-ancestors 'none'"
+
+    generated = client.get("/", headers={"X-Request-ID": "invalid request id!"})
+    assert generated.headers["X-Request-ID"] != "invalid request id!"
+    assert re.fullmatch(r"[a-f0-9]{24}", generated.headers["X-Request-ID"])
+
+
+def test_public_source_is_english_first_with_serbian_as_an_explicit_locale():
+    html = (web.STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    settings = (web.STATIC_DIR / "settings-ui.js").read_text(encoding="utf-8")
+    agents = (web.STATIC_DIR / "agent-ui.js").read_text(encoding="utf-8")
+    browser = (web.STATIC_DIR / "browser-ui.js").read_text(encoding="utf-8")
+    translations = (web.STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+
+    assert '<html lang="en">' in html
+    assert 'localStorage.getItem(STORAGE_KEY) || "en"' in translations
+    assert re.search(r"\bsr\s*:\s*\{", translations)
+    for source in (html, settings, agents, browser):
+        assert not re.search(r"[čćžšđČĆŽŠĐ]", source)
 
 
 def test_dynamic_html_modules_use_the_shared_escape_boundary():

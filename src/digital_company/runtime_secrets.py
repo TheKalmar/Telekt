@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
 
 ALLOWED_SECRETS = {"OPENAI_API_KEY", "APPROVAL_SIGNING_SECRET"}
 
 
 def _allowed(name: str) -> bool:
-    return (
-        name in ALLOWED_SECRETS
-        or name.startswith("MODEL_CONNECTION_")
-        or name.startswith("INTEGRATION_CONNECTION_")
+    return name in ALLOWED_SECRETS or name.startswith(
+        ("MODEL_CONNECTION_", "INTEGRATION_CONNECTION_")
     )
 
 
@@ -30,8 +29,11 @@ def _read() -> dict[str, str]:
         values = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    return {key: value for key, value in values.items()
-            if _allowed(key) and isinstance(value, str) and value}
+    return {
+        key: value
+        for key, value in values.items()
+        if _allowed(key) and isinstance(value, str) and value
+    }
 
 
 def apply_runtime_secrets() -> None:
@@ -58,10 +60,8 @@ def save_secret(name: str, value: str) -> None:
     values[name] = value
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(values), encoding="utf-8")
-    try:
+    with suppress(OSError):
         os.chmod(temporary, 0o600)
-    except OSError:
-        pass
     temporary.replace(path)
     os.environ[name] = value
 

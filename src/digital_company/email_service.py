@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from urllib.parse import quote, urlparse
 
+from digital_company.content_rendering import render_content_review, sanitize_article_html
 from digital_company.integration_connectors import secret_name
 from digital_company.models import TaskProposal
 from digital_company.runtime_secrets import get_secret
-from digital_company.content_rendering import render_content_review, sanitize_article_html
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,9 @@ def approval_token(company_id: str, approval_id: str, recipient: str, expires: i
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
-def verify_approval_token(company_id: str, approval_id: str, recipient: str, expires: int, token: str) -> bool:
+def verify_approval_token(
+    company_id: str, approval_id: str, recipient: str, expires: int, token: str
+) -> bool:
     if expires < int(time.time()):
         return False
     try:
@@ -62,9 +64,9 @@ class ApprovalMailer:
                 raise RuntimeError("Selected SMTP connection is not ready")
             parsed = urlparse(connection["base_url"])
             config = connection.get("config") or {}
-            security = str(config.get("security") or (
-                "ssl" if parsed.scheme == "smtps" else "starttls"
-            )).lower()
+            security = str(
+                config.get("security") or ("ssl" if parsed.scheme == "smtps" else "starttls")
+            ).lower()
             authentication = str(config.get("authentication", "password")).lower()
             username = get_secret(secret_name(connection["id"], "username")) or ""
             password = get_secret(secret_name(connection["id"], "password")) or ""
@@ -91,9 +93,9 @@ class ApprovalMailer:
                 username=os.getenv("SMTP_USERNAME", ""),
                 password=os.getenv("SMTP_PASSWORD", ""),
                 sender=str(settings.get("from_address") or os.getenv("SMTP_FROM", "")).strip(),
-                public_url=str(
-                    settings.get("public_base_url") or os.getenv("PUBLIC_BASE_URL", "")
-                ).strip().rstrip("/"),
+                public_url=str(settings.get("public_base_url") or os.getenv("PUBLIC_BASE_URL", ""))
+                .strip()
+                .rstrip("/"),
             )
         if not transport.host or not transport.sender:
             raise RuntimeError("SMTP host and sender address are required")
@@ -111,7 +113,9 @@ class ApprovalMailer:
                 smtp.login(transport.username, transport.password)
             smtp.send_message(message)
 
-    def send(self, company_id: str, approval_id: str, proposal: TaskProposal, reason: str, settings: dict) -> int:
+    def send(
+        self, company_id: str, approval_id: str, proposal: TaskProposal, reason: str, settings: dict
+    ) -> int:
         if not settings["enabled"] or not settings["approvers"]:
             return 0
         transport = self._transport(settings)
@@ -122,15 +126,19 @@ class ApprovalMailer:
             url = f"{transport.public_url}/approval/{quote(company_id)}/{quote(approval_id)}?email={quote(recipient)}&expires={expires}&token={token}"
             msg = EmailMessage()
             msg["Subject"] = f"Approval required: {proposal.title}"
-            msg["From"] = f'{settings["sender_name"]} <{transport.sender}>'
+            msg["From"] = f"{settings['sender_name']} <{transport.sender}>"
             msg["To"] = recipient
             msg.set_content(f"Approval required for {proposal.title}. Review safely at: {url}")
-            msg.add_alternative(self._html(proposal, reason, url, settings["sender_name"]), subtype="html")
+            msg.add_alternative(
+                self._html(proposal, reason, url, settings["sender_name"]), subtype="html"
+            )
             self._deliver(msg, transport)
             sent += 1
         return sent
 
-    def send_daily_brief(self, company_id: str, summary: dict, approvals: list[dict], settings: dict) -> int:
+    def send_daily_brief(
+        self, company_id: str, summary: dict, approvals: list[dict], settings: dict
+    ) -> int:
         """Send one executive digest with recipient-specific links for every decision."""
         if not settings["enabled"] or not settings["approvers"]:
             return 0
@@ -149,50 +157,70 @@ class ApprovalMailer:
                     (review.get("content_package") or {}).get("html_content")
                     or review.get("content", "")
                 )[:100_000]
-                review_text = html.unescape(re.sub(
-                    r"<[^>]+>", " ", sanitize_article_html(review_source),
-                ))
+                review_text = html.unescape(
+                    re.sub(
+                        r"<[^>]+>",
+                        " ",
+                        sanitize_article_html(review_source),
+                    )
+                )
                 plain.append(
-                    f"- {proposal.title}: {url}" +
-                    (f"\n\nDRAFT FOR REVIEW\n{review_text}" if review_text else "")
+                    f"- {proposal.title}: {url}"
+                    + (f"\n\nDRAFT FOR REVIEW\n{review_text}" if review_text else "")
                 )
                 review_html = render_content_review(review)
                 cards.append(
                     f'<div style="background:#0d1219;padding:16px;border-radius:10px;margin:12px 0">'
-                    f'<b>{html.escape(proposal.title)}</b><p>{html.escape(proposal.objective)}</p>'
+                    f"<b>{html.escape(proposal.title)}</b><p>{html.escape(proposal.objective)}</p>"
                     f'{review_html}<a style="color:#4ee3a1" href="{html.escape(url)}">'
-                    'Review decision — approve, reject, or request changes</a></div>'
+                    "Review decision — approve, reject, or request changes</a></div>"
                 )
             msg = EmailMessage()
-            content_review = len(approvals) == 1 and approvals[0]["proposal"].action.value == "publish_content"
+            content_review = (
+                len(approvals) == 1 and approvals[0]["proposal"].action.value == "publish_content"
+            )
             msg["Subject"] = (
                 f"Content review: {approvals[0]['proposal'].title} "
                 f"[{(approvals[0]['proposal'].work_item_id or approvals[0]['id'])[:8]}]"
-                if content_review else f"Daily CEO brief: {settings['sender_name']}"
+                if content_review
+                else f"Daily CEO brief: {settings['sender_name']}"
             )
-            msg["From"] = f'{settings["sender_name"]} <{transport.sender}>'
+            msg["From"] = f"{settings['sender_name']} <{transport.sender}>"
             msg["To"] = recipient
             if content_review:
                 work_item_id = approvals[0]["proposal"].work_item_id or approvals[0]["id"]
                 domain = (transport.sender.split("@", 1)[-1] or "telekt.local").replace(">", "")
                 root_id = f"<telekt-content-{work_item_id}@{domain}>"
                 recipient_key = hashlib.sha256(recipient.encode()).hexdigest()[:12]
-                msg["Message-ID"] = (
-                    f"<telekt-review-{approvals[0]['id']}-{recipient_key}@{domain}>"
-                )
+                msg["Message-ID"] = f"<telekt-review-{approvals[0]['id']}-{recipient_key}@{domain}>"
                 msg["In-Reply-To"] = root_id
                 msg["References"] = root_id
                 msg["X-Telekt-Work-Item"] = work_item_id
-            result_text = "\n".join(f"- {title}" for title in summary["results"]) or "- No new completed work"
-            result_html = "".join(f"<li>{html.escape(title)}</li>" for title in summary["results"]) or "<li>No new completed work</li>"
-            msg.set_content(f"Status: {summary['control']}\nSpent: EUR {summary['spent']:.2f}\nRemaining: EUR {summary['remaining']:.2f}\nResults:\n{result_text}\nPending approvals: {len(approvals)}\n" + "\n".join(plain))
-            msg.add_alternative(f'''<!doctype html><html><body style="background:#0b0f15;color:#eaf1f8;font-family:Arial;padding:28px"><div style="max-width:650px;margin:auto"><div style="color:#4ee3a1">DAILY CEO BRIEF</div><h1>{html.escape(settings["sender_name"])}</h1><p>Status: <b>{html.escape(summary["control"])}</b> · Spent: <b>€{summary["spent"]:.2f}</b> · Remaining: <b>€{summary["remaining"]:.2f}</b></p><h2>Results</h2><ul>{result_html}</ul><h2>Decisions ({len(approvals)})</h2>{''.join(cards) or '<p>No decisions required today.</p>'}<p style="color:#667386;font-size:12px">This is the single routine stakeholder digest for the current 24-hour window.</p></div></body></html>''', subtype="html")
+            result_text = (
+                "\n".join(f"- {title}" for title in summary["results"]) or "- No new completed work"
+            )
+            result_html = (
+                "".join(f"<li>{html.escape(title)}</li>" for title in summary["results"])
+                or "<li>No new completed work</li>"
+            )
+            msg.set_content(
+                f"Status: {summary['control']}\nSpent: EUR {summary['spent']:.2f}\nRemaining: EUR {summary['remaining']:.2f}\nResults:\n{result_text}\nPending approvals: {len(approvals)}\n"
+                + "\n".join(plain)
+            )
+            msg.add_alternative(
+                f"""<!doctype html><html><body style="background:#0b0f15;color:#eaf1f8;font-family:Arial;padding:28px"><div style="max-width:650px;margin:auto"><div style="color:#4ee3a1">DAILY CEO BRIEF</div><h1>{html.escape(settings["sender_name"])}</h1><p>Status: <b>{html.escape(summary["control"])}</b> · Spent: <b>€{summary["spent"]:.2f}</b> · Remaining: <b>€{summary["remaining"]:.2f}</b></p><h2>Results</h2><ul>{result_html}</ul><h2>Decisions ({len(approvals)})</h2>{"".join(cards) or "<p>No decisions required today.</p>"}<p style="color:#667386;font-size:12px">This is the single routine stakeholder digest for the current 24-hour window.</p></div></body></html>""",
+                subtype="html",
+            )
             self._deliver(msg, transport)
             sent += 1
         return sent
 
     def send_content_review(
-        self, company_id: str, summary: dict, approval: dict, settings: dict,
+        self,
+        company_id: str,
+        summary: dict,
+        approval: dict,
+        settings: dict,
     ) -> int:
         """Deliver one draft as one stable email conversation topic."""
         return self.send_daily_brief(company_id, summary, [approval], settings)
@@ -202,7 +230,7 @@ class ApprovalMailer:
         transport = self._transport(settings, require_callback=False)
         msg = EmailMessage()
         msg["Subject"] = f"Telekt SMTP test: {settings['sender_name']}"
-        msg["From"] = f'{settings["sender_name"]} <{transport.sender}>'
+        msg["From"] = f"{settings['sender_name']} <{transport.sender}>"
         msg["To"] = recipient
         msg.set_content(
             "SMTP is configured correctly for this Telekt company. "
@@ -210,7 +238,7 @@ class ApprovalMailer:
         )
         msg.add_alternative(
             '<div style="font-family:Arial;padding:24px"><h2>SMTP works</h2>'
-            '<p>This Telekt company can deliver approval messages. No company action was performed.</p></div>',
+            "<p>This Telekt company can deliver approval messages. No company action was performed.</p></div>",
             subtype="html",
         )
         self._deliver(msg, transport)

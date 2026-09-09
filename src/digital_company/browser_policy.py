@@ -6,7 +6,6 @@ import ipaddress
 import re
 from urllib.parse import urlparse
 
-
 DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 
 
@@ -18,7 +17,11 @@ def normalize_domain(value: str) -> str:
         address = ipaddress.ip_address(domain)
     except ValueError:
         address = None
-    if domain == "localhost" or domain.endswith(".localhost") or (address and not address.is_global):
+    if (
+        domain == "localhost"
+        or domain.endswith(".localhost")
+        or (address and not address.is_global)
+    ):
         raise ValueError("Private and loopback browser targets are blocked")
     return domain
 
@@ -38,9 +41,18 @@ def validate_browser_url(url: str, allowed_domains: list[str]) -> str:
 def contains_human_checkpoint(url: str, title: str, text: str) -> bool:
     sample = f"{url} {title} {text[:5000]}".lower()
     markers = (
-        "captcha", "recaptcha", "hcaptcha", "two-factor", "two factor", "2fa",
-        "verification code", "verify your identity", "security challenge",
-        "wp-login.php", "log in to wordpress", "username or email address",
+        "captcha",
+        "recaptcha",
+        "hcaptcha",
+        "two-factor",
+        "two factor",
+        "2fa",
+        "verification code",
+        "verify your identity",
+        "security challenge",
+        "wp-login.php",
+        "log in to wordpress",
+        "username or email address",
     )
     return any(marker in sample for marker in markers)
 
@@ -49,8 +61,18 @@ def is_dangerous_draft_control(label: str) -> bool:
     """Return whether a clicked control could make draft content public or transmit it."""
     normalized = " ".join(label.lower().split())
     blocked = (
-        "publish", "objavi", "schedule", "zakaži", "send", "pošalji",
-        "submit", "purchase", "buy now", "pay", "delete", "trash",
+        "publish",
+        "objavi",
+        "schedule",
+        "zakaži",
+        "send",
+        "pošalji",
+        "submit",
+        "purchase",
+        "buy now",
+        "pay",
+        "delete",
+        "trash",
     )
     safe_draft = ("save draft", "sačuvaj nacrt", "preview", "pregled")
     return not any(value in normalized for value in safe_draft) and any(

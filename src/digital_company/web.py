@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import html
+import os
 import re
 import secrets
 import smtplib
@@ -19,11 +19,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
+from digital_company import __version__
+from digital_company.agent_templates import AGENT_TYPES
 from digital_company.api_models import (
-    ApprovalDecisionIn,
-    AgentPlaybookIn,
     AgentConfigIn,
+    AgentPlaybookIn,
     AgentPluginGrantIn,
+    ApprovalDecisionIn,
     BrowserActionIn,
     BrowserSessionIn,
     CompanyBriefIn,
@@ -31,9 +33,9 @@ from digital_company.api_models import (
     EmailSettingsIn,
     EmailTestIn,
     HandoffDecisionIn,
-    IntegrationSettingsIn,
     IntegrationConnectionIn,
     IntegrationOperationIn,
+    IntegrationSettingsIn,
     MessageIn,
     ModelConnectionIn,
     ModelModeIn,
@@ -42,30 +44,34 @@ from digital_company.api_models import (
 )
 from digital_company.browser_client import (
     BrowserRuntimeError,
+)
+from digital_company.browser_client import (
     browser_runtime_request as request_browser_runtime,
 )
-from digital_company.registry import CompanyRegistry
-from digital_company.store import CompanyStore
+from digital_company.content_rendering import render_content_review
 from digital_company.email_service import ApprovalMailer, verify_approval_token
-from digital_company.temporal_gateway import TemporalCommandError, signal_agent, signal_company
-from digital_company.workspace import WorkspaceRuntime
-from digital_company.runtime_secrets import apply_runtime_secrets, save_secret
-from digital_company.runtime_secrets import get_secret
-from digital_company.model_connections import ADAPTERS, ModelConnectionRegistry
-from digital_company.models import ActionType
-from digital_company.postgres_compat import pool_stats
-from digital_company.preflight import (
-    connection_ready as check_model_connection,
-    evaluate_runtime_preflight,
-)
 from digital_company.execution_client import ExecutionRuntimeClient, ExecutionRuntimeError
 from digital_company.integration_connectors import (
     ADAPTERS as INTEGRATION_ADAPTERS,
+)
+from digital_company.integration_connectors import (
     secret_name as integration_secret_name,
 )
-from digital_company.agent_templates import AGENT_TYPES
-from digital_company.content_rendering import render_content_review
-
+from digital_company.model_connections import ADAPTERS, ModelConnectionRegistry
+from digital_company.models import ActionType
+from digital_company.network_policy import normalize_http_base_url
+from digital_company.postgres_compat import pool_stats
+from digital_company.preflight import (
+    connection_ready as check_model_connection,
+)
+from digital_company.preflight import (
+    evaluate_runtime_preflight,
+)
+from digital_company.registry import CompanyRegistry
+from digital_company.runtime_secrets import apply_runtime_secrets, get_secret, save_secret
+from digital_company.store import CompanyStore
+from digital_company.temporal_gateway import TemporalCommandError, signal_agent, signal_company
+from digital_company.workspace import WorkspaceRuntime
 
 ROOT = Path.cwd()
 STATIC_DIR = Path(__file__).parent / "static"
@@ -73,6 +79,7 @@ FRONTEND_JS_ASSETS = {"ui-core.js", "agent-ui.js", "settings-ui.js", "browser-ui
 load_dotenv(ROOT / ".env.local")
 apply_runtime_secrets()
 STATE_DIR = Path(os.getenv("COMPANY_DATA_DIR", str(ROOT / ".company"))).expanduser().resolve()
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -83,9 +90,35 @@ async def lifespan(_app: FastAPI):
         close()
 
 
-app = FastAPI(title="Digital Company Control Plane", lifespan=lifespan)
+app = FastAPI(
+    title="Telekt Digital Company Control Plane",
+    version=__version__,
+    lifespan=lifespan,
+)
 registry = CompanyRegistry(STATE_DIR)
 _preflight_cache: dict[str, tuple[float, tuple, dict]] = {}
+
+
+@app.middleware("http")
+async def add_response_safety_headers(request: Request, call_next):
+    """Add browser hardening and a correlation ID without changing API semantics."""
+
+    supplied_request_id = request.headers.get("X-Request-ID", "")
+    request_id = (
+        supplied_request_id
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,80}", supplied_request_id)
+        else secrets.token_hex(12)
+    )
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=()"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    if request.url.path.startswith(("/api/", "/approval/")):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def get_store(company_id: str | None = None) -> CompanyStore:
@@ -116,23 +149,36 @@ def signal_temporal(company_id: str, signal_name: str, reason: str) -> bool:
         return signal_company(company_id, signal_name, reason)
     except TemporalCommandError as exc:
         with store_scope(company_id) as store:
-            store.audit("temporal.signal_failed", {
-                "signal": signal_name, "reason": reason, "error": str(exc),
-            })
+            store.audit(
+                "temporal.signal_failed",
+                {
+                    "signal": signal_name,
+                    "reason": reason,
+                    "error": str(exc),
+                },
+            )
         raise HTTPException(503, str(exc)) from exc
 
 
 def signal_agent_temporal(
-    company_id: str, agent_id: str, signal_name: str, reason: str,
+    company_id: str,
+    agent_id: str,
+    signal_name: str,
+    reason: str,
 ) -> bool:
     try:
         return signal_agent(company_id, agent_id, signal_name, reason)
     except TemporalCommandError as exc:
         with store_scope(company_id) as store:
-            store.audit("temporal.agent_signal_failed", {
-                "agent_id": agent_id, "signal": signal_name,
-                "reason": reason, "error": str(exc),
-            })
+            store.audit(
+                "temporal.agent_signal_failed",
+                {
+                    "agent_id": agent_id,
+                    "signal": signal_name,
+                    "reason": reason,
+                    "error": str(exc),
+                },
+            )
         raise HTTPException(503, str(exc)) from exc
 
 
@@ -148,7 +194,8 @@ def require_agent_model_connection(connection_id: str, verify_model: bool = Fals
     with store_scope() as store:
         settings = store.get_settings()
     connections = ModelConnectionRegistry().ensure_defaults(
-        settings["local_model"], settings["cloud_model"],
+        settings["local_model"],
+        settings["cloud_model"],
     )
     connection = next((item for item in connections if item["id"] == connection_id), None)
     if not connection:
@@ -172,15 +219,19 @@ def runtime_preflight(store: CompanyStore, force: bool = False) -> dict:
         for plugin in agent.get("plugins", [])
     )
     signature = (
-        settings["updated_at"], bool(os.getenv("OPENAI_API_KEY")),
-        bool(os.getenv("ANTHROPIC_API_KEY")), browser_required,
+        settings["updated_at"],
+        bool(os.getenv("OPENAI_API_KEY")),
+        bool(os.getenv("ANTHROPIC_API_KEY")),
+        browser_required,
     )
     cached = _preflight_cache.get(cache_key)
     if not force and cached and cached[1] == signature and time.monotonic() - cached[0] < 5:
         return cached[2]
     worker = registry.worker_status()
     connection_registry = ModelConnectionRegistry()
-    connections = connection_registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
+    connections = connection_registry.ensure_defaults(
+        settings["local_model"], settings["cloud_model"]
+    )
     browser = browser_health() if browser_required else {"status": "disabled"}
     execution = execution_health()
     result = evaluate_runtime_preflight(
@@ -215,7 +266,8 @@ def index():
 def i18n_catalog():
     """Serve the zero-build UI translation catalog."""
     return FileResponse(
-        STATIC_DIR / "i18n.js", media_type="text/javascript",
+        STATIC_DIR / "i18n.js",
+        media_type="text/javascript",
         headers={"Cache-Control": "no-store, max-age=0"},
     )
 
@@ -251,7 +303,9 @@ def health():
         database = {"status": "offline", "detail": type(exc).__name__}
     status = "ok" if worker["status"] == "online" and database["status"] == "online" else "degraded"
     return {
-        "status": status, "worker": worker, "database": database,
+        "status": status,
+        "worker": worker,
+        "database": database,
         "company_store_pool": pool_stats(),
     }
 
@@ -264,8 +318,13 @@ def dashboard():
     except RuntimeError:
         return {
             "control": {"state": "idle", "detail": "Create a company to begin"},
-            "settings": {"model_mode": "local", "local_model": "deepseek-company:8b", "allow_cloud_fallback": 0,
-                         "cloud_provider": "openai", "cloud_model": "gpt-5.4-mini"},
+            "settings": {
+                "model_mode": "local",
+                "local_model": "deepseek-company:8b",
+                "allow_cloud_fallback": 0,
+                "cloud_provider": "openai",
+                "cloud_model": "gpt-5.4-mini",
+            },
             "profile": None,
             "goal": "No company created yet",
             "initial_budget_eur": 0,
@@ -275,7 +334,13 @@ def dashboard():
             "recent_tasks": [],
             "artifacts": [],
             "capabilities": [],
-            "operations": {"active_model_run": None, "model": {}, "tasks_by_status": {}, "estimated_spend_eur": 0, "recent_events": []},
+            "operations": {
+                "active_model_run": None,
+                "model": {},
+                "tasks_by_status": {},
+                "estimated_spend_eur": 0,
+                "recent_events": [],
+            },
             "approvals": [],
             "policy": None,
             "human_handoffs": [],
@@ -331,15 +396,21 @@ def retry_from_checkpoint():
             raise HTTPException(409, "The company has no recoverable runtime error")
         readiness = runtime_preflight(store, force=True)
         if not readiness["ready"]:
-            raise HTTPException(409, {
-                "message": "Runtime preflight failed",
-                "blockers": readiness["blockers"],
-            })
+            raise HTTPException(
+                409,
+                {
+                    "message": "Runtime preflight failed",
+                    "blockers": readiness["blockers"],
+                },
+            )
         store.close_orphaned_model_runs("operator requested recovery from checkpoint")
         store.set_control("running", "Recovery queued from last committed checkpoint")
-        store.audit("recovery.operator_retry_requested", {
-            "strategy": "resume_from_committed_state",
-        })
+        store.audit(
+            "recovery.operator_retry_requested",
+            {
+                "strategy": "resume_from_committed_state",
+            },
+        )
     signal_temporal(company_id, "start", "operator_recovery_retry")
     return {"status": "running", "strategy": "resume_from_committed_state"}
 
@@ -393,16 +464,20 @@ def set_agent_status(agent_id: str, status: str):
             current = store.get_agent(agent_id)
             if status == "running":
                 connection = require_agent_model_connection(
-                    current["model_connection_id"], verify_model=True,
+                    current["model_connection_id"],
+                    verify_model=True,
                 )
                 token_reserve = max(1, int(os.getenv("AGENT_CALL_TOKEN_RESERVE", "1000")))
                 remaining_tokens = store.agent_remaining_tokens(agent_id)
                 if remaining_tokens is not None and remaining_tokens < token_reserve:
-                    raise HTTPException(409, {
-                        "message": "Agent token limit cannot fund another model call",
-                        "remaining_tokens": remaining_tokens,
-                        "required_reserve": token_reserve,
-                    })
+                    raise HTTPException(
+                        409,
+                        {
+                            "message": "Agent token limit cannot fund another model call",
+                            "remaining_tokens": remaining_tokens,
+                            "required_reserve": token_reserve,
+                        },
+                    )
                 if (
                     connection["location"] == "cloud"
                     and current["spend_limit_eur"] is not None
@@ -417,7 +492,10 @@ def set_agent_status(agent_id: str, status: str):
     command = {"running": "start", "paused": "pause", "stopped": "stop"}[status]
     try:
         accepted = signal_agent_temporal(
-            company_id, agent_id, command, f"operator_{command}",
+            company_id,
+            agent_id,
+            command,
+            f"operator_{command}",
         )
     except HTTPException:
         with store_scope(company_id) as store:
@@ -427,7 +505,8 @@ def set_agent_status(agent_id: str, status: str):
         with store_scope(company_id) as store:
             store.set_agent_status(agent_id, "stopped")
         raise HTTPException(
-            409, "Independent agents require the Temporal worker; start the durable Docker stack",
+            409,
+            "Independent agents require the Temporal worker; start the durable Docker stack",
         )
     return result
 
@@ -543,10 +622,13 @@ def update_company_profile(payload: CompanyBriefIn):
     with store_scope(company_id) as store:
         reset = (
             store.reset_attention_queue("Owner replaced the operating brief")
-            if payload.reset_pending_work else {"approvals": 0, "handoffs": 0}
+            if payload.reset_pending_work
+            else {"approvals": 0, "handoffs": 0}
         )
         result = {
-            "profile": store.get_profile(), "reset": reset, "control": store.get_control(),
+            "profile": store.get_profile(),
+            "reset": reset,
+            "control": store.get_control(),
         }
     return result
 
@@ -559,12 +641,16 @@ def control(action: str):
         if action == "start":
             readiness = runtime_preflight(store, force=True)
             if not readiness["ready"]:
-                raise HTTPException(409, {"message": "Runtime preflight failed", "blockers": readiness["blockers"]})
+                raise HTTPException(
+                    409, {"message": "Runtime preflight failed", "blockers": readiness["blockers"]}
+                )
             store.set_control("running", "Queued for autonomous worker")
             signal_temporal(company_id, "start", "operator_start")
         elif action in {"pause", "stop"}:
-            store.set_control("paused" if action == "pause" else "stopped",
-                              "Will halt after current atomic action")
+            store.set_control(
+                "paused" if action == "pause" else "stopped",
+                "Will halt after current atomic action",
+            )
             signal_temporal(company_id, action, f"operator_{action}")
         else:
             raise HTTPException(400, "Unknown control action")
@@ -580,7 +666,10 @@ def message(payload: MessageIn):
             message_id = store.add_stakeholder_message(payload.content.strip(), payload.kind)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if store.get_control()["state"] in {"waiting_approval", "waiting_human", "paused"} and payload.kind == "directive":
+        if (
+            store.get_control()["state"] in {"waiting_approval", "waiting_human", "paused"}
+            and payload.kind == "directive"
+        ):
             store.set_control("running", "Stakeholder directive queued for worker")
             signal_temporal(company_id, "wake", "stakeholder_directive")
         return {"id": message_id, "status": "pending"}
@@ -605,16 +694,22 @@ def agent_message(agent_id: str, payload: MessageIn):
         with store_scope(company_id) as store:
             agent = store.get_agent(agent_id)
             message_id = store.add_stakeholder_message(
-                payload.content.strip(), payload.kind, agent_id=agent_id,
+                payload.content.strip(),
+                payload.kind,
+                agent_id=agent_id,
             )
             playbook = (
                 store.append_agent_playbook_rule(agent_id, payload.content.strip(), message_id)
-                if payload.kind == "memory" else None
+                if payload.kind == "memory"
+                else None
             )
-            should_wake = (
-                payload.kind == "directive"
-                and agent["status"] in {"running", "paused", "waiting_approval", "waiting_human", "error"}
-            )
+            should_wake = payload.kind == "directive" and agent["status"] in {
+                "running",
+                "paused",
+                "waiting_approval",
+                "waiting_human",
+                "error",
+            }
             if should_wake:
                 store.set_agent_status(agent_id, "running")
     except KeyError as exc:
@@ -624,8 +719,10 @@ def agent_message(agent_id: str, payload: MessageIn):
     if should_wake:
         signal_agent_temporal(company_id, agent_id, "wake", "stakeholder_directive")
     return {
-        "id": message_id, "status": "addressed" if payload.kind == "memory" else "pending",
-        "agent_id": agent_id, "playbook_version": playbook["version"] if playbook else None,
+        "id": message_id,
+        "status": "addressed" if payload.kind == "memory" else "pending",
+        "agent_id": agent_id,
+        "playbook_version": playbook["version"] if playbook else None,
     }
 
 
@@ -669,7 +766,9 @@ def model_settings(payload: ModelSettingsIn):
         if store.get_control()["state"] == "running":
             raise HTTPException(409, "Pause or stop the company before changing model settings")
         try:
-            connections = ModelConnectionRegistry().ensure_defaults(payload.local_model, payload.cloud_model)
+            connections = ModelConnectionRegistry().ensure_defaults(
+                payload.local_model, payload.cloud_model
+            )
             by_id = {item["id"]: item for item in connections}
             local = by_id.get(payload.local_connection_id)
             cloud = by_id.get(payload.cloud_connection_id)
@@ -678,9 +777,13 @@ def model_settings(payload: ModelSettingsIn):
             if payload.mode in {"cloud", "hybrid"} and (not cloud or cloud["location"] != "cloud"):
                 raise ValueError("Select a valid cloud model connection")
             store.set_model_settings(
-                payload.mode, (local or {}).get("model", payload.local_model), payload.allow_cloud_fallback,
-                (cloud or {}).get("adapter", "connection"), (cloud or {}).get("model", payload.cloud_model),
-                payload.local_connection_id, payload.cloud_connection_id,
+                payload.mode,
+                (local or {}).get("model", payload.local_model),
+                payload.allow_cloud_fallback,
+                (cloud or {}).get("adapter", "connection"),
+                (cloud or {}).get("model", payload.cloud_model),
+                payload.local_connection_id,
+                payload.cloud_connection_id,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -693,13 +796,15 @@ def model_connections():
         settings = store.get_settings()
     registry = ModelConnectionRegistry()
     connections = registry.ensure_defaults(settings["local_model"], settings["cloud_model"])
+
     def project(item: dict) -> dict:
         credential = bool(
-            get_secret(f"MODEL_CONNECTION_{item['id']}") or
-            (item["adapter"] == "openai_responses" and os.getenv("OPENAI_API_KEY"))
+            get_secret(f"MODEL_CONNECTION_{item['id']}")
+            or (item["adapter"] == "openai_responses" and os.getenv("OPENAI_API_KEY"))
         )
         ready = bool(item["enabled"] and (credential or not item.get("requires_api_key", True)))
         return {**item, "credential_configured": credential, "ready": ready}
+
     return {
         "adapters": [{"id": key, **value} for key, value in ADAPTERS.items()],
         "connections": [project(item) for item in connections],
@@ -716,13 +821,21 @@ def save_model_connection(payload: ModelConnectionIn):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with store_scope() as store:
-        store.audit("model_connection.saved", {
-            "connection_id": item["id"], "adapter": item["adapter"], "location": item["location"],
-        })
+        store.audit(
+            "model_connection.saved",
+            {
+                "connection_id": item["id"],
+                "adapter": item["adapter"],
+                "location": item["location"],
+            },
+        )
     _preflight_cache.clear()
     credential = bool(payload.api_key.strip() or get_secret(f"MODEL_CONNECTION_{item['id']}"))
-    return {**item, "credential_configured": credential,
-            "ready": bool(item["enabled"] and (credential or not item["requires_api_key"]))}
+    return {
+        **item,
+        "credential_configured": credential,
+        "ready": bool(item["enabled"] and (credential or not item["requires_api_key"])),
+    }
 
 
 @app.delete("/api/model-connections/{connection_id}")
@@ -739,12 +852,17 @@ def delete_model_connection(connection_id: str):
 
 def ollama_api_url(path: str) -> str:
     """Build a native Ollama API URL from its OpenAI-compatible base URL."""
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+    base_url = normalize_http_base_url(
+        os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
+        allow_plain_http=True,
+        field_name="Ollama base URL",
+    )
     return base_url.rstrip("/").removesuffix("/v1") + path
 
 
-def browser_runtime_request(method: str, path: str, payload: dict | None = None,
-                            timeout: float = 40) -> tuple[bytes, str]:
+def browser_runtime_request(
+    method: str, path: str, payload: dict | None = None, timeout: float = 40
+) -> tuple[bytes, str]:
     """Map the transport-neutral browser client failure to an HTTP response."""
     try:
         return request_browser_runtime(method, path, payload, timeout)
@@ -768,9 +886,14 @@ def open_browser_session(payload: BrowserSessionIn):
         "PUT", f"/sessions/{company_id}", payload.model_dump(mode="json")
     )
     with store_scope(company_id) as store:
-        store.audit("browser.session_opened", {
-            "url": payload.url, "allowed_domains": payload.allowed_domains, "actor": "human",
-        })
+        store.audit(
+            "browser.session_opened",
+            {
+                "url": payload.url,
+                "allowed_domains": payload.allowed_domains,
+                "actor": "human",
+            },
+        )
     return __import__("json").loads(body)
 
 
@@ -795,10 +918,14 @@ def browser_action(payload: BrowserActionIn):
         "POST", f"/sessions/{company_id}/actions", payload.model_dump(mode="json")
     )
     with store_scope(company_id) as store:
-        store.audit("browser.human_action", {
-            "kind": payload.kind, "url": payload.url,
-            "coordinates": [payload.x, payload.y] if payload.kind == "click" else None,
-        })
+        store.audit(
+            "browser.human_action",
+            {
+                "kind": payload.kind,
+                "url": payload.url,
+                "coordinates": [payload.x, payload.y] if payload.kind == "click" else None,
+            },
+        )
     return __import__("json").loads(body)
 
 
@@ -828,20 +955,29 @@ def open_handoff_browser(handoff_id: str):
                 raise ValueError(
                     "The guided browser requires an exact HTTPS URL. Use the normal-browser link instead."
                 )
-            allowed_domains = list(dict.fromkeys([
-                parsed.hostname, *(proposal.handoff_allowed_domains or []),
-            ]))
+            allowed_domains = list(
+                dict.fromkeys(
+                    [
+                        parsed.hostname,
+                        *(proposal.handoff_allowed_domains or []),
+                    ]
+                )
+            )
             body, _ = browser_runtime_request(
-                "PUT", f"/sessions/{company_id}",
+                "PUT",
+                f"/sessions/{company_id}",
                 {"url": proposal.handoff_url, "allowed_domains": allowed_domains},
             )
-            store.audit("handoff.browser_opened", {
-                "handoff_id": handoff_id,
-                "task_id": handoff["task_id"],
-                "url": proposal.handoff_url,
-                "allowed_domains": allowed_domains,
-                "actor": "human",
-            })
+            store.audit(
+                "handoff.browser_opened",
+                {
+                    "handoff_id": handoff_id,
+                    "task_id": handoff["task_id"],
+                    "url": proposal.handoff_url,
+                    "allowed_domains": allowed_domains,
+                    "actor": "human",
+                },
+            )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
@@ -854,8 +990,12 @@ def local_models():
     """List models already installed on the configured Ollama server."""
     import json
     import urllib.request
+
     try:
-        with urllib.request.urlopen(ollama_api_url("/api/tags"), timeout=3) as response:
+        # ollama_api_url restricts the configured endpoint to HTTP(S).
+        with urllib.request.urlopen(  # nosec
+            ollama_api_url("/api/tags"), timeout=3
+        ) as response:
             payload = json.load(response)
         return {
             "status": "online",
@@ -893,8 +1033,11 @@ def save_email_settings(payload: EmailSettingsIn):
         local_http = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
         if (
             (parsed.scheme != "https" and not local_http)
-            or not parsed.hostname or parsed.username or parsed.password
-            or parsed.query or parsed.fragment
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
         ):
             raise HTTPException(
                 400,
@@ -910,13 +1053,17 @@ def save_email_settings(payload: EmailSettingsIn):
             if connection["adapter"] != "smtp":
                 raise HTTPException(400, "Selected connection is not an SMTP transport")
             if connection["status"] != "ready":
-                raise HTTPException(400, f"Selected SMTP connection is not ready: {connection['status']}")
+                raise HTTPException(
+                    400, f"Selected SMTP connection is not ready: {connection['status']}"
+                )
             if "email.send" not in connection["capabilities"]:
                 raise HTTPException(400, "SMTP connection must grant the email.send capability")
         if payload.enabled and connection and (not from_address or not public_base_url):
             raise HTTPException(400, "Sender address and public callback URL are required")
-        if payload.enabled and not connection and not (
-            os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM")
+        if (
+            payload.enabled
+            and not connection
+            and not (os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM"))
         ):
             raise HTTPException(400, "Choose a ready SMTP connection before enabling email")
         if payload.enabled and not (
@@ -924,8 +1071,12 @@ def save_email_settings(payload: EmailSettingsIn):
         ):
             save_secret("APPROVAL_SIGNING_SECRET", secrets.token_urlsafe(48))
         return store.set_email_settings(
-            payload.enabled, emails, payload.sender_name,
-            payload.smtp_connection_id, from_address, public_base_url,
+            payload.enabled,
+            emails,
+            payload.sender_name,
+            payload.smtp_connection_id,
+            from_address,
+            public_base_url,
         )
 
 
@@ -963,11 +1114,14 @@ def save_integration_settings(payload: IntegrationSettingsIn):
     else:
         required = payload.required_secrets
         if any(not re.fullmatch(r"[A-Z][A-Z0-9_]{2,80}", name) for name in required):
-            raise HTTPException(400, "Secret references must be uppercase environment variable names")
+            raise HTTPException(
+                400, "Secret references must be uppercase environment variable names"
+            )
         capabilities = payload.capabilities
     with store_scope() as store:
         return store.upsert_integration(
-            provider, "configured",
+            provider,
+            "configured",
             {"store_domain": domain, "capabilities": capabilities},
             required,
         )
@@ -978,9 +1132,7 @@ def integration_connections():
     """List transport technologies and configured profiles without secret values."""
     with store_scope() as store:
         return {
-            "adapters": [
-                {"id": key, **value} for key, value in INTEGRATION_ADAPTERS.items()
-            ],
+            "adapters": [{"id": key, **value} for key, value in INTEGRATION_ADAPTERS.items()],
             "connections": store.list_integration_connections(),
         }
 
@@ -1006,7 +1158,9 @@ def save_integration_connection(payload: IntegrationConnectionIn):
     adapter = INTEGRATION_ADAPTERS.get(payload.adapter)
     if not adapter:
         raise HTTPException(400, "Unsupported integration adapter")
-    credentials = {key: value.strip() for key, value in payload.credentials.items() if value.strip()}
+    credentials = {
+        key: value.strip() for key, value in payload.credentials.items() if value.strip()
+    }
     unknown = set(credentials) - set(adapter["credential_fields"])
     if unknown:
         raise HTTPException(400, f"Unexpected credential fields: {', '.join(sorted(unknown))}")
@@ -1014,10 +1168,12 @@ def save_integration_connection(payload: IntegrationConnectionIn):
         raise HTTPException(400, "Credential values must not exceed 500 characters")
     try:
         with store_scope() as store:
-            item = store.upsert_integration_connection({
-                **payload.model_dump(exclude={"credentials"}),
-                "id": connection_id,
-            })
+            store.upsert_integration_connection(
+                {
+                    **payload.model_dump(exclude={"credentials"}),
+                    "id": connection_id,
+                }
+            )
         for field, value in credentials.items():
             save_secret(integration_secret_name(connection_id, field), value)
         with store_scope() as store:
@@ -1032,8 +1188,12 @@ def prepare_integration_operation(payload: IntegrationOperationIn):
     try:
         with store_scope() as store:
             return store.prepare_integration_operation(
-                payload.execution_key, payload.connection_id, payload.capability,
-                payload.method, payload.path, payload.request,
+                payload.execution_key,
+                payload.connection_id,
+                payload.capability,
+                payload.method,
+                payload.path,
+                payload.request,
             )
     except KeyError as exc:
         raise HTTPException(404, "Integration connection not found") from exc
@@ -1045,8 +1205,12 @@ def prepare_integration_operation(payload: IntegrationOperationIn):
 def local_model_health():
     """Check Ollama API reachability; this does not run an inference."""
     import urllib.request
+
     try:
-        with urllib.request.urlopen(ollama_api_url("/api/tags"), timeout=2) as response:
+        # ollama_api_url restricts the configured endpoint to HTTP(S).
+        with urllib.request.urlopen(  # nosec
+            ollama_api_url("/api/tags"), timeout=2
+        ) as response:
             return {"status": "online", "ollama": response.status == 200}
     except Exception:
         return {"status": "offline", "ollama": False}
@@ -1070,7 +1234,10 @@ def approval(approval_id: str, decision: str, payload: ApprovalDecisionIn):
         company_id = registry.active_id()
         if result.get("agent_id"):
             signal_agent_temporal(
-                company_id, result["agent_id"], "wake", f"approval_{decision}",
+                company_id,
+                result["agent_id"],
+                "wake",
+                f"approval_{decision}",
             )
         else:
             signal_temporal(company_id, "wake", f"approval_{decision}")
@@ -1085,7 +1252,9 @@ def handoff(handoff_id: str, decision: str, payload: HandoffDecisionIn):
     try:
         with store_scope() as store:
             agent_id = store.resolve_handoff(
-                handoff_id, payload.outcome, decision == "complete",
+                handoff_id,
+                payload.outcome,
+                decision == "complete",
             )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -1099,7 +1268,9 @@ def handoff(handoff_id: str, decision: str, payload: HandoffDecisionIn):
     return {"status": "completed" if decision == "complete" else "cancelled"}
 
 
-def approval_page(company_id: str, approval_id: str, email: str, expires: int, token: str, message: str = "") -> str:
+def approval_page(
+    company_id: str, approval_id: str, email: str, expires: int, token: str, message: str = ""
+) -> str:
     """Render a safe confirmation form; GET requests never change approval state."""
     if not verify_approval_token(company_id, approval_id, email, expires, token):
         raise HTTPException(403, "Invalid approval link")
@@ -1114,13 +1285,17 @@ def approval_page(company_id: str, approval_id: str, email: str, expires: int, t
     approval_count = int(approval.get("approval_count", 0))
     required_approvals = int(approval.get("required_approvals", 1))
     esc = html.escape
-    buttons = "<p>This approval has already been resolved.</p>" if disabled else """
+    buttons = (
+        "<p>This approval has already been resolved.</p>"
+        if disabled
+        else """
       <textarea name="comment" maxlength="4000" placeholder="Comment or decline reason"></textarea>
       <div class="buttons"><button name="decision" value="approve" class="approve">Approve</button>
       <button name="decision" value="reject" class="reject">Decline</button></div>"""
+    )
     buttons = review_html + buttons
     return f"""<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Approval review</title>
-<style>body{{margin:0;background:#090d13;color:#eaf1f8;font:15px Arial,sans-serif}}main{{max-width:680px;margin:40px auto;padding:26px;background:#151c26;border:1px solid #2a384b;border-radius:16px}}h1{{font-size:26px}}.meta{{padding:16px;background:#0d1219;border-radius:10px;line-height:1.7;color:#cbd5e1}}textarea{{box-sizing:border-box;width:100%;min-height:120px;margin:20px 0;padding:12px;background:#0b1017;color:white;border:1px solid #34445a;border-radius:9px}}button{{padding:13px 22px;border:0;border-radius:9px;font-weight:bold;cursor:pointer}}.approve{{background:#4ee3a1}}.reject{{background:#ff6b7a;margin-left:8px}}.note{{color:#91a0b4}}.message{{color:#4ee3a1}}</style></head><body><main><div class="note">DIGITAL COMPANY · SECURE HUMAN DECISION</div><h1>{esc(proposal['title'])}</h1><p>{esc(proposal['objective'])}</p><div class="meta"><b>Action:</b> {esc(proposal['action'])}<br><b>Estimated cost:</b> €{proposal['estimated_cost_eur']:.2f}<br><b>Status:</b> {esc(approval['status'])}<br><b>Approval quorum:</b> {approval_count} / {required_approvals}<br><b>Expires:</b> {esc(approval.get('expires_at') or 'not set')}</div><p class="message">{esc(message)}</p><form method="post"><input type="hidden" name="email" value="{esc(email)}"><input type="hidden" name="expires" value="{expires}"><input type="hidden" name="token" value="{esc(token)}">{buttons}</form><p class="note">Decline requires a reason. Comments become canonical context for the AI company.</p></main></body></html>"""
+<style>body{{margin:0;background:#090d13;color:#eaf1f8;font:15px Arial,sans-serif}}main{{max-width:680px;margin:40px auto;padding:26px;background:#151c26;border:1px solid #2a384b;border-radius:16px}}h1{{font-size:26px}}.meta{{padding:16px;background:#0d1219;border-radius:10px;line-height:1.7;color:#cbd5e1}}textarea{{box-sizing:border-box;width:100%;min-height:120px;margin:20px 0;padding:12px;background:#0b1017;color:white;border:1px solid #34445a;border-radius:9px}}button{{padding:13px 22px;border:0;border-radius:9px;font-weight:bold;cursor:pointer}}.approve{{background:#4ee3a1}}.reject{{background:#ff6b7a;margin-left:8px}}.note{{color:#91a0b4}}.message{{color:#4ee3a1}}</style></head><body><main><div class="note">DIGITAL COMPANY · SECURE HUMAN DECISION</div><h1>{esc(proposal["title"])}</h1><p>{esc(proposal["objective"])}</p><div class="meta"><b>Action:</b> {esc(proposal["action"])}<br><b>Estimated cost:</b> €{proposal["estimated_cost_eur"]:.2f}<br><b>Status:</b> {esc(approval["status"])}<br><b>Approval quorum:</b> {approval_count} / {required_approvals}<br><b>Expires:</b> {esc(approval.get("expires_at") or "not set")}</div><p class="message">{esc(message)}</p><form method="post"><input type="hidden" name="email" value="{esc(email)}"><input type="hidden" name="expires" value="{expires}"><input type="hidden" name="token" value="{esc(token)}">{buttons}</form><p class="note">Decline requires a reason. Comments become canonical context for the AI company.</p></main></body></html>"""
 
 
 @app.get("/approval/{company_id}/{approval_id}", response_class=HTMLResponse)
@@ -1133,9 +1308,16 @@ async def email_approval_decision(company_id: str, approval_id: str, request: Re
     form = await request.form()
     email = str(form.get("email", ""))
     token = str(form.get("token", ""))
-    expires = int(str(form.get("expires", "0")))
     decision = str(form.get("decision", ""))
     comment = str(form.get("comment", "")).strip()
+    try:
+        expires = int(str(form.get("expires", "0")))
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid approval expiry") from exc
+    if len(email) > 254 or len(token) > 512 or len(comment) > 4000:
+        raise HTTPException(400, "Approval form field exceeds its allowed size")
+    if decision not in {"approve", "reject"}:
+        raise HTTPException(400, "Choose Approve or Decline")
     if not verify_approval_token(company_id, approval_id, email, expires, token):
         raise HTTPException(403, "Invalid approval link")
     try:
@@ -1152,20 +1334,26 @@ async def email_approval_decision(company_id: str, approval_id: str, request: Re
             elif decision == "reject":
                 agent_id = store.reject(approval_id, comment, email)
                 result = {"status": "rejected", "agent_id": agent_id}
-                message = "Declined. The CEO will reconsider using your reason."
-            else:
-                raise ValueError("Choose Approve or Decline")
+                message = "Declined. The agent will reconsider using your reason."
     except (RuntimeError, ValueError) as exc:
-        return HTMLResponse(approval_page(company_id, approval_id, email, expires, token, str(exc)), status_code=400)
+        return HTMLResponse(
+            approval_page(company_id, approval_id, email, expires, token, str(exc)), status_code=400
+        )
     if result["status"] != "pending":
         if result.get("agent_id"):
             await asyncio.to_thread(
-                signal_agent_temporal, company_id, result["agent_id"], "wake",
+                signal_agent_temporal,
+                company_id,
+                result["agent_id"],
+                "wake",
                 f"email_approval_{decision}",
             )
         else:
             await asyncio.to_thread(
-                signal_temporal, company_id, "wake", f"email_approval_{decision}",
+                signal_temporal,
+                company_id,
+                "wake",
+                f"email_approval_{decision}",
             )
     return approval_page(company_id, approval_id, email, expires, token, message)
 

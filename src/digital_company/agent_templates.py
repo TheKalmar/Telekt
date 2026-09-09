@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from digital_company.text_encoding import repair_text_encoding
 
-
 AGENT_TYPES = [
     {
         "id": "custom",
@@ -17,7 +16,9 @@ AGENT_TYPES = [
         "suggested_plugins": [],
         "allowed_actions": None,
         "config_schema": {
-            "type": "object", "properties": {}, "additionalProperties": True,
+            "type": "object",
+            "properties": {},
+            "additionalProperties": True,
         },
     },
     {
@@ -29,14 +30,17 @@ AGENT_TYPES = [
         "default_token_limit": 250_000,
         "default_spend_limit_eur": 30,
         "suggested_plugins": [
-            "web-research", "email-communication", "browser-automation",
+            "web-research",
+            "email-communication",
+            "browser-automation",
         ],
         "allowed_actions": None,
         "config_schema": {
             "type": "object",
             "properties": {
                 "decision_cadence": {
-                    "type": "string", "enum": ["continuous", "daily", "on_event"],
+                    "type": "string",
+                    "enum": ["continuous", "daily", "on_event"],
                     "default": "continuous",
                 },
                 "stakeholder_brief": {"type": "boolean", "default": True},
@@ -53,31 +57,61 @@ AGENT_TYPES = [
         "default_token_limit": 150_000,
         "default_spend_limit_eur": 15,
         "suggested_plugins": [
-            "web-research", "workspace-content", "wordpress-content",
-            "featured-image-generation", "email-communication",
+            "web-research",
+            "workspace-content",
+            "wordpress-content",
+            "featured-image-generation",
+            "email-communication",
         ],
         "allowed_actions": [
-            "research_content", "create_content_draft", "save_content_draft",
-            "publish_content", "browser_operate", "request_human_handoff",
-            "request_platform_access", "discover_tool", "stop",
+            "research_content",
+            "create_content_draft",
+            "save_content_draft",
+            "publish_content",
+            "browser_operate",
+            "request_human_handoff",
+            "request_platform_access",
+            "discover_tool",
+            "stop",
         ],
         "config_schema": {
             "type": "object",
             "required": ["content_language", "target_audience", "content_scope"],
             "properties": {
-                "content_language": {"type": "string", "default": "sr-Latn"},
+                "content_language": {"type": "string", "default": "en"},
                 "target_audience": {"type": "string"},
                 "content_scope": {"type": "string"},
                 "brand_voice": {"type": "string", "default": "professional and clear"},
                 "require_official_sources": {"type": "boolean", "default": True},
-                "seo_target_score": {"type": "integer", "default": 70, "minimum": 0, "maximum": 100},
-                "minimum_word_count": {"type": "integer", "default": 700, "minimum": 300, "maximum": 5000},
-                "active_topic_target": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
+                "seo_target_score": {
+                    "type": "integer",
+                    "default": 70,
+                    "minimum": 0,
+                    "maximum": 100,
+                },
+                "minimum_word_count": {
+                    "type": "integer",
+                    "default": 700,
+                    "minimum": 300,
+                    "maximum": 5000,
+                },
+                "active_topic_target": {
+                    "type": "integer",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 20,
+                },
                 "wake_interval_minutes": {
-                    "type": "integer", "default": 1440, "minimum": 1, "maximum": 10080,
+                    "type": "integer",
+                    "default": 1440,
+                    "minimum": 1,
+                    "maximum": 10080,
                 },
                 "review_followup_hours": {
-                    "type": "integer", "default": 24, "minimum": 1, "maximum": 168,
+                    "type": "integer",
+                    "default": 24,
+                    "minimum": 1,
+                    "maximum": 168,
                 },
             },
             "additionalProperties": False,
@@ -123,7 +157,8 @@ def validate_agent_config(agent_type: str, config: dict) -> dict:
         if "enum" in rules and value not in rules["enum"]:
             raise ValueError(f"Agent field {name} has an unsupported value")
     missing = [
-        name for name in schema.get("required", [])
+        name
+        for name in schema.get("required", [])
         if name not in normalized or not str(normalized[name]).strip()
     ]
     if missing:

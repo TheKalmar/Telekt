@@ -14,8 +14,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from digital_company.company_runtime import StakeholderBriefService, apply_orchestration_result
-from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.email_service import ApprovalMailer
+from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.registry import CompanyRegistry
 from digital_company.runtime_secrets import apply_runtime_secrets
 
@@ -30,7 +30,8 @@ def run_once(registry: CompanyRegistry, owner: str) -> int:
         try:
             contact_hours = max(1, int(os.getenv("STAKEHOLDER_CONTACT_INTERVAL_HOURS", "24")))
             StakeholderBriefService(
-                ApprovalMailer(), contact_interval_hours=contact_hours,
+                ApprovalMailer(),
+                contact_interval_hours=contact_hours,
             ).send_if_due(company_id, store)
             if store.get_control()["state"] != "running":
                 continue

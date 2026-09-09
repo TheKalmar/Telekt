@@ -6,11 +6,33 @@ import html
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
-
 ALLOWED_TAGS = {
-    "article", "section", "header", "footer", "h1", "h2", "h3", "h4",
-    "p", "ul", "ol", "li", "strong", "em", "b", "i", "blockquote",
-    "a", "br", "hr", "table", "thead", "tbody", "tr", "th", "td",
+    "article",
+    "section",
+    "header",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "p",
+    "ul",
+    "ol",
+    "li",
+    "strong",
+    "em",
+    "b",
+    "i",
+    "blockquote",
+    "a",
+    "br",
+    "hr",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
 }
 VOID_TAGS = {"br", "hr"}
 
@@ -83,14 +105,16 @@ def render_content_review(review: dict | None) -> str:
         (
             "Telekt SEO QA",
             f"{quality.get('score')}/{quality.get('maximum')} (target {quality.get('target')})"
-            if quality.get("score") is not None else "",
+            if quality.get("score") is not None
+            else "",
         ),
         ("WordPress draft", publication.get("link")),
     ]
     rows = "".join(
         f"<tr><td style='padding:5px 10px;color:#667386'>{html.escape(label)}</td>"
         f"<td style='padding:5px 10px'>{html.escape(str(value))}</td></tr>"
-        for label, value in facts if value
+        for label, value in facts
+        if value
     )
     sources = "".join(
         f'<li><a style="color:#0b62c4" href="{html.escape(str(url), quote=True)}">{html.escape(str(url))}</a></li>'
@@ -103,5 +127,6 @@ def render_content_review(review: dict | None) -> str:
         '<h2 style="margin-top:0">Complete draft for review</h2>'
         f"<table style='width:100%;border-collapse:collapse'>{rows}</table>{image_html}"
         f'<article style="font:16px/1.65 Georgia,serif">{sanitize_article_html(content)}</article>'
-        + (f"<h3>Sources</h3><ul>{sources}</ul>" if sources else "") + "</div>"
+        + (f"<h3>Sources</h3><ul>{sources}</ul>" if sources else "")
+        + "</div>"
     )

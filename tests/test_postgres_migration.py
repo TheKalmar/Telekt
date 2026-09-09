@@ -1,8 +1,8 @@
 import sqlite3
 from uuid import UUID
 
-from scripts.migrate_sqlite_to_postgres import canonical_uuid, rows
 from digital_company.postgres_compat import company_schema
+from scripts.migrate_sqlite_to_postgres import canonical_uuid, rows
 
 
 def test_legacy_company_ids_map_to_stable_uuid():

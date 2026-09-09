@@ -12,9 +12,14 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
+from digital_company.network_policy import normalize_http_base_url
+
 ADAPTERS = {
     "openai_responses": {"label": "Responses API", "supports_hosted_tools": True},
-    "openai_compatible": {"label": "OpenAI-compatible Chat Completions", "supports_hosted_tools": False},
+    "openai_compatible": {
+        "label": "OpenAI-compatible Chat Completions",
+        "supports_hosted_tools": False,
+    },
     "litellm": {"label": "LiteLLM adapter", "supports_hosted_tools": False},
 }
 
@@ -62,10 +67,22 @@ class ModelConnectionRegistry:
         base_url = str(payload.get("base_url", "")).strip().rstrip("/")
         if adapter == "openai_compatible" and not base_url:
             raise ValueError("OpenAI-compatible connections require a base URL")
-        item = {"id": connection_id, "name": name, "adapter": adapter,
-                "location": location, "base_url": base_url, "model": model,
-                "enabled": bool(payload.get("enabled", True)),
-                "requires_api_key": bool(payload.get("requires_api_key", location == "cloud"))}
+        if base_url:
+            base_url = normalize_http_base_url(
+                base_url,
+                allow_plain_http=location == "local",
+                field_name="Model connection base URL",
+            )
+        item = {
+            "id": connection_id,
+            "name": name,
+            "adapter": adapter,
+            "location": location,
+            "base_url": base_url,
+            "model": model,
+            "enabled": bool(payload.get("enabled", True)),
+            "requires_api_key": bool(payload.get("requires_api_key", location == "cloud")),
+        }
         values = self._read()
         values = [value for value in values if value["id"] != connection_id]
         values.append(item)
@@ -84,11 +101,25 @@ class ModelConnectionRegistry:
         values = self._read()
         if values:
             return values
-        self.save({"id": "local-default", "name": "Local runtime",
-                   "adapter": "openai_compatible", "location": "local",
-                   "base_url": os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/v1"),
-                   "model": local_model, "requires_api_key": False})
-        self.save({"id": "cloud-default", "name": "Cloud runtime",
-                   "adapter": "openai_responses", "location": "cloud",
-                   "model": cloud_model, "requires_api_key": True})
+        self.save(
+            {
+                "id": "local-default",
+                "name": "Local runtime",
+                "adapter": "openai_compatible",
+                "location": "local",
+                "base_url": os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/v1"),
+                "model": local_model,
+                "requires_api_key": False,
+            }
+        )
+        self.save(
+            {
+                "id": "cloud-default",
+                "name": "Cloud runtime",
+                "adapter": "openai_responses",
+                "location": "cloud",
+                "model": cloud_model,
+                "requires_api_key": True,
+            }
+        )
         return self._read()

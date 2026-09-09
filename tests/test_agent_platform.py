@@ -3,13 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from digital_company.store import CompanyStore
 from digital_company.agent_templates import action_is_allowed
 from digital_company.capability_plugins import authorize_action
 from digital_company.integration_connectors import secret_name
 from digital_company.models import ActionType, SpecialistResult, TaskProposal
 from digital_company.orchestrator import CompanyOrchestrator
 from digital_company.runtime_secrets import save_secret
+from digital_company.store import CompanyStore
 
 
 def initialized_store(tmp_path: Path) -> CompanyStore:
@@ -62,7 +62,9 @@ def test_agent_run_can_stop_cleanly_when_budget_guard_blocks(tmp_path: Path):
     run_id = store.begin_agent_run(agent["id"], execution_key)
 
     store.complete_agent_run_by_execution(
-        execution_key, "stopped", "BudgetLimitError: reserve unavailable",
+        execution_key,
+        "stopped",
+        "BudgetLimitError: reserve unavailable",
     )
 
     current = store.get_agent(agent["id"])
@@ -100,13 +102,19 @@ def test_wordpress_plugin_is_reusable_and_least_privilege(tmp_path: Path):
     store.grant_agent_plugin(second["id"], "wordpress-content", grant)
 
     assert store.get_agent(first["id"])["plugins"][0]["permissions"] == [
-        "read_posts", "write_drafts"
+        "read_posts",
+        "write_drafts",
     ]
     assert store.get_agent(second["id"])["plugins"][0]["plugin_id"] == "wordpress-content"
     with pytest.raises(ValueError, match="does not declare"):
-        store.grant_agent_plugin(first["id"], "wordpress-content", {
-            **grant, "permissions": ["manage_users"],
-        })
+        store.grant_agent_plugin(
+            first["id"],
+            "wordpress-content",
+            {
+                **grant,
+                "permissions": ["manage_users"],
+            },
+        )
 
 
 def test_plugin_config_schema_is_enforced(tmp_path: Path):
@@ -114,14 +122,23 @@ def test_plugin_config_schema_is_enforced(tmp_path: Path):
     agent = store.create_agent(content_agent())
 
     with pytest.raises(ValueError, match="Missing plugin configuration"):
-        store.grant_agent_plugin(agent["id"], "wordpress-content", {
-            "permissions": ["write_drafts"], "config": {},
-        })
+        store.grant_agent_plugin(
+            agent["id"],
+            "wordpress-content",
+            {
+                "permissions": ["write_drafts"],
+                "config": {},
+            },
+        )
     with pytest.raises(ValueError, match="public HTTPS URL"):
-        store.grant_agent_plugin(agent["id"], "wordpress-content", {
-            "permissions": ["write_drafts"],
-            "config": {"site_url": "http://localhost", "posts_url": "http://localhost/new"},
-        })
+        store.grant_agent_plugin(
+            agent["id"],
+            "wordpress-content",
+            {
+                "permissions": ["write_drafts"],
+                "config": {"site_url": "http://localhost", "posts_url": "http://localhost/new"},
+            },
+        )
 
 
 def test_content_agent_type_has_typed_setup_and_bounded_actions(tmp_path: Path):
@@ -143,32 +160,52 @@ def test_content_agent_type_has_typed_setup_and_bounded_actions(tmp_path: Path):
 
 def test_content_topics_keep_independent_durable_pipeline_ids(tmp_path: Path):
     store = initialized_store(tmp_path)
-    agent = store.create_agent(content_agent() | {
-        "agent_type": "content_seo",
-        "config": {
-            "content_language": "sr-Latn", "target_audience": "Banja Luka",
-            "content_scope": "Employment law", "active_topic_target": 5,
-            "wake_interval_minutes": 10,
-        },
-    })
+    agent = store.create_agent(
+        content_agent()
+        | {
+            "agent_type": "content_seo",
+            "config": {
+                "content_language": "sr-Latn",
+                "target_audience": "Banja Luka",
+                "content_scope": "Employment law",
+                "active_topic_target": 5,
+                "wake_interval_minutes": 10,
+            },
+        }
+    )
     research = TaskProposal(
-        action=ActionType.RESEARCH_CONTENT, title="Neisplaćena plata u RS",
-        objective="Verify demand and legal sources", rationale="Strong local intent",
-        expected_evidence=["Official sources"], estimated_cost_eur=0,
+        action=ActionType.RESEARCH_CONTENT,
+        title="Neisplaćena plata u RS",
+        objective="Verify demand and legal sources",
+        rationale="Strong local intent",
+        expected_evidence=["Official sources"],
+        estimated_cost_eur=0,
         specialist="research",
     )
     research_task = store.create_task(research, "proposed", agent_id=agent["id"])
-    store.complete_task(research_task, SpecialistResult(
-        status="completed", summary="Verified topic opportunity",
-        evidence=["Evidence"], recommendation="Draft it",
-    ), 0)
+    store.complete_task(
+        research_task,
+        SpecialistResult(
+            status="completed",
+            summary="Verified topic opportunity",
+            evidence=["Evidence"],
+            recommendation="Draft it",
+        ),
+        0,
+    )
     work_id = store.create_content_work_item(
-        agent["id"], research_task, research.title, "Verified topic opportunity",
+        agent["id"],
+        research_task,
+        research.title,
+        "Verified topic opportunity",
     )
     draft = TaskProposal(
-        action=ActionType.CREATE_CONTENT_DRAFT, title="Draft unpaid wages guide",
-        objective="Create a reviewable article", rationale="Research is complete",
-        expected_evidence=["Complete draft"], estimated_cost_eur=0,
+        action=ActionType.CREATE_CONTENT_DRAFT,
+        title="Draft unpaid wages guide",
+        objective="Create a reviewable article",
+        rationale="Research is complete",
+        expected_evidence=["Complete draft"],
+        estimated_cost_eur=0,
         specialist="growth",
     )
     draft_task = store.create_task(draft, "proposed", agent_id=agent["id"])
@@ -182,32 +219,50 @@ def test_content_topics_keep_independent_durable_pipeline_ids(tmp_path: Path):
 
 def test_stale_model_work_item_id_is_rebound_to_eligible_topic(tmp_path: Path):
     store = initialized_store(tmp_path)
-    agent = store.create_agent(content_agent() | {
-        "agent_type": "content_seo",
-        "config": {
-            "content_language": "sr-Latn", "target_audience": "Banja Luka",
-            "content_scope": "Legal SEO",
-        },
-    })
+    agent = store.create_agent(
+        content_agent()
+        | {
+            "agent_type": "content_seo",
+            "config": {
+                "content_language": "sr-Latn",
+                "target_audience": "Banja Luka",
+                "content_scope": "Legal SEO",
+            },
+        }
+    )
     research = TaskProposal(
-        action=ActionType.RESEARCH_CONTENT, title="First legal topic",
-        objective="Verify it", rationale="Fill queue",
-        expected_evidence=["Sources"], estimated_cost_eur=0, specialist="research",
+        action=ActionType.RESEARCH_CONTENT,
+        title="First legal topic",
+        objective="Verify it",
+        rationale="Fill queue",
+        expected_evidence=["Sources"],
+        estimated_cost_eur=0,
+        specialist="research",
     )
     first_task = store.create_task(research, "proposed", agent_id=agent["id"])
     stale = store.create_content_work_item(
-        agent["id"], first_task, "First legal topic", "Already drafted",
+        agent["id"],
+        first_task,
+        "First legal topic",
+        "Already drafted",
     )
     store.transition_content_work_item(stale, "draft_saved")
     second_task = store.create_task(research, "proposed", agent_id=agent["id"])
     eligible = store.create_content_work_item(
-        agent["id"], second_task, "Second distinct topic", "Ready to draft",
+        agent["id"],
+        second_task,
+        "Second distinct topic",
+        "Ready to draft",
     )
     draft = TaskProposal(
-        action=ActionType.CREATE_CONTENT_DRAFT, title="Draft second topic",
-        objective="Create the draft", rationale="Research is ready",
-        expected_evidence=["Complete package"], estimated_cost_eur=0,
-        specialist="growth", work_item_id=stale,
+        action=ActionType.CREATE_CONTENT_DRAFT,
+        title="Draft second topic",
+        objective="Create the draft",
+        rationale="Research is ready",
+        expected_evidence=["Complete package"],
+        estimated_cost_eur=0,
+        specialist="growth",
+        work_item_id=stale,
     )
     draft_task = store.create_task(draft, "proposed", agent_id=agent["id"])
 
@@ -218,26 +273,37 @@ def test_stale_model_work_item_id_is_rebound_to_eligible_topic(tmp_path: Path):
 
 def test_legacy_content_placeholders_are_named_and_deduplicated(tmp_path: Path):
     store = initialized_store(tmp_path)
-    agent = store.create_agent(content_agent() | {
-        "agent_type": "content_seo",
-        "config": {
-            "content_language": "sr-Latn", "target_audience": "Banja Luka",
-            "content_scope": "Legal SEO",
-        },
-    })
+    agent = store.create_agent(
+        content_agent()
+        | {
+            "agent_type": "content_seo",
+            "config": {
+                "content_language": "sr-Latn",
+                "target_audience": "Banja Luka",
+                "content_scope": "Legal SEO",
+            },
+        }
+    )
     proposal = TaskProposal(
-        action=ActionType.RESEARCH_CONTENT, title="Generic research topic",
-        objective="Verify one topic", rationale="Fill the durable queue",
-        expected_evidence=["Official sources"], estimated_cost_eur=0,
+        action=ActionType.RESEARCH_CONTENT,
+        title="Generic research topic",
+        objective="Verify one topic",
+        rationale="Fill the durable queue",
+        expected_evidence=["Official sources"],
+        estimated_cost_eur=0,
         specialist="research",
     )
     first_task = store.create_task(proposal, "proposed", agent_id=agent["id"])
     first = store.create_content_work_item(
-        agent["id"], first_task, proposal.title, "Older complete topic",
+        agent["id"],
+        first_task,
+        proposal.title,
+        "Older complete topic",
     )
     draft_task = store.create_task(
         proposal.model_copy(update={"action": ActionType.CREATE_CONTENT_DRAFT}),
-        "proposed", agent_id=agent["id"],
+        "proposed",
+        agent_id=agent["id"],
     )
     store.db.execute(
         "UPDATE tasks SET result_json=? WHERE id=?",
@@ -248,8 +314,10 @@ def test_legacy_content_placeholders_are_named_and_deduplicated(tmp_path: Path):
 
     second_task = store.create_task(proposal, "proposed", agent_id=agent["id"])
     second = store.create_content_work_item(
-        agent["id"], second_task,
-        "Actual legal topic with practical local guidance", "Repeated research",
+        agent["id"],
+        second_task,
+        "Actual legal topic with practical local guidance",
+        "Repeated research",
     )
 
     repaired = store.reconcile_content_work_items(agent["id"])
@@ -265,9 +333,12 @@ def test_legacy_content_placeholders_are_named_and_deduplicated(tmp_path: Path):
 class StopEngine:
     def decide(self, snapshot, agent_context=None):
         return TaskProposal(
-            action=ActionType.STOP, title="End this content shift",
-            objective="Wait for the next cadence", rationale="Five topics are already active",
-            expected_evidence=["Queue remains durable"], estimated_cost_eur=0,
+            action=ActionType.STOP,
+            title="End this content shift",
+            objective="Wait for the next cadence",
+            rationale="Five topics are already active",
+            expected_evidence=["Queue remains durable"],
+            estimated_cost_eur=0,
             specialist="ceo",
         )
 
@@ -283,20 +354,33 @@ class StopEngine:
 
 def test_underfilled_content_queue_overrides_model_stop(tmp_path: Path):
     store = initialized_store(tmp_path)
-    agent = store.create_agent(content_agent() | {
-        "agent_type": "content_seo",
-        "config": {
-            "content_language": "sr-Latn", "target_audience": "Banja Luka",
-            "content_scope": "Legal SEO", "active_topic_target": 5,
+    agent = store.create_agent(
+        content_agent()
+        | {
+            "agent_type": "content_seo",
+            "config": {
+                "content_language": "sr-Latn",
+                "target_audience": "Banja Luka",
+                "content_scope": "Legal SEO",
+                "active_topic_target": 5,
+            },
+        }
+    )
+    store.grant_agent_plugin(
+        agent["id"],
+        "web-research",
+        {
+            "permissions": ["read_public_web"],
+            "config": {},
         },
-    })
-    store.grant_agent_plugin(agent["id"], "web-research", {
-        "permissions": ["read_public_web"], "config": {},
-    })
+    )
     store.set_agent_status(agent["id"], "running")
 
     result = CompanyOrchestrator(
-        store, tmp_path / "artifacts", engine=StopEngine(), agent_id=agent["id"],
+        store,
+        tmp_path / "artifacts",
+        engine=StopEngine(),
+        agent_id=agent["id"],
     ).run(max_cycles=1)
 
     assert result["status"] == "cycle_limit_reached"
@@ -309,32 +393,51 @@ def test_underfilled_content_queue_overrides_model_stop(tmp_path: Path):
 
 def test_scheduled_content_stop_sleeps_instead_of_terminating(tmp_path: Path):
     store = initialized_store(tmp_path)
-    agent = store.create_agent(content_agent() | {
-        "agent_type": "content_seo",
-        "config": {
-            "content_language": "sr-Latn", "target_audience": "Banja Luka",
-            "content_scope": "Legal SEO", "active_topic_target": 1,
-            "wake_interval_minutes": 10,
+    agent = store.create_agent(
+        content_agent()
+        | {
+            "agent_type": "content_seo",
+            "config": {
+                "content_language": "sr-Latn",
+                "target_audience": "Banja Luka",
+                "content_scope": "Legal SEO",
+                "active_topic_target": 1,
+                "wake_interval_minutes": 10,
+            },
+        }
+    )
+    store.grant_agent_plugin(
+        agent["id"],
+        "web-research",
+        {
+            "permissions": ["read_public_web"],
+            "config": {},
         },
-    })
-    store.grant_agent_plugin(agent["id"], "web-research", {
-        "permissions": ["read_public_web"], "config": {},
-    })
+    )
     research = TaskProposal(
-        action=ActionType.RESEARCH_CONTENT, title="Active review topic",
-        objective="Verify the topic", rationale="Maintain the queue",
-        expected_evidence=["Authoritative sources"], estimated_cost_eur=0,
+        action=ActionType.RESEARCH_CONTENT,
+        title="Active review topic",
+        objective="Verify the topic",
+        rationale="Maintain the queue",
+        expected_evidence=["Authoritative sources"],
+        estimated_cost_eur=0,
         specialist="research",
     )
     research_task = store.create_task(research, "proposed", agent_id=agent["id"])
     work_id = store.create_content_work_item(
-        agent["id"], research_task, research.title, "Waiting for owner review",
+        agent["id"],
+        research_task,
+        research.title,
+        "Waiting for owner review",
     )
     store.transition_content_work_item(work_id, "awaiting_review")
     store.set_agent_status(agent["id"], "running")
 
     result = CompanyOrchestrator(
-        store, tmp_path / "artifacts", engine=StopEngine(), agent_id=agent["id"],
+        store,
+        tmp_path / "artifacts",
+        engine=StopEngine(),
+        agent_id=agent["id"],
     ).run(max_cycles=1)
 
     assert result["status"] == "sleeping"
@@ -347,13 +450,17 @@ def test_scheduled_content_stop_sleeps_instead_of_terminating(tmp_path: Path):
 def test_plugin_permissions_are_runtime_authority_not_prompt_decoration(tmp_path: Path):
     store = initialized_store(tmp_path)
     agent = store.create_agent(content_agent())
-    store.grant_agent_plugin(agent["id"], "wordpress-content", {
-        "permissions": ["read_posts", "write_drafts"],
-        "config": {
-            "site_url": "https://gkadvokati.com",
-            "posts_url": "https://gkadvokati.com/wp-admin/post-new.php",
+    store.grant_agent_plugin(
+        agent["id"],
+        "wordpress-content",
+        {
+            "permissions": ["read_posts", "write_drafts"],
+            "config": {
+                "site_url": "https://gkadvokati.com",
+                "posts_url": "https://gkadvokati.com/wp-admin/post-new.php",
+            },
         },
-    })
+    )
     grants = store.list_agent_plugins(agent["id"])
 
     assert authorize_action("save_content_draft", grants)[0] is True
@@ -365,33 +472,48 @@ def test_plugin_permissions_are_runtime_authority_not_prompt_decoration(tmp_path
 def test_browser_and_human_takeover_require_their_own_agent_plugin(tmp_path: Path):
     store = initialized_store(tmp_path)
     agent = store.create_agent(content_agent())
-    store.grant_agent_plugin(agent["id"], "wordpress-content", {
-        "permissions": ["read_posts", "write_drafts"],
-        "config": {
-            "site_url": "https://gkadvokati.com",
-            "posts_url": "https://gkadvokati.com/wp-admin/post-new.php",
+    store.grant_agent_plugin(
+        agent["id"],
+        "wordpress-content",
+        {
+            "permissions": ["read_posts", "write_drafts"],
+            "config": {
+                "site_url": "https://gkadvokati.com",
+                "posts_url": "https://gkadvokati.com/wp-admin/post-new.php",
+            },
         },
-    })
+    )
     grants = store.list_agent_plugins(agent["id"])
 
     assert authorize_action("browser_operate", grants)[0] is False
     assert authorize_action("request_human_handoff", grants)[0] is False
-    assert "browser" not in next(
-        item for item in grants if item["plugin_id"] == "wordpress-content"
-    )["definition"]["tools"]
+    assert (
+        "browser"
+        not in next(item for item in grants if item["plugin_id"] == "wordpress-content")[
+            "definition"
+        ]["tools"]
+    )
 
-    store.grant_agent_plugin(agent["id"], "browser-automation", {
-        "permissions": ["operate_browser", "request_human_takeover"],
-        "config": {"max_steps": 8, "allow_human_takeover": False},
-    })
+    store.grant_agent_plugin(
+        agent["id"],
+        "browser-automation",
+        {
+            "permissions": ["operate_browser", "request_human_takeover"],
+            "config": {"max_steps": 8, "allow_human_takeover": False},
+        },
+    )
     grants = store.list_agent_plugins(agent["id"])
     assert authorize_action("browser_operate", grants)[0] is True
     assert authorize_action("request_human_handoff", grants)[0] is False
 
-    store.grant_agent_plugin(agent["id"], "browser-automation", {
-        "permissions": ["operate_browser", "request_human_takeover"],
-        "config": {"max_steps": 8, "allow_human_takeover": True},
-    })
+    store.grant_agent_plugin(
+        agent["id"],
+        "browser-automation",
+        {
+            "permissions": ["operate_browser", "request_human_takeover"],
+            "config": {"max_steps": 8, "allow_human_takeover": True},
+        },
+    )
     grants = store.list_agent_plugins(agent["id"])
     assert authorize_action("request_human_handoff", grants)[0] is True
 
@@ -399,17 +521,25 @@ def test_browser_and_human_takeover_require_their_own_agent_plugin(tmp_path: Pat
 def test_disabling_browser_plugin_supersedes_agent_handoff_without_restarting(tmp_path: Path):
     store = initialized_store(tmp_path)
     agent = store.create_agent(content_agent())
-    store.grant_agent_plugin(agent["id"], "browser-automation", {
-        "permissions": ["operate_browser", "request_human_takeover"],
-        "config": {"max_steps": 8, "allow_human_takeover": True},
-    })
+    store.grant_agent_plugin(
+        agent["id"],
+        "browser-automation",
+        {
+            "permissions": ["operate_browser", "request_human_takeover"],
+            "config": {"max_steps": 8, "allow_human_takeover": True},
+        },
+    )
     proposal = TaskProposal(
         action=ActionType.REQUEST_HUMAN_HANDOFF,
-        title="Complete login", objective="Access a protected editor",
+        title="Complete login",
+        objective="Access a protected editor",
         rationale="The account owner must authenticate",
-        expected_evidence=["Authenticated editor"], specialist="operations",
-        execution_mode="manual", handoff_url="https://example.com/login",
-        handoff_instructions=["Sign in"], resume_evidence=["Confirm access"],
+        expected_evidence=["Authenticated editor"],
+        specialist="operations",
+        execution_mode="manual",
+        handoff_url="https://example.com/login",
+        handoff_instructions=["Sign in"],
+        resume_evidence=["Confirm access"],
     )
     task_id = store.create_task(proposal, "waiting_human", agent_id=agent["id"])
     store.create_handoff(task_id, proposal)
@@ -436,7 +566,8 @@ def test_stakeholder_directive_is_scoped_to_one_agent(tmp_path: Path):
     second = store.create_agent({**content_agent(), "name": "Second"})
 
     message_id = store.add_stakeholder_message(
-        "Prioritize employment-law topics", agent_id=first["id"],
+        "Prioritize employment-law topics",
+        agent_id=first["id"],
     )
 
     assert store.snapshot(first["id"]).stakeholder_messages[0]["id"] == message_id
@@ -444,49 +575,78 @@ def test_stakeholder_directive_is_scoped_to_one_agent(tmp_path: Path):
 
 
 def test_plugin_connection_cannot_escalate_beyond_declared_capabilities(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ):
     monkeypatch.setenv("COMPANY_DATA_DIR", str(tmp_path / "runtime-data"))
     store = initialized_store(tmp_path)
     agent = store.create_agent(content_agent())
     save_secret(secret_name("wp-readonly", "username"), "api-user")
     save_secret(secret_name("wp-readonly", "password"), "application-password")
-    store.upsert_integration_connection({
-        "id": "wp-readonly", "name": "Read-only WordPress", "adapter": "http_basic",
-        "provider": "WordPress", "location": "cloud",
-        "base_url": "https://example.com/wp-json/wp/v2",
-        "capabilities": ["wordpress.posts.read"], "config": {}, "enabled": True,
-    })
+    store.upsert_integration_connection(
+        {
+            "id": "wp-readonly",
+            "name": "Read-only WordPress",
+            "adapter": "http_basic",
+            "provider": "WordPress",
+            "location": "cloud",
+            "base_url": "https://example.com/wp-json/wp/v2",
+            "capabilities": ["wordpress.posts.read"],
+            "config": {},
+            "enabled": True,
+        }
+    )
 
-    with pytest.raises(ValueError, match="wordpress.posts.publish"):
-        store.grant_agent_plugin(agent["id"], "wordpress-content", {
-            "connection_id": "wp-readonly", "permissions": ["publish_posts"],
-            "config": {
-                "site_url": "https://example.com",
-                "posts_url": "https://example.com/wp-admin/post-new.php",
+    with pytest.raises(ValueError, match=r"wordpress\.posts\.publish"):
+        store.grant_agent_plugin(
+            agent["id"],
+            "wordpress-content",
+            {
+                "connection_id": "wp-readonly",
+                "permissions": ["publish_posts"],
+                "config": {
+                    "site_url": "https://example.com",
+                    "posts_url": "https://example.com/wp-admin/post-new.php",
+                },
             },
-        })
+        )
 
 
 def test_smtp_plugin_draft_is_internal_and_only_send_needs_transport_capability(tmp_path: Path):
     store = initialized_store(tmp_path)
     agent = store.create_agent(content_agent())
-    store.upsert_integration_connection({
-        "id": "smtp-local", "name": "SMTP", "adapter": "smtp",
-        "provider": "Mailpit", "location": "local",
-        "base_url": "smtp://mailpit:1025", "capabilities": ["email.send"],
-        "config": {"security": "plain", "authentication": "none"},
-        "enabled": True,
-    })
+    store.upsert_integration_connection(
+        {
+            "id": "smtp-local",
+            "name": "SMTP",
+            "adapter": "smtp",
+            "provider": "Mailpit",
+            "location": "local",
+            "base_url": "smtp://mailpit:1025",
+            "capabilities": ["email.send"],
+            "config": {"security": "plain", "authentication": "none"},
+            "enabled": True,
+        }
+    )
 
-    grant = store.grant_agent_plugin(agent["id"], "email-communication", {
-        "connection_id": "smtp-local",
-        "permissions": ["draft_email", "send_email"],
-        "config": {"sender_name": "Acme"},
-    })
+    grant = store.grant_agent_plugin(
+        agent["id"],
+        "email-communication",
+        {
+            "connection_id": "smtp-local",
+            "permissions": ["draft_email", "send_email"],
+            "config": {"sender_name": "Acme"},
+        },
+    )
 
     assert grant["permissions"] == ["draft_email", "send_email"]
     with pytest.raises(ValueError, match="does not declare"):
-        store.grant_agent_plugin(agent["id"], "email-communication", {
-            "connection_id": "smtp-local", "permissions": ["read_email"], "config": {},
-        })
+        store.grant_agent_plugin(
+            agent["id"],
+            "email-communication",
+            {
+                "connection_id": "smtp-local",
+                "permissions": ["read_email"],
+                "config": {},
+            },
+        )

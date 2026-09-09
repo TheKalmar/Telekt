@@ -44,7 +44,8 @@ class StakeholderBriefService:
 
         approvals = store.pending_approval_details()
         fresh_content_approvals = [
-            item for item in approvals
+            item
+            for item in approvals
             if getattr(item.get("proposal"), "action", None) is not None
             and item["proposal"].action.value == "publish_content"
             and (not item.get("notified_at") or item.get("followup_due"))
@@ -67,12 +68,18 @@ class StakeholderBriefService:
                     sender = getattr(self.mailer, "send_content_review", None)
                     delivered = (
                         sender(company_id, summary, item, settings)
-                        if sender else self.mailer.send_daily_brief(
-                            company_id, summary, [item], settings,
+                        if sender
+                        else self.mailer.send_daily_brief(
+                            company_id,
+                            summary,
+                            [item],
+                            settings,
                         )
                     )
                     if not isinstance(delivered, int) or isinstance(delivered, bool):
-                        raise TypeError("Content review mailer must return an integer recipient count")
+                        raise TypeError(
+                            "Content review mailer must return an integer recipient count"
+                        )
                     sent_count += delivered
                     if delivered:
                         sent_ids.append(item["id"])
@@ -82,24 +89,35 @@ class StakeholderBriefService:
                             # failure must not duplicate earlier messages.
                             store.mark_approvals_notified([item["id"]])
                 if sent_ids:
-                    store.audit("stakeholder.notification_sent", {
-                        "channel": "content_review_threads", "recipients": sent_count,
-                        "approval_ids": sent_ids,
-                    })
+                    store.audit(
+                        "stakeholder.notification_sent",
+                        {
+                            "channel": "content_review_threads",
+                            "recipients": sent_count,
+                            "approval_ids": sent_ids,
+                        },
+                    )
                 return {
                     "status": "sent" if sent_count else "not_configured",
-                    "recipients": sent_count, "threads": len(sent_ids),
+                    "recipients": sent_count,
+                    "threads": len(sent_ids),
                 }
             except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc}"
-                store.audit("stakeholder.notification_failed", {
-                    "channel": "content_review_threads", "error": detail,
-                })
+                store.audit(
+                    "stakeholder.notification_failed",
+                    {
+                        "channel": "content_review_threads",
+                        "error": detail,
+                    },
+                )
                 return {"status": "failed", "error": detail}
         snapshot = None if approvals else store.snapshot()
         if not approvals and not snapshot.completed_tasks:
             return {"status": "not_needed"}
-        if not fresh_content_approvals and not store.stakeholder_notification_allowed(self.contact_interval_hours):
+        if not fresh_content_approvals and not store.stakeholder_notification_allowed(
+            self.contact_interval_hours
+        ):
             return {"status": "rate_limited"}
 
         try:
@@ -120,18 +138,27 @@ class StakeholderBriefService:
             if sent_count:
                 if hasattr(store, "mark_approvals_notified"):
                     store.mark_approvals_notified([item["id"] for item in approvals])
-                store.audit("stakeholder.notification_sent", {
-                    "channel": "content_review" if fresh_content_approvals else "daily_ceo_brief",
-                    "recipients": sent_count,
-                    "approval_ids": [item["id"] for item in approvals],
-                })
+                store.audit(
+                    "stakeholder.notification_sent",
+                    {
+                        "channel": "content_review"
+                        if fresh_content_approvals
+                        else "daily_ceo_brief",
+                        "recipients": sent_count,
+                        "approval_ids": [item["id"] for item in approvals],
+                    },
+                )
             return {
                 "status": "sent" if sent_count else "not_configured",
                 "recipients": sent_count,
             }
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"
-            store.audit("stakeholder.notification_failed", {
-                "channel": "daily_ceo_brief", "error": detail,
-            })
+            store.audit(
+                "stakeholder.notification_failed",
+                {
+                    "channel": "daily_ceo_brief",
+                    "error": detail,
+                },
+            )
             return {"status": "failed", "error": detail}

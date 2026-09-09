@@ -1,4 +1,5 @@
 """Stable behavioral graders for CEO proposals; prose is intentionally ignored."""
+
 from digital_company.models import TaskProposal
 
 

@@ -9,7 +9,9 @@ class FakeStore:
         self.enabled = enabled
         self.approvals = approvals or []
         self.snapshot_value = SimpleNamespace(
-            completed_tasks=completed or [], spent_eur=12, remaining_budget_eur=88,
+            completed_tasks=completed or [],
+            spent_eur=12,
+            remaining_budget_eur=88,
         )
         self.due = due
         self.control = None
@@ -59,20 +61,26 @@ def test_brief_service_batches_and_audits_one_delivery():
 
     assert result == {"status": "sent", "recipients": 1}
     assert mailer.calls[0][1]["remaining"] == 88
-    assert store.events == [(
-        "stakeholder.notification_sent",
-        {"channel": "daily_ceo_brief", "recipients": 1, "approval_ids": ["approval-1"]},
-    )]
+    assert store.events == [
+        (
+            "stakeholder.notification_sent",
+            {"channel": "daily_ceo_brief", "recipients": 1, "approval_ids": ["approval-1"]},
+        )
+    ]
 
 
 def test_brief_service_skips_disabled_and_rate_limited_delivery():
     mailer = FakeMailer(1)
-    assert StakeholderBriefService(mailer).send_if_due(
-        "company-1", FakeStore(enabled=False)
-    )["status"] == "not_needed"
-    assert StakeholderBriefService(mailer).send_if_due(
-        "company-1", FakeStore(approvals=[{"id": "a"}], due=False)
-    )["status"] == "rate_limited"
+    assert (
+        StakeholderBriefService(mailer).send_if_due("company-1", FakeStore(enabled=False))["status"]
+        == "not_needed"
+    )
+    assert (
+        StakeholderBriefService(mailer).send_if_due(
+            "company-1", FakeStore(approvals=[{"id": "a"}], due=False)
+        )["status"]
+        == "rate_limited"
+    )
     assert mailer.calls == []
 
 
@@ -96,13 +104,20 @@ def test_orchestration_result_has_one_shared_runtime_projection():
 def test_content_reviews_are_separate_parallel_email_threads():
     def review(approval_id, work_item_id):
         return {
-            "id": approval_id, "notified_at": None, "followup_due": False,
+            "id": approval_id,
+            "notified_at": None,
+            "followup_due": False,
             "proposal": TaskProposal(
-                action=ActionType.PUBLISH_CONTENT, title=f"Review {work_item_id}",
-                objective="Publish one reviewed article", rationale="Draft is ready",
-                expected_evidence=["Published URL"], estimated_cost_eur=0,
-                specialist="growth", execution_mode="browser",
-                handoff_url="https://example.com/wp-admin", work_item_id=work_item_id,
+                action=ActionType.PUBLISH_CONTENT,
+                title=f"Review {work_item_id}",
+                objective="Publish one reviewed article",
+                rationale="Draft is ready",
+                expected_evidence=["Published URL"],
+                estimated_cost_eur=0,
+                specialist="growth",
+                execution_mode="browser",
+                handoff_url="https://example.com/wp-admin",
+                work_item_id=work_item_id,
             ),
         }
 

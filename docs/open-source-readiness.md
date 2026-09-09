@@ -13,6 +13,11 @@ product remains explicitly experimental.
 - [x] Local, cloud-model, hybrid, and Docker setup documentation
 - [x] `.env.local`, company state, backups, model data, and browser data excluded
 - [x] Tracked-file credential pattern check
+- [x] Automated lint, formatting, branch-coverage, behavior-eval, dependency,
+      medium/high-severity security, and Docker Compose checks in CI
+- [x] English-first source and first-run UI, with Serbian isolated in the locale
+      catalog and language-processing rules
+- [x] Browser security headers and strict model/runtime URL validation
 
 ## Required before making the repository public
 
@@ -21,7 +26,7 @@ product remains explicitly experimental.
 - [ ] Enable GitHub private vulnerability reporting
 - [ ] Confirm every bundled logo, icon, font, fixture, and example may be redistributed
 - [ ] Replace personal addresses, real domains, and company-specific examples where inappropriate
-- [ ] Run the complete test suite from a clean clone
+- [ ] Run the complete quality gate from a clean clone
 - [ ] Verify Docker startup in local-model and cloud-model modes from a new machine
 - [ ] Mark the first public version as a pre-release / POC
 
@@ -42,4 +47,3 @@ production backlog still includes authentication, RBAC, encrypted secret
 storage, stronger job isolation, rate limiting, backup/restore, centralized
 observability, dependency and container scanning, adversarial agent evaluation,
 and incident-response procedures.
-

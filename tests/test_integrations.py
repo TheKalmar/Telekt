@@ -1,9 +1,11 @@
 from pathlib import Path
 
-from digital_company.models import ActionType, TaskProposal
-from digital_company.store import CompanyStore
+import pytest
+
 from digital_company.integration_connectors import secret_name
+from digital_company.models import ActionType, TaskProposal
 from digital_company.runtime_secrets import save_secret
+from digital_company.store import CompanyStore
 
 
 def test_integration_tracks_secret_presence_without_exposing_values(tmp_path: Path, monkeypatch):
@@ -12,7 +14,8 @@ def test_integration_tracks_secret_presence_without_exposing_values(tmp_path: Pa
     monkeypatch.setenv("SHOPIFY_CLIENT_ID", "private-id")
 
     integration = store.upsert_integration(
-        "shopify", "configured",
+        "shopify",
+        "configured",
         {"store_domain": "demo.myshopify.com", "capabilities": ["write_products"]},
         ["SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET"],
     )
@@ -58,24 +61,48 @@ def test_provider_neutral_connection_keeps_credentials_write_only(tmp_path: Path
     connection_id = "crm-production"
     save_secret(secret_name(connection_id, "token"), "super-private-token")
 
-    connection = store.upsert_integration_connection({
-        "id": connection_id,
-        "name": "Production CRM",
-        "adapter": "http_bearer",
-        "provider": "Chosen CRM vendor",
-        "location": "cloud",
-        "base_url": "https://api.crm.example/v2/",
-        "capabilities": ["contacts.read", "contacts.write"],
-        "config": {},
-        "enabled": True,
-    })
+    connection = store.upsert_integration_connection(
+        {
+            "id": connection_id,
+            "name": "Production CRM",
+            "adapter": "http_bearer",
+            "provider": "Chosen CRM vendor",
+            "location": "cloud",
+            "base_url": "https://api.crm.example/v2/",
+            "capabilities": ["contacts.read", "contacts.write"],
+            "config": {},
+            "enabled": True,
+        }
+    )
 
     assert connection["status"] == "ready"
     assert connection["base_url"] == "https://api.crm.example/v2"
     assert connection["secret_status"] == {"token": True}
     assert "super-private-token" not in str(connection)
-    capability = next(x for x in store.snapshot().capabilities if x.get("connection_id") == connection_id)
+    capability = next(
+        x for x in store.snapshot().capabilities if x.get("connection_id") == connection_id
+    )
     assert capability["config"]["capabilities"] == ["contacts.read", "contacts.write"]
+
+
+def test_integration_base_url_rejects_embedded_query_configuration(tmp_path: Path):
+    store = CompanyStore(tmp_path / "company.db")
+    store.initialize("Operate through APIs", 1000)
+
+    with pytest.raises(ValueError, match="base URL"):
+        store.upsert_integration_connection(
+            {
+                "id": "unsafe-api",
+                "name": "Unsafe API",
+                "adapter": "http_bearer",
+                "provider": "Example",
+                "location": "cloud",
+                "base_url": "https://api.example/v1?token=embedded",
+                "capabilities": ["contacts.read"],
+                "config": {},
+                "enabled": True,
+            }
+        )
 
 
 def test_connector_operation_is_prepared_once_with_stable_provider_key(tmp_path: Path, monkeypatch):
@@ -83,20 +110,35 @@ def test_connector_operation_is_prepared_once_with_stable_provider_key(tmp_path:
     store = CompanyStore(tmp_path / "company.db")
     store.initialize("Operate through APIs", 1000)
     save_secret(secret_name("catalog-api", "api_key"), "private-key")
-    store.upsert_integration_connection({
-        "id": "catalog-api", "name": "Catalog endpoint", "adapter": "http_api_key",
-        "provider": "Commerce backend", "location": "cloud",
-        "base_url": "https://catalog.example/api", "capabilities": ["products.draft"],
-        "config": {"header_name": "X-API-Key"}, "enabled": True,
-    })
+    store.upsert_integration_connection(
+        {
+            "id": "catalog-api",
+            "name": "Catalog endpoint",
+            "adapter": "http_api_key",
+            "provider": "Commerce backend",
+            "location": "cloud",
+            "base_url": "https://catalog.example/api",
+            "capabilities": ["products.draft"],
+            "config": {"header_name": "X-API-Key"},
+            "enabled": True,
+        }
+    )
 
     first = store.prepare_integration_operation(
-        "company:execution:12:catalog", "catalog-api", "products.draft",
-        "POST", "/products", {"title": "Draft product"},
+        "company:execution:12:catalog",
+        "catalog-api",
+        "products.draft",
+        "POST",
+        "/products",
+        {"title": "Draft product"},
     )
     second = store.prepare_integration_operation(
-        "company:execution:12:catalog", "catalog-api", "products.draft",
-        "POST", "/products", {"title": "Draft product"},
+        "company:execution:12:catalog",
+        "catalog-api",
+        "products.draft",
+        "POST",
+        "/products",
+        {"title": "Draft product"},
     )
 
     assert first["provider_idempotency_key"].startswith("telekt-")
@@ -104,21 +146,35 @@ def test_connector_operation_is_prepared_once_with_stable_provider_key(tmp_path:
     assert second["cached"] is True
 
 
-def test_connector_operation_rejects_capability_escalation_and_key_reuse(tmp_path: Path, monkeypatch):
+def test_connector_operation_rejects_capability_escalation_and_key_reuse(
+    tmp_path: Path, monkeypatch
+):
     monkeypatch.setenv("COMPANY_DATA_DIR", str(tmp_path / "runtime-data"))
     store = CompanyStore(tmp_path / "company.db")
     store.initialize("Operate through APIs", 1000)
     save_secret(secret_name("readonly-api", "token"), "private-token")
-    store.upsert_integration_connection({
-        "id": "readonly-api", "name": "Read-only CRM", "adapter": "http_bearer",
-        "provider": "CRM", "location": "cloud", "base_url": "https://crm.example/api",
-        "capabilities": ["contacts.read"], "config": {}, "enabled": True,
-    })
+    store.upsert_integration_connection(
+        {
+            "id": "readonly-api",
+            "name": "Read-only CRM",
+            "adapter": "http_bearer",
+            "provider": "CRM",
+            "location": "cloud",
+            "base_url": "https://crm.example/api",
+            "capabilities": ["contacts.read"],
+            "config": {},
+            "enabled": True,
+        }
+    )
 
     try:
         store.prepare_integration_operation(
-            "company:execution:13", "readonly-api", "contacts.write",
-            "POST", "/contacts", {},
+            "company:execution:13",
+            "readonly-api",
+            "contacts.write",
+            "POST",
+            "/contacts",
+            {},
         )
     except ValueError as exc:
         assert "capability" in str(exc)
@@ -126,11 +182,21 @@ def test_connector_operation_rejects_capability_escalation_and_key_reuse(tmp_pat
         raise AssertionError("An undeclared capability must be rejected")
 
     store.prepare_integration_operation(
-        "company:execution:13", "readonly-api", "contacts.read", "GET", "/contacts", {},
+        "company:execution:13",
+        "readonly-api",
+        "contacts.read",
+        "GET",
+        "/contacts",
+        {},
     )
     try:
         store.prepare_integration_operation(
-            "company:execution:13", "readonly-api", "contacts.read", "GET", "/companies", {},
+            "company:execution:13",
+            "readonly-api",
+            "contacts.read",
+            "GET",
+            "/companies",
+            {},
         )
     except RuntimeError as exc:
         assert "different integration operation" in str(exc)
@@ -145,12 +211,19 @@ def test_smtp_is_a_provider_neutral_mailbox_connection(tmp_path: Path, monkeypat
     save_secret(secret_name("content-mailbox", "username"), "content@example.com")
     save_secret(secret_name("content-mailbox", "password"), "app-password")
 
-    connection = store.upsert_integration_connection({
-        "id": "content-mailbox", "name": "Content mailbox", "adapter": "smtp",
-        "provider": "Mail provider", "location": "cloud",
-        "base_url": "smtps://smtp.example.com:465",
-        "capabilities": ["email.send", "email.draft"], "config": {}, "enabled": True,
-    })
+    connection = store.upsert_integration_connection(
+        {
+            "id": "content-mailbox",
+            "name": "Content mailbox",
+            "adapter": "smtp",
+            "provider": "Mail provider",
+            "location": "cloud",
+            "base_url": "smtps://smtp.example.com:465",
+            "capabilities": ["email.send", "email.draft"],
+            "config": {},
+            "enabled": True,
+        }
+    )
 
     assert connection["status"] == "ready"
     assert connection["adapter"] == "smtp"
@@ -162,13 +235,19 @@ def test_local_smtp_can_be_ready_without_authentication(tmp_path: Path, monkeypa
     store = CompanyStore(tmp_path / "company.db")
     store.initialize("Preview email locally", 0)
 
-    connection = store.upsert_integration_connection({
-        "id": "mailpit", "name": "Local Mailpit", "adapter": "smtp",
-        "provider": "Mailpit", "location": "local",
-        "base_url": "smtp://mailpit:1025", "capabilities": ["email.send"],
-        "config": {"security": "plain", "authentication": "none"},
-        "enabled": True,
-    })
+    connection = store.upsert_integration_connection(
+        {
+            "id": "mailpit",
+            "name": "Local Mailpit",
+            "adapter": "smtp",
+            "provider": "Mailpit",
+            "location": "local",
+            "base_url": "smtp://mailpit:1025",
+            "capabilities": ["email.send"],
+            "config": {"security": "plain", "authentication": "none"},
+            "enabled": True,
+        }
+    )
 
     assert connection["status"] == "ready"
     assert connection["secret_status"] == {"username": False, "password": False}

@@ -28,19 +28,27 @@ def test_schema_v11_repairs_existing_company_and_agent_text(tmp_path: Path):
     path = tmp_path / "company.db"
     with CompanyStore(path) as store:
         store.initialize(
-            "Ispravan cilj", 10,
+            "Ispravan cilj",
+            10,
             {"name": "G&K", "goal": "Ispravan cilj", "concept": "Ispravan koncept"},
             bootstrap_legacy_agent=False,
         )
-        agent = store.create_agent({
-            "name": "Content & SEO", "agent_type": "content_seo",
-            "role": "content strategist", "purpose": "Ispravna svrha",
-            "instructions": "Ispravne instrukcije", "model_connection_id": "cloud-default",
-            "config": {
-                "content_language": "sr-Latn", "target_audience": "Građani",
-                "content_scope": "Pravni vodiči", "brand_voice": "Jasan",
-            },
-        })
+        agent = store.create_agent(
+            {
+                "name": "Content & SEO",
+                "agent_type": "content_seo",
+                "role": "content strategist",
+                "purpose": "Ispravna svrha",
+                "instructions": "Ispravne instrukcije",
+                "model_connection_id": "cloud-default",
+                "config": {
+                    "content_language": "sr-Latn",
+                    "target_audience": "Građani",
+                    "content_scope": "Pravni vodiči",
+                    "brand_voice": "Jasan",
+                },
+            }
+        )
 
     db = sqlite3.connect(path)
     db.execute("DELETE FROM company_schema_versions WHERE version=11")
@@ -53,15 +61,17 @@ def test_schema_v11_repairs_existing_company_and_agent_text(tmp_path: Path):
         "UPDATE agent_instances SET purpose=?,config_json=? WHERE id=?",
         (
             _broken("Povećavati organsku vidljivost"),
-            json.dumps({
-                "content_language": "sr-Latn",
-                "target_audience": _broken("Građani"),
-                "content_scope": _broken("Pravni vodiči"),
-                "brand_voice": "Jasan",
-                "require_official_sources": True,
-                "seo_target_score": 70,
-                "minimum_word_count": 700,
-            }),
+            json.dumps(
+                {
+                    "content_language": "sr-Latn",
+                    "target_audience": _broken("Građani"),
+                    "content_scope": _broken("Pravni vodiči"),
+                    "brand_voice": "Jasan",
+                    "require_official_sources": True,
+                    "seo_target_score": 70,
+                    "minimum_word_count": 700,
+                }
+            ),
             agent["id"],
         ),
     )

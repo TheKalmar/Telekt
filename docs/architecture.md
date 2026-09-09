@@ -2,7 +2,10 @@
 
 ## Purpose
 
-Digital AI Company explores a system in which a human supplies capital, goals, resources, and authority boundaries while an autonomous organization chooses the next useful job. The POC focuses on a reliable decision loop rather than a fixed workflow.
+Telekt explores a system in which a human supplies capital, goals, resources,
+and authority boundaries while an autonomous organization chooses the next
+useful job. The POC focuses on a reliable decision loop rather than a fixed
+workflow.
 
 ## Core design rule
 
