@@ -18,10 +18,10 @@ product remains explicitly experimental.
 - [x] English-first source and first-run UI, with Serbian isolated in the locale
       catalog and language-processing rules
 - [x] Browser security headers and strict model/runtime URL validation
+- [x] Apache License 2.0 selected and added to repository and package metadata
 
 ## Required before making the repository public
 
-- [ ] Repository owner selects and adds a license
 - [ ] Review current and historical commits for secrets and private customer data
 - [ ] Enable GitHub private vulnerability reporting
 - [ ] Confirm every bundled logo, icon, font, fixture, and example may be redistributed
@@ -30,15 +30,11 @@ product remains explicitly experimental.
 - [ ] Verify Docker startup in local-model and cloud-model modes from a new machine
 - [ ] Mark the first public version as a pre-release / POC
 
-## License decision
+## License
 
-No license has been added automatically. Source code visible on GitHub is not the
-same as open-source software without a license.
-
-The practical default for this project is **Apache License 2.0** because it is
-permissive and includes an explicit patent grant. **MIT** is shorter and widely
-recognized, but has no comparable explicit patent language. The repository
-owner must make this legal/product decision before public release.
+Telekt is distributed under the [Apache License 2.0](../LICENSE), a permissive
+open-source license with an explicit patent grant. Contributors submit their
+work under the same terms unless they explicitly state otherwise.
 
 ## Production gaps
 

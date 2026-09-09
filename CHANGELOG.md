@@ -14,6 +14,7 @@ use semantic versioning after the first public release.
 - Browser security headers, request correlation IDs, and regression tests for
   model, runtime, and provider URL boundaries.
 - A secure lower bound for the optional LiteLLM transport dependency.
+- Apache License 2.0 and corresponding package metadata.
 
 ### Changed
 

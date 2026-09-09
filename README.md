@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/TheKalmar/Telekt/actions/workflows/ci.yml/badge.svg)](https://github.com/TheKalmar/Telekt/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://www.python.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](docs/known-limitations.md)
 
 Telekt is a control plane for a portfolio of digital companies. Organization
@@ -36,11 +37,11 @@ This repository proves the control loop and governance model. It is not yet a pr
 
 ## Open-source status
 
-The codebase is being prepared for public, open-source release. Contributor and
+Telekt is licensed under the [Apache License 2.0](LICENSE). Contributor and
 security guidance are available in [CONTRIBUTING.md](CONTRIBUTING.md) and
-[SECURITY.md](SECURITY.md). A license still requires an explicit owner decision;
-see the [open-source readiness checklist](docs/open-source-readiness.md) before
-changing repository visibility.
+[SECURITY.md](SECURITY.md). Complete the remaining
+[open-source readiness checks](docs/open-source-readiness.md) before changing
+repository visibility.
 
 ## What is implemented
 
